@@ -1,0 +1,2 @@
+# BimAtlas
+Navigate IFC files
