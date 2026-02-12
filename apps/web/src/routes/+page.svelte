@@ -1,17 +1,28 @@
 <script lang="ts">
   /**
-   * Main BimAtlas page -- integrates the 3D viewport, force graph, and selection panel.
-   * Toggle between 3D View and Graph View via the header toolbar.
+   * Main BimAtlas page -- project/branch selector, 3D viewport, force graph, and selection panel.
+   * Users first select (or create) a project, then pick a branch. All IFC data is scoped to the branch.
    */
   import Viewport from "$lib/ui/Viewport.svelte";
   import SelectionPanel from "$lib/ui/SelectionPanel.svelte";
   import ForceGraph from "$lib/graph/ForceGraph.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
-  import { getSelection, getRevisionState } from "$lib/state/selection.svelte";
+  import {
+    getSelection,
+    getRevisionState,
+    getProjectState,
+  } from "$lib/state/selection.svelte";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import type { SceneManager } from "$lib/engine/SceneManager";
-  import { client, IFC_PRODUCTS_QUERY } from "$lib/api/client";
+  import {
+    client,
+    IFC_PRODUCTS_QUERY,
+    PROJECTS_QUERY,
+    CREATE_PROJECT_MUTATION,
+    CREATE_BRANCH_MUTATION,
+    REVISIONS_QUERY,
+  } from "$lib/api/client";
   import {
     createBufferGeometry,
     type RawMeshData,
@@ -20,6 +31,7 @@
 
   const selection = getSelection();
   const revisionState = getRevisionState();
+  const projectState = getProjectState();
   const graphStore = getGraphStore();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
@@ -34,48 +46,181 @@
   let importError = $state<string | null>(null);
   let loadingGeometry = $state(false);
 
-  // Load graph data when switching to graph view
+  // ---- Project / Branch state ----
+  interface ProjectData {
+    id: number;
+    name: string;
+    description: string | null;
+    createdAt: string;
+    branches: BranchData[];
+  }
+  interface BranchData {
+    id: number;
+    projectId: number;
+    name: string;
+    createdAt: string;
+  }
+
+  let projects = $state<ProjectData[]>([]);
+  let loadingProjects = $state(true);
+  let showCreateProject = $state(false);
+  let showCreateBranch = $state(false);
+  let newProjectName = $state("");
+  let newProjectDesc = $state("");
+  let newBranchName = $state("");
+  let creatingProject = $state(false);
+  let creatingBranch = $state(false);
+
+  // Derived: currently selected project and its branches
+  let activeProject = $derived(
+    projects.find((p) => p.id === projectState.activeProjectId) ?? null,
+  );
+  let activeBranch = $derived(
+    activeProject?.branches.find(
+      (b) => b.id === projectState.activeBranchId,
+    ) ?? null,
+  );
+
+  // ---- Lifecycle ----
+
+  // Load projects on mount
   $effect(() => {
+    loadProjects();
+  });
+
+  // Load graph data when switching to graph view (if branch is selected)
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
     if (
       activeView === "graph" &&
+      branchId &&
       graphStore.data.nodes.length === 0 &&
       !graphStore.loading
     ) {
-      graphStore.fetchGraph(revisionState.activeRevision);
+      graphStore.fetchGraph(branchId, revisionState.activeRevision);
     }
   });
 
-  // Load latest revision on mount if not already set
+  // Load latest revision when branch changes
   $effect(() => {
-    if (revisionState.activeRevision === null && !importing) {
-      fetchLatestRevision();
+    const branchId = projectState.activeBranchId;
+    if (branchId && revisionState.activeRevision === null && !importing) {
+      fetchLatestRevision(branchId);
     }
   });
 
   // Load 3D geometry when revision changes and sceneManager is ready
   $effect(() => {
     const rev = revisionState.activeRevision;
+    const branchId = projectState.activeBranchId;
     const mgr = sceneManager;
-    if (!mgr || rev === null) return;
-    untrack(() => loadGeometry(mgr, rev));
+    if (!mgr || rev === null || !branchId) return;
+    untrack(() => loadGeometry(mgr, rev, branchId));
   });
 
-  async function fetchLatestRevision() {
+  // ---- API helpers ----
+
+  async function loadProjects() {
+    loadingProjects = true;
     try {
-      const result = await client.query(
-        `
-				query Revisions {
-					revisions {
-						id
-					}
-				}
-			`,
-        {},
-      );
+      const result = await client.query(PROJECTS_QUERY, {}).toPromise();
+      if (result.data?.projects) {
+        projects = result.data.projects;
+      }
+    } catch (err) {
+      console.error("Failed to load projects:", err);
+    } finally {
+      loadingProjects = false;
+    }
+  }
+
+  async function handleCreateProject() {
+    if (!newProjectName.trim()) return;
+    creatingProject = true;
+    try {
+      const result = await client
+        .mutation(CREATE_PROJECT_MUTATION, {
+          name: newProjectName.trim(),
+          description: newProjectDesc.trim() || null,
+        })
+        .toPromise();
+      if (result.data?.createProject) {
+        const proj = result.data.createProject;
+        projects = [proj, ...projects];
+        projectState.activeProjectId = proj.id;
+        // Auto-select the main branch
+        const mainBranch = proj.branches.find(
+          (b: BranchData) => b.name === "main",
+        );
+        if (mainBranch) {
+          projectState.activeBranchId = mainBranch.id;
+        }
+        showCreateProject = false;
+        newProjectName = "";
+        newProjectDesc = "";
+      }
+    } catch (err) {
+      console.error("Failed to create project:", err);
+    } finally {
+      creatingProject = false;
+    }
+  }
+
+  async function handleCreateBranch() {
+    if (!newBranchName.trim() || !projectState.activeProjectId) return;
+    creatingBranch = true;
+    try {
+      const result = await client
+        .mutation(CREATE_BRANCH_MUTATION, {
+          projectId: projectState.activeProjectId,
+          name: newBranchName.trim(),
+        })
+        .toPromise();
+      if (result.data?.createBranch) {
+        const branch = result.data.createBranch;
+        // Update the project's branches list
+        projects = projects.map((p) =>
+          p.id === projectState.activeProjectId
+            ? { ...p, branches: [...p.branches, branch] }
+            : p,
+        );
+        projectState.activeBranchId = branch.id;
+        showCreateBranch = false;
+        newBranchName = "";
+      }
+    } catch (err) {
+      console.error("Failed to create branch:", err);
+    } finally {
+      creatingBranch = false;
+    }
+  }
+
+  function selectProject(projectId: number) {
+    projectState.activeProjectId = projectId;
+    // Auto-select the main branch
+    const proj = projects.find((p) => p.id === projectId);
+    const mainBranch = proj?.branches.find((b) => b.name === "main");
+    if (mainBranch) {
+      projectState.activeBranchId = mainBranch.id;
+    }
+    // Clear the scene
+    sceneManager?.clearAll();
+  }
+
+  function selectBranch(branchId: number) {
+    projectState.activeBranchId = branchId;
+    // Clear the scene for the new branch
+    sceneManager?.clearAll();
+  }
+
+  async function fetchLatestRevision(branchId: number) {
+    try {
+      const result = await client
+        .query(REVISIONS_QUERY, { branchId })
+        .toPromise();
 
       const revisions = result.data?.revisions || [];
       if (revisions.length > 0) {
-        // Get the latest revision (highest ID)
         const latest = Math.max(...revisions.map((r: any) => r.id));
         revisionState.activeRevision = latest;
       }
@@ -84,24 +229,27 @@
     }
   }
 
-  async function loadGeometry(mgr: SceneManager, revision: number) {
+  async function loadGeometry(
+    mgr: SceneManager,
+    revision: number,
+    branchId: number,
+  ) {
     if (loadingGeometry) return;
     loadingGeometry = true;
 
     try {
-      // Fetch all products with geometry
-      const result = await client.query(IFC_PRODUCTS_QUERY, { revision });
+      const result = await client.query(IFC_PRODUCTS_QUERY, {
+        branchId,
+        revision,
+      });
       if (result.error) {
         console.error("Failed to fetch geometry:", result.error);
         return;
       }
 
       const products = result.data?.ifcProducts || [];
-
-      // Clear existing geometry
       mgr.clearAll();
 
-      // Load each product into the scene
       for (const product of products) {
         if (product.mesh && product.mesh.vertices && product.mesh.faces) {
           try {
@@ -116,7 +264,6 @@
         }
       }
 
-      // Fit camera to content
       if (mgr.elementCount > 0) {
         mgr.fitToContent();
       }
@@ -128,6 +275,9 @@
   }
 
   async function handleImportSubmit(file: File) {
+    const branchId = projectState.activeBranchId;
+    if (!branchId) return;
+
     showImportModal = false;
     importing = true;
     importError = null;
@@ -135,6 +285,7 @@
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("branch_id", String(branchId));
 
       const res = await fetch(`${API_BASE}/upload-ifc`, {
         method: "POST",
@@ -147,7 +298,6 @@
       }
 
       const result = await res.json();
-      // Update the active revision to the newly imported one
       revisionState.activeRevision = result.revision_id;
     } catch (err) {
       importError = err instanceof Error ? err.message : "Import failed";
@@ -162,31 +312,156 @@
     <div class="brand">
       <h1>BimAtlas</h1>
     </div>
-    <div class="view-toggle" role="tablist">
-      <button
-        class="tab-btn"
-        class:active={activeView === "viewport"}
-        role="tab"
-        aria-selected={activeView === "viewport"}
-        onclick={() => (activeView = "viewport")}
-      >
-        3D View
-      </button>
-      <button
-        class="tab-btn"
-        class:active={activeView === "graph"}
-        role="tab"
-        aria-selected={activeView === "graph"}
-        onclick={() => (activeView = "graph")}
-      >
-        Graph
-      </button>
-    </div>
+
+    <!-- Project selector -->
+    {#if projectState.activeProjectId && activeProject}
+      <div class="context-selector">
+        <div class="selector-group">
+          <label class="selector-label" for="project-select">Project</label>
+          <select
+            id="project-select"
+            class="selector"
+            value={projectState.activeProjectId}
+            onchange={(e) =>
+              selectProject(Number((e.target as HTMLSelectElement).value))}
+          >
+            {#each projects as p}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+        </div>
+
+        <span class="separator">/</span>
+
+        <!-- Branch selector -->
+        <div class="selector-group">
+          <label class="selector-label" for="branch-select">Branch</label>
+          <select
+            id="branch-select"
+            class="selector"
+            value={projectState.activeBranchId}
+            onchange={(e) =>
+              selectBranch(Number((e.target as HTMLSelectElement).value))}
+          >
+            {#each activeProject.branches as b}
+              <option value={b.id}>{b.name}</option>
+            {/each}
+          </select>
+          <button
+            class="icon-btn"
+            onclick={() => (showCreateBranch = true)}
+            title="New branch"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div class="view-toggle" role="tablist">
+        <button
+          class="tab-btn"
+          class:active={activeView === "viewport"}
+          role="tab"
+          aria-selected={activeView === "viewport"}
+          onclick={() => (activeView = "viewport")}
+        >
+          3D View
+        </button>
+        <button
+          class="tab-btn"
+          class:active={activeView === "graph"}
+          role="tab"
+          aria-selected={activeView === "graph"}
+          onclick={() => (activeView = "graph")}
+        >
+          Graph
+        </button>
+      </div>
+    {/if}
+
     <div class="header-spacer"></div>
   </header>
 
   <div class="content">
-    {#if activeView === "viewport"}
+    {#if loadingProjects}
+      <!-- Loading projects -->
+      <div class="center-message">
+        <Spinner size="3rem" message="Loading projects..." />
+      </div>
+    {:else if !projectState.activeProjectId}
+      <!-- Project picker / creator -->
+      <div class="project-picker">
+        <div class="picker-card">
+          <h2>Welcome to BimAtlas</h2>
+          <p class="picker-subtitle">
+            Select an existing project or create a new one to get started.
+          </p>
+
+          {#if projects.length > 0}
+            <div class="project-list">
+              {#each projects as p}
+                <button
+                  class="project-item"
+                  onclick={() => selectProject(p.id)}
+                >
+                  <div class="project-item-info">
+                    <span class="project-item-name">{p.name}</span>
+                    {#if p.description}
+                      <span class="project-item-desc">{p.description}</span>
+                    {/if}
+                  </div>
+                  <span class="project-item-branches"
+                    >{p.branches.length} branch{p.branches.length !== 1
+                      ? "es"
+                      : ""}</span
+                  >
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <p class="empty-msg">No projects yet.</p>
+          {/if}
+
+          {#if showCreateProject}
+            <div class="create-form">
+              <input
+                class="input"
+                type="text"
+                placeholder="Project name"
+                bind:value={newProjectName}
+                onkeydown={(e) => e.key === "Enter" && handleCreateProject()}
+              />
+              <input
+                class="input"
+                type="text"
+                placeholder="Description (optional)"
+                bind:value={newProjectDesc}
+              />
+              <div class="form-actions">
+                <button
+                  class="btn btn-secondary"
+                  onclick={() => (showCreateProject = false)}>Cancel</button
+                >
+                <button
+                  class="btn btn-primary"
+                  disabled={!newProjectName.trim() || creatingProject}
+                  onclick={handleCreateProject}
+                >
+                  {creatingProject ? "Creating..." : "Create Project"}
+                </button>
+              </div>
+            </div>
+          {:else}
+            <button
+              class="btn btn-primary create-project-btn"
+              onclick={() => (showCreateProject = true)}
+            >
+              + New Project
+            </button>
+          {/if}
+        </div>
+      </div>
+    {:else if activeView === "viewport"}
       <Viewport bind:manager={sceneManager}>
         {#snippet overlay()}
           <SelectionPanel />
@@ -261,6 +536,68 @@
       onsubmit={handleImportSubmit}
     />
 
+    <!-- Create branch modal -->
+    {#if showCreateBranch}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create branch"
+        tabindex="-1"
+        onclick={(e) => {
+          if (e.target === e.currentTarget) showCreateBranch = false;
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Escape") showCreateBranch = false;
+        }}
+      >
+        <div class="modal">
+          <header class="modal-header">
+            <h2>New Branch</h2>
+            <button
+              class="close-btn"
+              onclick={() => (showCreateBranch = false)}
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 4L12 12M12 4L4 12"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </header>
+          <p class="modal-subtitle">
+            Create a new branch in <strong>{activeProject?.name}</strong>.
+            Branches start empty until you upload an IFC file.
+          </p>
+          <input
+            class="input modal-input"
+            type="text"
+            placeholder="Branch name (e.g. structural-update)"
+            bind:value={newBranchName}
+            onkeydown={(e) => e.key === "Enter" && handleCreateBranch()}
+          />
+          <footer class="modal-footer">
+            <button
+              class="btn btn-secondary"
+              onclick={() => (showCreateBranch = false)}>Cancel</button
+            >
+            <button
+              class="btn btn-primary"
+              disabled={!newBranchName.trim() || creatingBranch}
+              onclick={handleCreateBranch}
+            >
+              {creatingBranch ? "Creating..." : "Create Branch"}
+            </button>
+          </footer>
+        </div>
+      </div>
+    {/if}
+
     <!-- Full-screen loading overlay while importing -->
     {#if importing}
       <div class="loading-overlay">
@@ -323,7 +660,7 @@
     min-height: 48px;
     background: #1a1a2e;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    gap: 1.5rem;
+    gap: 1rem;
   }
 
   .brand h1 {
@@ -339,6 +676,78 @@
 
   .header-spacer {
     flex: 1;
+  }
+
+  /* ---- Context selector (project / branch) ---- */
+
+  .context-selector {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .selector-group {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .selector-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #666;
+    margin-right: 0.15rem;
+  }
+
+  .selector {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #ddd;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    outline: none;
+    max-width: 180px;
+  }
+
+  .selector:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .selector option {
+    background: #1e1e30;
+    color: #ddd;
+  }
+
+  .separator {
+    color: #555;
+    font-size: 1rem;
+    margin: 0 0.1rem;
+  }
+
+  .icon-btn {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #aaa;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition:
+      background 0.15s,
+      color 0.15s;
+    padding: 0;
+  }
+
+  .icon-btn:hover {
+    background: rgba(255, 136, 102, 0.2);
+    color: #ff8866;
   }
 
   /* ---- View toggle tabs ---- */
@@ -382,10 +791,186 @@
     position: relative;
   }
 
+  .center-message {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   .graph-wrapper {
     flex: 1;
     position: relative;
     min-height: 0;
+  }
+
+  /* ---- Project picker ---- */
+
+  .project-picker {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+
+  .picker-card {
+    background: #1e1e30;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    padding: 2rem;
+    max-width: 520px;
+    width: 100%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  }
+
+  .picker-card h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #e0e0e0;
+  }
+
+  .picker-subtitle {
+    margin: 0 0 1.5rem;
+    color: #888;
+    font-size: 0.85rem;
+  }
+
+  .project-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .project-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
+    text-align: left;
+    width: 100%;
+    color: inherit;
+  }
+
+  .project-item:hover {
+    background: rgba(255, 136, 102, 0.08);
+    border-color: rgba(255, 136, 102, 0.2);
+  }
+
+  .project-item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .project-item-name {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #e0e0e0;
+  }
+
+  .project-item-desc {
+    font-size: 0.75rem;
+    color: #888;
+  }
+
+  .project-item-branches {
+    font-size: 0.72rem;
+    color: #666;
+    white-space: nowrap;
+  }
+
+  .empty-msg {
+    color: #666;
+    font-size: 0.85rem;
+    text-align: center;
+    margin: 1.5rem 0;
+  }
+
+  .create-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 1rem;
+  }
+
+  .form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
+  .input {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.4rem;
+    color: #e0e0e0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .input:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .input::placeholder {
+    color: #555;
+  }
+
+  .create-project-btn {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  /* ---- Buttons ---- */
+
+  .btn {
+    padding: 0.5rem 1.1rem;
+    font-size: 0.82rem;
+    border: none;
+    border-radius: 0.4rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition:
+      background 0.15s,
+      opacity 0.15s;
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: #aaa;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+  }
+
+  .btn-primary {
+    background: rgba(255, 136, 102, 0.2);
+    color: #ff8866;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: rgba(255, 136, 102, 0.35);
+    color: #ffaa88;
   }
 
   /* ---- Viewport toolbar overlay ---- */
@@ -427,6 +1012,83 @@
   .import-btn {
     display: inline-flex;
     align-items: center;
+  }
+
+  /* ---- Modal (shared) ---- */
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+  }
+
+  .modal {
+    background: #1e1e30;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    width: 90%;
+    max-width: 420px;
+    padding: 1.5rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #e0e0e0;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    display: flex;
+    align-items: center;
+    transition: color 0.15s;
+  }
+
+  .close-btn:hover {
+    color: #ccc;
+  }
+
+  .modal-subtitle {
+    margin: 0 0 1rem;
+    font-size: 0.82rem;
+    color: #888;
+    line-height: 1.4;
+  }
+
+  .modal-subtitle strong {
+    color: #ccc;
+  }
+
+  .modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 0.5rem;
+  }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1rem;
   }
 
   /* ---- Loading overlay ---- */

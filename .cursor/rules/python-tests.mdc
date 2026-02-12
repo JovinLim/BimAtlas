@@ -1,0 +1,36 @@
+---
+description: Activate Python environment before running tests
+alwaysApply: true
+---
+
+# Running Python Tests
+
+When running tests for the API (`apps/api/`), **activate the Python environment first**.
+
+## Setup
+
+From `apps/api/`:
+
+```bash
+cd apps/api
+uv sync                    # creates .venv and installs deps (if needed)
+source .venv/bin/activate  # activate the virtual environment
+```
+
+## Running Tests
+
+After activation:
+
+```bash
+./run_tests.sh
+```
+
+Or with pytest directly:
+
+```bash
+python -m pytest -v
+```
+
+## Why
+
+The project uses `uv` and a virtual environment (`.venv`). Running `pytest` or `python` without activation may use the system Python and miss project dependencies, causing import errors or wrong package versions.

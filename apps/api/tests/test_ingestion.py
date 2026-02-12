@@ -267,51 +267,55 @@ class TestDiffEngine:
 class TestDatabaseOperations:
     """Test database operations during ingestion."""
     
-    def test_create_revision(self, db_pool, clean_db):
+    def test_create_revision(self, db_pool, test_branch):
         """Test creating a new revision."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, "test.ifc", "Test revision")
+                rev_id = _create_revision(cur, branch_id, "test.ifc", "Test revision")
                 conn.commit()
             
             # Verify revision was created
             with conn.cursor() as cur:
-                cur.execute("SELECT id, label, ifc_filename FROM revisions WHERE id = %s", (rev_id,))
+                cur.execute("SELECT id, branch_id, label, ifc_filename FROM revisions WHERE id = %s", (rev_id,))
                 row = cur.fetchone()
             
             assert row is not None
             assert row[0] == rev_id
-            assert row[1] == "Test revision"
-            assert row[2] == "test.ifc"
+            assert row[1] == branch_id
+            assert row[2] == "Test revision"
+            assert row[3] == "test.ifc"
         finally:
             put_conn(conn)
     
-    def test_load_current_hashes_empty(self, db_pool, clean_db):
+    def test_load_current_hashes_empty(self, db_pool, test_branch):
         """Test loading hashes when database is empty."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                hashes = _load_current_hashes(cur)
+                hashes = _load_current_hashes(cur, branch_id)
             
             assert isinstance(hashes, dict)
             assert len(hashes) == 0
         finally:
             put_conn(conn)
     
-    def test_insert_product_rows(self, db_pool, clean_db):
+    def test_insert_product_rows(self, db_pool, test_branch):
         """Test inserting product rows."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             # Create revision first
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, "test.ifc", None)
+                rev_id = _create_revision(cur, branch_id, "test.ifc", None)
                 conn.commit()
             
             # Insert products
@@ -333,7 +337,7 @@ class TestDatabaseOperations:
             ]
             
             with conn.cursor() as cur:
-                _insert_product_rows(cur, records, rev_id)
+                _insert_product_rows(cur, records, rev_id, branch_id)
                 conn.commit()
             
             # Verify products were inserted
@@ -345,15 +349,16 @@ class TestDatabaseOperations:
         finally:
             put_conn(conn)
     
-    def test_close_product_rows(self, db_pool, clean_db):
+    def test_close_product_rows(self, db_pool, test_branch):
         """Test closing product rows (SCD Type 2)."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             # Create first revision and insert product
             with conn.cursor() as cur:
-                rev_id_1 = _create_revision(cur, "test_v1.ifc", None)
+                rev_id_1 = _create_revision(cur, branch_id, "test_v1.ifc", None)
                 conn.commit()
             
             records = [
@@ -374,23 +379,23 @@ class TestDatabaseOperations:
             ]
             
             with conn.cursor() as cur:
-                _insert_product_rows(cur, records, rev_id_1)
+                _insert_product_rows(cur, records, rev_id_1, branch_id)
                 conn.commit()
             
             # Create second revision and close the product
             with conn.cursor() as cur:
-                rev_id_2 = _create_revision(cur, "test_v2.ifc", None)
+                rev_id_2 = _create_revision(cur, branch_id, "test_v2.ifc", None)
                 conn.commit()
             
             with conn.cursor() as cur:
-                _close_product_rows(cur, ["0000000000000000000001"], rev_id_2)
+                _close_product_rows(cur, ["0000000000000000000001"], rev_id_2, branch_id)
                 conn.commit()
             
             # Verify product was closed
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT valid_to_rev FROM ifc_products WHERE global_id = %s",
-                    ("0000000000000000000001",)
+                    "SELECT valid_to_rev FROM ifc_products WHERE global_id = %s AND branch_id = %s",
+                    ("0000000000000000000001", branch_id)
                 )
                 row = cur.fetchone()
             
@@ -403,12 +408,14 @@ class TestDatabaseOperations:
 class TestFullIngestion:
     """Test full ingestion pipeline."""
     
-    def test_ingest_ifc_first_import(self, db_pool, age_graph, test_ifc_file):
+    def test_ingest_ifc_first_import(self, db_pool, age_graph, test_ifc_file, test_branch):
         """Test ingesting IFC file for the first time."""
-        result = ingest_ifc(str(test_ifc_file), label="Initial import")
+        branch_id = test_branch
+        result = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Initial import")
         
         assert isinstance(result, IngestionResult)
-        assert result.revision_id == 1
+        assert result.revision_id >= 1
+        assert result.branch_id == branch_id
         assert result.total_products > 0
         assert result.added == result.total_products  # All products are added
         assert result.modified == 0
@@ -416,44 +423,52 @@ class TestFullIngestion:
         assert result.unchanged == 0
         assert result.edges_created >= 0
     
-    def test_ingest_ifc_second_import_unchanged(self, db_pool, age_graph, test_ifc_file):
+    def test_ingest_ifc_second_import_unchanged(self, db_pool, age_graph, test_ifc_file, test_branch):
         """Test importing same IFC file twice (all unchanged)."""
+        branch_id = test_branch
         # First import
-        result1 = ingest_ifc(str(test_ifc_file), label="Import 1")
+        result1 = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Import 1")
         
         # Second import (same file)
-        result2 = ingest_ifc(str(test_ifc_file), label="Import 2")
+        result2 = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Import 2")
         
-        assert result2.revision_id == 2
+        assert result2.revision_id > result1.revision_id
         assert result2.total_products == result1.total_products
         assert result2.added == 0
         assert result2.modified == 0
         assert result2.deleted == 0
         assert result2.unchanged == result1.total_products
     
-    def test_ingest_ifc_creates_database_records(self, db_pool, age_graph, test_ifc_file):
+    def test_ingest_ifc_creates_database_records(self, db_pool, age_graph, test_ifc_file, test_branch):
         """Test that ingestion creates correct database records."""
         from src.db import get_conn, put_conn
         
-        result = ingest_ifc(str(test_ifc_file), label="Test import")
+        branch_id = test_branch
+        result = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Test import")
         
         conn = get_conn()
         try:
             # Check revision was created
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM revisions")
+                cur.execute("SELECT COUNT(*) FROM revisions WHERE branch_id = %s", (branch_id,))
                 rev_count = cur.fetchone()[0]
             assert rev_count == 1
             
             # Check products were inserted
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM ifc_products WHERE valid_to_rev IS NULL")
+                cur.execute(
+                    "SELECT COUNT(*) FROM ifc_products WHERE branch_id = %s AND valid_to_rev IS NULL",
+                    (branch_id,),
+                )
                 product_count = cur.fetchone()[0]
             assert product_count == result.total_products
             
             # Check products have valid data
             with conn.cursor() as cur:
-                cur.execute("SELECT global_id, ifc_class, content_hash FROM ifc_products LIMIT 1")
+                cur.execute(
+                    "SELECT global_id, ifc_class, content_hash FROM ifc_products WHERE branch_id = %s LIMIT 1",
+                    (branch_id,),
+                )
                 row = cur.fetchone()
             assert row is not None
             assert len(row[0]) == 22  # global_id
@@ -462,17 +477,18 @@ class TestFullIngestion:
         finally:
             put_conn(conn)
     
-    def test_ingest_ifc_invalid_path(self, db_pool, age_graph):
+    def test_ingest_ifc_invalid_path(self, db_pool, age_graph, test_branch):
         """Test that invalid IFC path raises error."""
         with pytest.raises(Exception):
-            ingest_ifc("/nonexistent/file.ifc")
+            ingest_ifc("/nonexistent/file.ifc", branch_id=test_branch)
     
-    def test_ingest_ifc_with_label(self, db_pool, age_graph, test_ifc_file):
+    def test_ingest_ifc_with_label(self, db_pool, age_graph, test_ifc_file, test_branch):
         """Test that label is stored correctly."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         label = "My custom label"
-        result = ingest_ifc(str(test_ifc_file), label=label)
+        result = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label=label)
         
         conn = get_conn()
         try:
@@ -489,19 +505,20 @@ class TestFullIngestion:
 class TestEdgeCases:
     """Test edge cases and error conditions."""
     
-    def test_ingest_empty_product_list(self, db_pool):
+    def test_ingest_empty_product_list(self, db_pool, test_branch):
         """Test handling empty records list in insert."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, "empty.ifc", None)
+                rev_id = _create_revision(cur, branch_id, "empty.ifc", None)
                 conn.commit()
             
             # Should handle empty list gracefully
             with conn.cursor() as cur:
-                _insert_product_rows(cur, [], rev_id)
+                _insert_product_rows(cur, [], rev_id, branch_id)
                 conn.commit()
             
             # Verify no products were inserted
@@ -512,19 +529,20 @@ class TestEdgeCases:
         finally:
             put_conn(conn)
     
-    def test_close_empty_product_list(self, db_pool):
+    def test_close_empty_product_list(self, db_pool, test_branch):
         """Test handling empty list in close."""
         from src.db import get_conn, put_conn
         
+        branch_id = test_branch
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, "test.ifc", None)
+                rev_id = _create_revision(cur, branch_id, "test.ifc", None)
                 conn.commit()
             
             # Should handle empty list gracefully
             with conn.cursor() as cur:
-                _close_product_rows(cur, [], rev_id)
+                _close_product_rows(cur, [], rev_id, branch_id)
                 conn.commit()
         finally:
             put_conn(conn)

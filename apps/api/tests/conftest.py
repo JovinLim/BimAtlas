@@ -88,18 +88,39 @@ SCHEMA_SQL = """
 -- Drop existing tables if they exist
 DROP TABLE IF EXISTS ifc_products CASCADE;
 DROP TABLE IF EXISTS revisions CASCADE;
+DROP TABLE IF EXISTS branches CASCADE;
+DROP TABLE IF EXISTS projects CASCADE;
 
--- Create revisions table
+-- Create projects table
+CREATE TABLE IF NOT EXISTS projects (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create branches table
+CREATE TABLE IF NOT EXISTS branches (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT 'main',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (project_id, name)
+);
+
+-- Create revisions table (scoped to branch)
 CREATE TABLE IF NOT EXISTS revisions (
     id SERIAL PRIMARY KEY,
+    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
     label TEXT,
     ifc_filename TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create ifc_products table (SCD Type 2)
+-- Create ifc_products table (SCD Type 2, scoped to branch)
 CREATE TABLE IF NOT EXISTS ifc_products (
     id SERIAL PRIMARY KEY,
+    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
     global_id TEXT NOT NULL,
     ifc_class TEXT NOT NULL,
     name TEXT,
@@ -118,10 +139,12 @@ CREATE TABLE IF NOT EXISTS ifc_products (
 );
 
 -- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_ifc_products_global_id ON ifc_products(global_id);
+CREATE INDEX IF NOT EXISTS idx_branches_project ON branches(project_id);
+CREATE INDEX IF NOT EXISTS idx_revisions_branch ON revisions(branch_id);
+CREATE INDEX IF NOT EXISTS idx_ifc_products_global_id ON ifc_products(branch_id, global_id);
 CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_from ON ifc_products(valid_from_rev);
 CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_to ON ifc_products(valid_to_rev);
-CREATE INDEX IF NOT EXISTS idx_ifc_products_current ON ifc_products(global_id) WHERE valid_to_rev IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ifc_products_current ON ifc_products(branch_id, global_id) WHERE valid_to_rev IS NULL;
 """
 
 GRAPH_SETUP_SQL = """
@@ -206,7 +229,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     
                     # Truncate tables to leave database clean
                     try:
-                        cur.execute("TRUNCATE TABLE ifc_products, revisions RESTART IDENTITY CASCADE;")
+                        cur.execute("TRUNCATE TABLE ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
                         print("  ✅ Truncated test tables")
                     except Exception as e:
                         print(f"  ⚠️  Could not truncate tables: {e}")
@@ -231,8 +254,8 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
     conn = test_db_connection
     
     with conn.cursor() as cur:
-        # Truncate tables
-        cur.execute("TRUNCATE TABLE ifc_products, revisions RESTART IDENTITY CASCADE;")
+        # Truncate tables (order matters due to FK constraints)
+        cur.execute("TRUNCATE TABLE ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
         
         # Clear graph
         try:
@@ -283,6 +306,18 @@ def age_graph(clean_db, monkeypatch):
     # Cleanup
     age_client._known_vlabels.clear()
     age_client._known_elabels.clear()
+
+
+@pytest.fixture(scope="function")
+def test_branch(db_pool) -> int:
+    """Create a test project with a 'main' branch and return the branch_id.
+    
+    Most tests need a branch_id to work with. This fixture creates a project
+    named 'Test Project' with a default 'main' branch and returns the branch id.
+    """
+    project = db.create_project("Test Project", "Test project for unit tests")
+    branches = db.fetch_branches(project["id"])
+    return branches[0]["id"]
 
 
 # ---------------------------------------------------------------------------

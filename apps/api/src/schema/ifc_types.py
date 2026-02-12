@@ -2,6 +2,9 @@
 
 Type hierarchy mirrors the IFC 4.3 entity inheritance chain:
   IfcRoot -> IfcObjectDefinition -> IfcProduct
+
+Also includes Project and Branch types for multi-project, multi-branch
+organisation.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ class IfcMeshRepresentation:
 
 @strawberry.type
 class IfcRelatedProduct:
-    """A neighboring product reached via an IFC objectified relationship edge."""
+    """A related product reached via an IFC objectified relationship edge."""
 
     global_id: str
     ifc_class: str
@@ -77,7 +80,7 @@ class IfcProduct(IfcObjectDefinition):
     tag: Optional[str] = None
     contained_in: Optional[IfcSpatialContainerRef] = None
     mesh: Optional[IfcMeshRepresentation] = None
-    neighbors: list[IfcRelatedProduct] = strawberry.field(default_factory=list)
+    relations: list[IfcRelatedProduct] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -107,6 +110,7 @@ class ChangeType(Enum):
 @strawberry.type
 class Revision:
     id: int
+    branch_id: int
     label: Optional[str]
     ifc_filename: str
     created_at: str  # ISO 8601
@@ -127,3 +131,27 @@ class RevisionDiff:
     added: list[RevisionDiffEntry]
     modified: list[RevisionDiffEntry]
     deleted: list[RevisionDiffEntry]
+
+
+# -- Project / Branch types --
+
+
+@strawberry.type
+class Branch:
+    """A branch within a project. Each branch has an independent revision history."""
+
+    id: int
+    project_id: int
+    name: str
+    created_at: str  # ISO 8601
+
+
+@strawberry.type
+class Project:
+    """A top-level project container. Each project has one or more branches."""
+
+    id: int
+    name: str
+    description: Optional[str]
+    created_at: str  # ISO 8601
+    branches: list[Branch] = strawberry.field(default_factory=list)
