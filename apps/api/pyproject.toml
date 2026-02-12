@@ -16,13 +16,17 @@ dependencies = [
     "apache-age-python",
     "numpy",
     "python-multipart",
+    "pytest>=9.0.2",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "httpx",
-    "ruff",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "ruff>=0.1.0",
 ]
 
 [tool.ruff]

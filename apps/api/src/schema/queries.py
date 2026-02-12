@@ -60,10 +60,10 @@ def _row_to_product(row: dict, rev: int) -> IfcProduct:
     """
     # --- Mesh (only if geometry data exists) --------------------------------
     mesh: IfcMeshRepresentation | None = None
-    if row.get("vertices") and row.get("normals") and row.get("faces"):
+    if row.get("vertices") and row.get("faces"):
         mesh = IfcMeshRepresentation(
             vertices=bytes(row["vertices"]),
-            normals=bytes(row["normals"]),
+            normals=bytes(row["normals"]) if row.get("normals") else None,
             faces=bytes(row["faces"]),
         )
 

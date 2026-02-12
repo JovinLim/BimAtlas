@@ -36,7 +36,7 @@ class IfcMeshRepresentation:
     """Triangulated mesh extracted from IfcProduct.Representation via IfcOpenShell."""
 
     vertices: Base64Bytes  # Float32Array (x,y,z triples)
-    normals: Base64Bytes  # Float32Array (nx,ny,nz triples)
+    normals: Optional[Base64Bytes] = None  # Float32Array (nx,ny,nz triples) -- may be absent
     faces: Base64Bytes  # Uint32Array  (triangle index triples)
 
 

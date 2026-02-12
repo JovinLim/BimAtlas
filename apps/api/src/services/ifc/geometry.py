@@ -186,7 +186,9 @@ def _extract_geometric_elements(
         verts = np.array(shape.geometry.verts, dtype=np.float32)
         faces = np.array(shape.geometry.faces, dtype=np.uint32)
         normals = np.array(shape.geometry.normals, dtype=np.float32)
-        matrix = np.array(shape.transformation.matrix.data, dtype=np.float64)
+        # shape.transformation.matrix is already a tuple/sequence, no need for .data
+        matrix_data = shape.transformation.matrix.data if hasattr(shape.transformation.matrix, 'data') else shape.transformation.matrix
+        matrix = np.array(matrix_data, dtype=np.float64)
 
         verts_bytes = verts.tobytes()
         normals_bytes = normals.tobytes()
@@ -229,8 +231,8 @@ def _extract_geometric_elements(
     return records
 
 
-def extract_products(ifc_path: str) -> list[IfcProductRecord]:
-    """Parse an IFC file and extract all products as DB-ready records.
+def extract_products_from_model(model: ifcopenshell.file) -> list[IfcProductRecord]:
+    """Extract all products from an already-opened IFC model.
 
     Implements the two-phase extraction described in the plan:
 
@@ -247,20 +249,17 @@ def extract_products(ifc_path: str) -> list[IfcProductRecord]:
     contained within a single spatial structure element.
 
     Args:
-        ifc_path: Filesystem path to the IFC file.
+        model: An already-opened ``ifcopenshell.file`` object.
 
     Returns:
         A list of ``IfcProductRecord`` instances ready for database insertion.
         Spatial elements come first, followed by geometric elements.
     """
-    model = ifcopenshell.open(ifc_path)
-
     # Build containment map: element GlobalId -> container GlobalId
     containment_map = _build_containment_map(model)
 
     # Phase 1: Spatial structure elements (no geometry)
     spatial_records = _extract_spatial_elements(model, containment_map)
-    spatial_gids = {r.global_id for r in spatial_records}
 
     # Phase 2: Elements with geometry
     geometric_records = _extract_geometric_elements(model, containment_map)
@@ -279,3 +278,20 @@ def extract_products(ifc_path: str) -> list[IfcProductRecord]:
     records.extend(geometric_records)
 
     return records
+
+
+def extract_products(ifc_path: str) -> list[IfcProductRecord]:
+    """Parse an IFC file and extract all products as DB-ready records.
+
+    Convenience wrapper around :func:`extract_products_from_model` that opens
+    the IFC file from a filesystem path.
+
+    Args:
+        ifc_path: Filesystem path to the IFC file.
+
+    Returns:
+        A list of ``IfcProductRecord`` instances ready for database insertion.
+        Spatial elements come first, followed by geometric elements.
+    """
+    model = ifcopenshell.open(ifc_path)
+    return extract_products_from_model(model)

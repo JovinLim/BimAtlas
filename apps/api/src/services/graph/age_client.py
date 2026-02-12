@@ -28,12 +28,29 @@ from . import queries as cypher_tpl
 # string literals (quotes, backslashes, braces, etc.).
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_$\-]+$")
 
+# AGE labels (node/edge) must be valid identifiers.
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def _validate_id(value: str) -> str:
     """Ensure *value* is safe to embed in a Cypher string literal."""
     if not value or not _SAFE_ID_RE.match(value):
         raise ValueError(f"Invalid identifier for Cypher embedding: {value!r}")
     return value
+
+
+def _validate_label(label: str) -> str:
+    """Ensure *label* is a valid AGE vertex/edge label."""
+    if not label or not _SAFE_LABEL_RE.match(label):
+        raise ValueError(f"Invalid Cypher label: {label!r}")
+    return label
+
+
+def _escape_cypher_string(value: str | None) -> str:
+    """Escape a string for safe embedding inside a Cypher single-quoted literal."""
+    if value is None:
+        return ""
+    return value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +111,7 @@ def _exec_cypher(cypher: str, cols: list[str]) -> list[tuple]:
 
             col_spec = ", ".join(f"{c} agtype" for c in cols)
             sql = (
-                f"SELECT * FROM cypher('{AGE_GRAPH}', $$ {cypher} $$) "
+                f"SELECT * FROM cypher('{AGE_GRAPH}', $CYPHER$ {cypher} $CYPHER$) "
                 f"AS ({col_spec})"
             )
             cur.execute(sql)
@@ -106,6 +123,198 @@ def _exec_cypher(cypher: str, cols: list[str]) -> list[tuple]:
         raise
     finally:
         put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# Write execution
+# ---------------------------------------------------------------------------
+
+
+def _exec_cypher_write(cypher: str) -> None:
+    """Execute a Cypher write operation (CREATE, SET, DELETE).
+
+    All write Cypher statements **must** include a ``RETURN`` clause so that the
+    AGE ``AS (v agtype)`` column spec is satisfied.  Queries that match nothing
+    simply return 0 rows.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("LOAD 'age';")
+            cur.execute('SET search_path = ag_catalog, "$user", public;')
+            sql = (
+                f"SELECT * FROM cypher('{AGE_GRAPH}', $CYPHER$ {cypher} $CYPHER$) "
+                f"AS (v agtype)"
+            )
+            cur.execute(sql)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# Label management (AGE requires labels to exist before use)
+# ---------------------------------------------------------------------------
+
+_known_vlabels: set[str] = set()
+_known_elabels: set[str] = set()
+
+
+def _ensure_vlabel(label: str) -> None:
+    """Create a vertex label in the graph if it does not already exist."""
+    if label in _known_vlabels:
+        return
+    _validate_label(label)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("LOAD 'age';")
+            cur.execute('SET search_path = ag_catalog, "$user", public;')
+            cur.execute(
+                "SELECT 1 FROM ag_catalog.ag_label "
+                "WHERE name = %s "
+                "  AND graph = (SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s) "
+                "  AND kind = 'v'",
+                (label, AGE_GRAPH),
+            )
+            if not cur.fetchone():
+                cur.execute("SELECT create_vlabel(%s, %s)", (AGE_GRAPH, label))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        put_conn(conn)
+    _known_vlabels.add(label)
+
+
+def _ensure_elabel(label: str) -> None:
+    """Create an edge label in the graph if it does not already exist."""
+    if label in _known_elabels:
+        return
+    _validate_label(label)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("LOAD 'age';")
+            cur.execute('SET search_path = ag_catalog, "$user", public;')
+            cur.execute(
+                "SELECT 1 FROM ag_catalog.ag_label "
+                "WHERE name = %s "
+                "  AND graph = (SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s) "
+                "  AND kind = 'e'",
+                (label, AGE_GRAPH),
+            )
+            if not cur.fetchone():
+                cur.execute("SELECT create_elabel(%s, %s)", (AGE_GRAPH, label))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        put_conn(conn)
+    _known_elabels.add(label)
+
+
+# ---------------------------------------------------------------------------
+# Graph write operations (revision-tagged)
+# ---------------------------------------------------------------------------
+
+
+def create_node(
+    ifc_class: str,
+    global_id: str,
+    name: str | None,
+    rev_id: int,
+) -> None:
+    """Create a revision-tagged graph node labeled by its IFC class.
+
+    The node carries ``valid_from_rev = rev_id`` and ``valid_to_rev = -1``
+    (current).  ``-1`` is used instead of NULL because AGE does not support
+    NULL property values.
+    """
+    _ensure_vlabel(ifc_class)
+    gid = _validate_id(global_id)
+    safe_name = _escape_cypher_string(name)
+    r = int(rev_id)
+    cypher = (
+        f"CREATE (n:{ifc_class} {{"
+        f"global_id: '{gid}', "
+        f"name: '{safe_name}', "
+        f"valid_from_rev: {r}, "
+        f"valid_to_rev: -1"
+        f"}}) RETURN id(n)"
+    )
+    _exec_cypher_write(cypher)
+
+
+def close_node(global_id: str, rev_id: int) -> None:
+    """Close a graph node by setting ``valid_to_rev``.
+
+    Matches the **current** version of the node (``valid_to_rev = -1``) and
+    marks it as superseded at *rev_id*.
+    """
+    gid = _validate_id(global_id)
+    r = int(rev_id)
+    cypher = (
+        f"MATCH (n {{global_id: '{gid}', valid_to_rev: -1}}) "
+        f"SET n.valid_to_rev = {r} "
+        f"RETURN id(n)"
+    )
+    _exec_cypher_write(cypher)
+
+
+def create_edge(
+    from_gid: str,
+    to_gid: str,
+    rel_type: str,
+    rev_id: int,
+) -> None:
+    """Create a revision-tagged edge between two **current** nodes.
+
+    Both endpoints must have ``valid_to_rev = -1``.  If either endpoint does
+    not exist, the ``MATCH`` returns nothing and the edge is silently skipped.
+    """
+    _ensure_elabel(rel_type)
+    f_gid = _validate_id(from_gid)
+    t_gid = _validate_id(to_gid)
+    r = int(rev_id)
+    cypher = (
+        f"MATCH (a {{global_id: '{f_gid}', valid_to_rev: -1}}), "
+        f"(b {{global_id: '{t_gid}', valid_to_rev: -1}}) "
+        f"CREATE (a)-[r:{rel_type} {{valid_from_rev: {r}, valid_to_rev: -1}}]->(b) "
+        f"RETURN id(r)"
+    )
+    _exec_cypher_write(cypher)
+
+
+def close_edges_for_node(global_id: str, rev_id: int) -> None:
+    """Close all **current** edges (incoming and outgoing) for a node.
+
+    Matches edges with ``valid_to_rev = -1`` connected to the node identified
+    by *global_id* and sets ``valid_to_rev = rev_id``.  The node itself is
+    matched by ``global_id`` regardless of its own ``valid_to_rev`` so that
+    edges are closed even if the node has already been closed.
+    """
+    gid = _validate_id(global_id)
+    r = int(rev_id)
+    # Close outgoing edges
+    cypher_out = (
+        f"MATCH ({{global_id: '{gid}'}})-[r {{valid_to_rev: -1}}]->() "
+        f"SET r.valid_to_rev = {r} "
+        f"RETURN id(r)"
+    )
+    _exec_cypher_write(cypher_out)
+    # Close incoming edges
+    cypher_in = (
+        f"MATCH ({{global_id: '{gid}'}})<-[r {{valid_to_rev: -1}}]-() "
+        f"SET r.valid_to_rev = {r} "
+        f"RETURN id(r)"
+    )
+    _exec_cypher_write(cypher_in)
 
 
 # ---------------------------------------------------------------------------

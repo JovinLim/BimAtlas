@@ -41,7 +41,12 @@ def get_conn():
     """Get a connection from the pool."""
     if _pool is None:
         raise RuntimeError("Connection pool not initialised -- call init_pool() first")
-    return _pool.getconn()
+    conn = _pool.getconn()
+    # Set search path for AGE and our tables
+    with conn.cursor() as cur:
+        cur.execute('SET search_path = ag_catalog, "$user", public;')
+    conn.commit()
+    return conn
 
 
 def put_conn(conn) -> None:

@@ -6,15 +6,18 @@ Run with::
 """
 
 import logging
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import strawberry
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
 from .db import close_pool, init_pool
 from .schema.queries import Query
+from .services.ifc.ingestion import ingest_ifc
 
 logger = logging.getLogger("bimatlas")
 
@@ -23,7 +26,16 @@ logger = logging.getLogger("bimatlas")
 async def lifespan(app: FastAPI):
     """Manage startup / shutdown lifecycle."""
     logger.info("Starting BimAtlas API -- initialising connection pool")
-    init_pool()
+    try:
+        init_pool()
+    except Exception as e:
+        if "Connection refused" in str(e) or "connection" in str(e).lower():
+            raise RuntimeError(
+                "Database connection refused. Start PostgreSQL first:\n"
+                "  cd infra && docker compose up -d\n"
+                "Then wait a few seconds for PostgreSQL to be ready."
+            ) from e
+        raise
     yield
     logger.info("Shutting down BimAtlas API -- closing connection pool")
     close_pool()
@@ -54,3 +66,31 @@ app.include_router(graphql_app, prefix="/graphql")
 async def health():
     """Basic liveness check."""
     return {"status": "ok"}
+
+
+@app.post("/upload-ifc")
+async def upload_ifc(file: UploadFile = File(...), label: str | None = None):
+    """Accept an IFC file upload, ingest it, and return the revision summary.
+
+    The file is written to a temporary directory, processed by the ingestion
+    pipeline (parse -> diff -> DB + graph), then cleaned up.
+    """
+    if not file.filename or not file.filename.lower().endswith(".ifc"):
+        raise HTTPException(status_code=400, detail="Only .ifc files are accepted")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / file.filename
+        contents = await file.read()
+        tmp_path.write_bytes(contents)
+
+        result = ingest_ifc(str(tmp_path), label=label)
+
+    return {
+        "revision_id": result.revision_id,
+        "total_products": result.total_products,
+        "added": result.added,
+        "modified": result.modified,
+        "deleted": result.deleted,
+        "unchanged": result.unchanged,
+        "edges_created": result.edges_created,
+    }
