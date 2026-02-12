@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+strawberry-graphql[fastapi]
+ifcopenshell
+psycopg2-binary
+apache-age-python
+numpy
+python-multipart
