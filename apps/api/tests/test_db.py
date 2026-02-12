@@ -89,13 +89,14 @@ class TestCursorContextManager:
         assert isinstance(result, dict)
         assert result["test"] == 1
     
-    def test_get_cursor_auto_commit(self, db_pool, clean_db):
+    def test_get_cursor_auto_commit(self, db_pool, test_branch):
         """Test that cursor auto-commits on success."""
+        branch_id = test_branch
         # Insert data
         with db.get_cursor() as cur:
             cur.execute(
-                "INSERT INTO revisions (ifc_filename) VALUES (%s) RETURNING id",
-                ("test.ifc",),
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, %s) RETURNING id",
+                (branch_id, "test.ifc"),
             )
             rev_id = cur.fetchone()[0]
         
@@ -106,11 +107,15 @@ class TestCursorContextManager:
         
         assert result == ("test.ifc",)
     
-    def test_get_cursor_auto_rollback_on_error(self, db_pool, clean_db):
+    def test_get_cursor_auto_rollback_on_error(self, db_pool, test_branch):
         """Test that cursor auto-rolls back on error."""
+        branch_id = test_branch
         try:
             with db.get_cursor() as cur:
-                cur.execute("INSERT INTO revisions (ifc_filename) VALUES (%s)", ("test.ifc",))
+                cur.execute(
+                    "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, %s)",
+                    (branch_id, "test.ifc"),
+                )
                 # Cause an error
                 cur.execute("SELECT * FROM nonexistent_table")
         except Exception:
@@ -124,94 +129,148 @@ class TestCursorContextManager:
         assert count == 0
 
 
+class TestProjectHelpers:
+    """Test project and branch helper functions."""
+
+    def test_create_project(self, db_pool):
+        """Test creating a project with default branch."""
+        project = db.create_project("My Project", "A description")
+
+        assert project["id"] is not None
+        assert project["name"] == "My Project"
+        assert project["description"] == "A description"
+
+        # Should have auto-created a 'main' branch
+        branches = db.fetch_branches(project["id"])
+        assert len(branches) == 1
+        assert branches[0]["name"] == "main"
+
+    def test_fetch_projects(self, db_pool):
+        """Test fetching all projects."""
+        db.create_project("Project A")
+        db.create_project("Project B")
+
+        projects = db.fetch_projects()
+        assert len(projects) == 2
+
+    def test_fetch_project(self, db_pool):
+        """Test fetching a single project."""
+        created = db.create_project("Find Me")
+        project = db.fetch_project(created["id"])
+
+        assert project is not None
+        assert project["name"] == "Find Me"
+
+    def test_create_branch(self, db_pool):
+        """Test creating an additional branch."""
+        project = db.create_project("Branch Test")
+        branch = db.create_branch(project["id"], "feature-x")
+
+        assert branch["name"] == "feature-x"
+        assert branch["project_id"] == project["id"]
+
+        branches = db.fetch_branches(project["id"])
+        assert len(branches) == 2  # main + feature-x
+
+
 class TestRevisionHelpers:
     """Test revision helper functions."""
     
-    def test_get_latest_revision_id_empty(self, db_pool, clean_db):
+    def test_get_latest_revision_id_empty(self, db_pool, test_branch):
         """Test getting latest revision ID when database is empty."""
-        rev_id = db.get_latest_revision_id()
+        rev_id = db.get_latest_revision_id(test_branch)
         
         assert rev_id is None
     
-    def test_get_latest_revision_id_with_data(self, db_pool, clean_db):
+    def test_get_latest_revision_id_with_data(self, db_pool, test_branch):
         """Test getting latest revision ID with data."""
+        branch_id = test_branch
         # Insert revisions
         with db.get_cursor() as cur:
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc'), ('v2.ifc')")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc'), (%s, 'v2.ifc')",
+                (branch_id, branch_id),
+            )
         
-        rev_id = db.get_latest_revision_id()
+        rev_id = db.get_latest_revision_id(branch_id)
         
         assert rev_id == 2
     
-    def test_fetch_revisions_empty(self, db_pool, clean_db):
+    def test_fetch_revisions_empty(self, db_pool, test_branch):
         """Test fetching revisions when database is empty."""
-        revisions = db.fetch_revisions()
+        revisions = db.fetch_revisions(test_branch)
         
         assert isinstance(revisions, list)
         assert len(revisions) == 0
     
-    def test_fetch_revisions_with_data(self, db_pool, clean_db):
+    def test_fetch_revisions_with_data(self, db_pool, test_branch):
         """Test fetching revisions with data."""
+        branch_id = test_branch
         # Insert revisions
         with db.get_cursor() as cur:
             cur.execute(
-                "INSERT INTO revisions (label, ifc_filename) VALUES "
-                "('Rev 1', 'v1.ifc'), ('Rev 2', 'v2.ifc')"
+                "INSERT INTO revisions (branch_id, label, ifc_filename) VALUES "
+                "(%s, 'Rev 1', 'v1.ifc'), (%s, 'Rev 2', 'v2.ifc')",
+                (branch_id, branch_id),
             )
         
-        revisions = db.fetch_revisions()
+        revisions = db.fetch_revisions(branch_id)
         
         assert len(revisions) == 2
-        assert revisions[0]["id"] == 1
         assert revisions[0]["label"] == "Rev 1"
-        assert revisions[1]["id"] == 2
         assert revisions[1]["label"] == "Rev 2"
     
-    def test_fetch_revisions_ordered(self, db_pool, clean_db):
+    def test_fetch_revisions_ordered(self, db_pool, test_branch):
         """Test that revisions are ordered by id ascending."""
+        branch_id = test_branch
         # Insert revisions
         with db.get_cursor() as cur:
             cur.execute(
-                "INSERT INTO revisions (ifc_filename) VALUES ('v3.ifc'), ('v1.ifc'), ('v2.ifc')"
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES "
+                "(%s, 'v3.ifc'), (%s, 'v1.ifc'), (%s, 'v2.ifc')",
+                (branch_id, branch_id, branch_id),
             )
         
-        revisions = db.fetch_revisions()
+        revisions = db.fetch_revisions(branch_id)
         
         # Should be ordered by id, not filename
-        assert revisions[0]["id"] == 1
-        assert revisions[1]["id"] == 2
-        assert revisions[2]["id"] == 3
+        assert revisions[0]["id"] < revisions[1]["id"] < revisions[2]["id"]
 
 
 class TestProductQueries:
     """Test product query functions."""
     
     @pytest.fixture
-    def sample_products(self, db_pool, clean_db):
-        """Create sample products for testing."""
+    def sample_products(self, db_pool, test_branch):
+        """Create sample products for testing. Returns (rev_id, branch_id)."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revision
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('test.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'test.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev_id = cur.fetchone()[0]
             
             # Insert products
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s),
-                ('0000000000000000000002', 'IfcSlab', 'Slab-1', 'hash2', %s),
-                ('0000000000000000000003', 'IfcWall', 'Wall-2', 'hash3', %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s),
+                (%s, '0000000000000000000002', 'IfcSlab', 'Slab-1', 'hash2', %s),
+                (%s, '0000000000000000000003', 'IfcWall', 'Wall-2', 'hash3', %s)
                 """,
-                (rev_id, rev_id, rev_id),
+                (branch_id, rev_id, branch_id, rev_id, branch_id, rev_id),
             )
         
-        return rev_id
+        return rev_id, branch_id
     
     def test_fetch_product_at_revision(self, sample_products):
         """Test fetching single product at revision."""
-        product = db.fetch_product_at_revision("0000000000000000000001", sample_products)
+        rev_id, branch_id = sample_products
+        product = db.fetch_product_at_revision("0000000000000000000001", rev_id, branch_id)
         
         assert product is not None
         assert product["global_id"] == "0000000000000000000001"
@@ -220,13 +279,15 @@ class TestProductQueries:
     
     def test_fetch_product_at_revision_not_found(self, sample_products):
         """Test fetching non-existent product."""
-        product = db.fetch_product_at_revision("9999999999999999999999", sample_products)
+        rev_id, branch_id = sample_products
+        product = db.fetch_product_at_revision("9999999999999999999999", rev_id, branch_id)
         
         assert product is None
     
     def test_fetch_products_at_revision_all(self, sample_products):
         """Test fetching all products at revision."""
-        products = db.fetch_products_at_revision(sample_products)
+        rev_id, branch_id = sample_products
+        products = db.fetch_products_at_revision(rev_id, branch_id)
         
         assert len(products) == 3
         
@@ -238,7 +299,8 @@ class TestProductQueries:
     
     def test_fetch_products_at_revision_filter_by_class(self, sample_products):
         """Test fetching products filtered by IFC class."""
-        products = db.fetch_products_at_revision(sample_products, ifc_class="IfcWall")
+        rev_id, branch_id = sample_products
+        products = db.fetch_products_at_revision(rev_id, branch_id, ifc_class="IfcWall")
         
         assert len(products) == 2
         
@@ -246,61 +308,70 @@ class TestProductQueries:
         for p in products:
             assert p["ifc_class"] == "IfcWall"
     
-    def test_fetch_products_at_revision_filter_by_container(self, db_pool, clean_db):
+    def test_fetch_products_at_revision_filter_by_container(self, db_pool, test_branch):
         """Test fetching products filtered by container."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revision
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('test.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'test.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev_id = cur.fetchone()[0]
             
             # Insert products with containers
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, contained_in, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, contained_in, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcBuildingStorey', 'Level-1', NULL, 'hash1', %s),
-                ('0000000000000000000002', 'IfcWall', 'Wall-1', '0000000000000000000001', 'hash2', %s),
-                ('0000000000000000000003', 'IfcWall', 'Wall-2', '0000000000000000000001', 'hash3', %s)
+                (%s, '0000000000000000000001', 'IfcBuildingStorey', 'Level-1', NULL, 'hash1', %s),
+                (%s, '0000000000000000000002', 'IfcWall', 'Wall-1', '0000000000000000000001', 'hash2', %s),
+                (%s, '0000000000000000000003', 'IfcWall', 'Wall-2', '0000000000000000000001', 'hash3', %s)
                 """,
-                (rev_id, rev_id, rev_id),
+                (branch_id, rev_id, branch_id, rev_id, branch_id, rev_id),
             )
         
         # Fetch products in container
         products = db.fetch_products_at_revision(
-            rev_id, contained_in="0000000000000000000001"
+            rev_id, branch_id, contained_in="0000000000000000000001"
         )
         
         assert len(products) == 2
         for p in products:
             assert p["contained_in"] == "0000000000000000000001"
     
-    def test_fetch_spatial_container(self, db_pool, clean_db):
+    def test_fetch_spatial_container(self, db_pool, test_branch):
         """Test fetching spatial container for element."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revision
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('test.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'test.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev_id = cur.fetchone()[0]
             
             # Insert container and element
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcBuildingStorey', 'Level-1', 'hash1', %s)
+                (%s, '0000000000000000000001', 'IfcBuildingStorey', 'Level-1', 'hash1', %s)
                 """,
-                (rev_id,),
+                (branch_id, rev_id),
             )
         
-        container = db.fetch_spatial_container("0000000000000000000001", rev_id)
+        container = db.fetch_spatial_container("0000000000000000000001", rev_id, branch_id)
         
         assert container is not None
         assert container["global_id"] == "0000000000000000000001"
     
     def test_fetch_spatial_container_none(self, sample_products):
         """Test fetching container when none exists."""
-        container = db.fetch_spatial_container(None, sample_products)
+        rev_id, branch_id = sample_products
+        container = db.fetch_spatial_container(None, rev_id, branch_id)
         
         assert container is None
 
@@ -308,76 +379,90 @@ class TestProductQueries:
 class TestSCDType2Queries:
     """Test SCD Type 2 time-travel queries."""
     
-    def test_scd_type_2_current_products(self, db_pool, clean_db):
+    def test_scd_type_2_current_products(self, db_pool, test_branch):
         """Test querying current (non-closed) products."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create two revisions
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev1 = cur.fetchone()[0]
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v2.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v2.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev2 = cur.fetchone()[0]
             
             # Insert product in rev1
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
                 """,
-                (rev1, rev2),
+                (branch_id, rev1, rev2),
             )
             
             # Insert updated version in rev2 (current)
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1-Updated', 'hash2', %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1-Updated', 'hash2', %s)
                 """,
-                (rev2,),
+                (branch_id, rev2),
             )
         
         # Fetch at rev2 should get updated version
-        product = db.fetch_product_at_revision("0000000000000000000001", rev2)
+        product = db.fetch_product_at_revision("0000000000000000000001", rev2, branch_id)
         
         assert product is not None
         assert product["name"] == "Wall-1-Updated"
     
-    def test_scd_type_2_historical_query(self, db_pool, clean_db):
+    def test_scd_type_2_historical_query(self, db_pool, test_branch):
         """Test querying historical state."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create two revisions
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev1 = cur.fetchone()[0]
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v2.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v2.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev2 = cur.fetchone()[0]
             
             # Insert product in rev1
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
                 """,
-                (rev1, rev2),
+                (branch_id, rev1, rev2),
             )
             
             # Insert updated version in rev2
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1-Updated', 'hash2', %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1-Updated', 'hash2', %s)
                 """,
-                (rev2,),
+                (branch_id, rev2),
             )
         
         # Fetch at rev1 should get original version
-        product = db.fetch_product_at_revision("0000000000000000000001", rev1)
+        product = db.fetch_product_at_revision("0000000000000000000001", rev1, branch_id)
         
         assert product is not None
         assert product["name"] == "Wall-1"
@@ -386,103 +471,128 @@ class TestSCDType2Queries:
 class TestRevisionDiff:
     """Test revision diff functionality."""
     
-    def test_fetch_revision_diff_empty(self, db_pool, clean_db):
+    def test_fetch_revision_diff_empty(self, db_pool, test_branch):
         """Test diff between two empty states."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc'), ('v2.ifc')")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc'), (%s, 'v2.ifc')",
+                (branch_id, branch_id),
+            )
         
-        diff = db.fetch_revision_diff(1, 2)
+        diff = db.fetch_revision_diff(1, 2, branch_id)
         
         assert diff["added"] == []
         assert diff["modified"] == []
         assert diff["deleted"] == []
     
-    def test_fetch_revision_diff_added(self, db_pool, clean_db):
+    def test_fetch_revision_diff_added(self, db_pool, test_branch):
         """Test detecting added products."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revisions
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev1 = cur.fetchone()[0]
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v2.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v2.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev2 = cur.fetchone()[0]
             
             # Add product in rev2
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s)
                 """,
-                (rev2,),
+                (branch_id, rev2),
             )
         
-        diff = db.fetch_revision_diff(rev1, rev2)
+        diff = db.fetch_revision_diff(rev1, rev2, branch_id)
         
         assert len(diff["added"]) == 1
         assert diff["added"][0]["global_id"] == "0000000000000000000001"
         assert len(diff["modified"]) == 0
         assert len(diff["deleted"]) == 0
     
-    def test_fetch_revision_diff_deleted(self, db_pool, clean_db):
+    def test_fetch_revision_diff_deleted(self, db_pool, test_branch):
         """Test detecting deleted products."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revisions
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev1 = cur.fetchone()[0]
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v2.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v2.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev2 = cur.fetchone()[0]
             
             # Add product in rev1, delete in rev2
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
                 """,
-                (rev1, rev2),
+                (branch_id, rev1, rev2),
             )
         
-        diff = db.fetch_revision_diff(rev1, rev2)
+        diff = db.fetch_revision_diff(rev1, rev2, branch_id)
         
         assert len(diff["added"]) == 0
         assert len(diff["modified"]) == 0
         assert len(diff["deleted"]) == 1
         assert diff["deleted"][0]["global_id"] == "0000000000000000000001"
     
-    def test_fetch_revision_diff_modified(self, db_pool, clean_db):
+    def test_fetch_revision_diff_modified(self, db_pool, test_branch):
         """Test detecting modified products."""
+        branch_id = test_branch
         with db.get_cursor() as cur:
             # Create revisions
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v1.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v1.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev1 = cur.fetchone()[0]
-            cur.execute("INSERT INTO revisions (ifc_filename) VALUES ('v2.ifc') RETURNING id")
+            cur.execute(
+                "INSERT INTO revisions (branch_id, ifc_filename) VALUES (%s, 'v2.ifc') RETURNING id",
+                (branch_id,),
+            )
             rev2 = cur.fetchone()[0]
             
             # Original version in rev1
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev, valid_to_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1', 'hash1', %s, %s)
                 """,
-                (rev1, rev2),
+                (branch_id, rev1, rev2),
             )
             
             # Modified version in rev2 (different hash)
             cur.execute(
                 """
                 INSERT INTO ifc_products 
-                (global_id, ifc_class, name, content_hash, valid_from_rev)
+                (branch_id, global_id, ifc_class, name, content_hash, valid_from_rev)
                 VALUES
-                ('0000000000000000000001', 'IfcWall', 'Wall-1-Modified', 'hash2', %s)
+                (%s, '0000000000000000000001', 'IfcWall', 'Wall-1-Modified', 'hash2', %s)
                 """,
-                (rev2,),
+                (branch_id, rev2),
             )
         
-        diff = db.fetch_revision_diff(rev1, rev2)
+        diff = db.fetch_revision_diff(rev1, rev2, branch_id)
         
         assert len(diff["added"]) == 0
         assert len(diff["modified"]) == 1

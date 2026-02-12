@@ -10,6 +10,20 @@ from pathlib import Path
 import pytest
 from fastapi import status
 
+from src import db
+
+
+@pytest.fixture
+def api_branch(client) -> int:
+    """Create a test project+branch via the API and return the branch_id.
+
+    Uses the DB helpers (pool is already initialised by the ``client`` fixture
+    chain) so every API test that needs to upload gets a fresh branch.
+    """
+    project = db.create_project("API Test Project")
+    branches = db.fetch_branches(project["id"])
+    return branches[0]["id"]
+
 
 class TestHealthEndpoint:
     """Test /health endpoint."""
@@ -25,19 +39,20 @@ class TestHealthEndpoint:
 class TestUploadIfcEndpoint:
     """Test /upload-ifc endpoint."""
 
-    def test_upload_ifc_success(self, client, test_ifc_file):
+    def test_upload_ifc_success(self, client, test_ifc_file, api_branch):
         """Test successful IFC file upload."""
         with open(test_ifc_file, "rb") as f:
             response = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
-        print(data)
         assert "revision_id" in data
+        assert "branch_id" in data
         assert "total_products" in data
         assert "added" in data
         assert "modified" in data
@@ -45,34 +60,35 @@ class TestUploadIfcEndpoint:
         assert "unchanged" in data
         assert "edges_created" in data
 
-        assert data["revision_id"] == 1
+        assert data["branch_id"] == api_branch
         assert data["total_products"] > 0
         assert data["added"] == data["total_products"]  # First import
         assert data["modified"] == 0
         assert data["deleted"] == 0
         assert data["unchanged"] == 0
 
-    def test_upload_ifc_with_label(self, client, test_ifc_file):
+    def test_upload_ifc_with_label(self, client, test_ifc_file, api_branch):
         """Test IFC upload with custom label."""
         with open(test_ifc_file, "rb") as f:
             response = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
-                data={"label": "Test Label"},
+                data={"branch_id": str(api_branch), "label": "Test Label"},
             )
 
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
-        assert data["revision_id"] == 1
+        assert data["branch_id"] == api_branch
 
-    def test_upload_ifc_multiple_times(self, client, test_ifc_file):
+    def test_upload_ifc_multiple_times(self, client, test_ifc_file, api_branch):
         """Test uploading same file multiple times."""
         # First upload
         with open(test_ifc_file, "rb") as f:
             response1 = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response1.status_code == status.HTTP_200_OK
@@ -83,18 +99,19 @@ class TestUploadIfcEndpoint:
             response2 = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response2.status_code == status.HTTP_200_OK
         data2 = response2.json()
 
         # Second import should detect no changes
-        assert data2["revision_id"] == 2
+        assert data2["revision_id"] > data1["revision_id"]
         assert data2["total_products"] == data1["total_products"]
         assert data2["added"] == 0
         assert data2["unchanged"] == data1["total_products"]
 
-    def test_upload_non_ifc_file(self, client, tmp_path):
+    def test_upload_non_ifc_file(self, client, tmp_path, api_branch):
         """Test that non-IFC file is rejected."""
         # Create a non-IFC file
         txt_file = tmp_path / "test.txt"
@@ -104,6 +121,7 @@ class TestUploadIfcEndpoint:
             response = client.post(
                 "/upload-ifc",
                 files={"file": ("test.txt", f, "text/plain")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -115,7 +133,7 @@ class TestUploadIfcEndpoint:
 
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
-    def test_upload_empty_file(self, client, tmp_path):
+    def test_upload_empty_file(self, client, tmp_path, api_branch):
         """Test uploading empty IFC file."""
         empty_ifc = tmp_path / "empty.ifc"
         empty_ifc.write_bytes(b"")
@@ -124,12 +142,13 @@ class TestUploadIfcEndpoint:
             response = client.post(
                 "/upload-ifc",
                 files={"file": (empty_ifc.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         # Should fail during parsing
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
-    def test_upload_minimal_ifc(self, client, tmp_path):
+    def test_upload_minimal_ifc(self, client, tmp_path, api_branch):
         """Test uploading minimal valid IFC file."""
         minimal_ifc = tmp_path / "minimal.ifc"
         minimal_ifc.write_text(
@@ -150,18 +169,20 @@ END-ISO-10303-21;
             response = client.post(
                 "/upload-ifc",
                 files={"file": (minimal_ifc.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["total_products"] >= 1
 
-    def test_upload_ifc_response_structure(self, client, test_ifc_file):
+    def test_upload_ifc_response_structure(self, client, test_ifc_file, api_branch):
         """Test that response has correct structure."""
         with open(test_ifc_file, "rb") as f:
             response = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
             )
 
         assert response.status_code == status.HTTP_200_OK
@@ -170,6 +191,7 @@ END-ISO-10303-21;
 
         # Verify types
         assert isinstance(data["revision_id"], int)
+        assert isinstance(data["branch_id"], int)
         assert isinstance(data["total_products"], int)
         assert isinstance(data["added"], int)
         assert isinstance(data["modified"], int)
@@ -179,6 +201,7 @@ END-ISO-10303-21;
 
         # Verify value ranges
         assert data["revision_id"] > 0
+        assert data["branch_id"] == api_branch
         assert data["total_products"] >= 0
         assert data["added"] >= 0
         assert data["modified"] >= 0
@@ -190,6 +213,17 @@ END-ISO-10303-21;
         assert (
             data["added"] + data["modified"] + data["deleted"] + data["unchanged"]
         ) >= data["total_products"]
+
+    def test_upload_ifc_invalid_branch(self, client, test_ifc_file):
+        """Test that uploading to a non-existent branch returns 404."""
+        with open(test_ifc_file, "rb") as f:
+            response = client.post(
+                "/upload-ifc",
+                files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": "99999"},
+            )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 class TestGraphQLEndpoint:
@@ -267,7 +301,7 @@ class TestErrorHandling:
 class TestConcurrency:
     """Test concurrent requests."""
 
-    def test_multiple_concurrent_uploads(self, client, test_ifc_file):
+    def test_multiple_concurrent_uploads(self, client, test_ifc_file, api_branch):
         """Test handling multiple upload requests."""
         # Note: TestClient is synchronous, so this tests sequential requests
         # For true concurrency testing, use async test client
@@ -278,7 +312,7 @@ class TestConcurrency:
                 response = client.post(
                     "/upload-ifc",
                     files={"file": (test_ifc_file.name, f, "application/octet-stream")},
-                    data={"label": f"Upload {i+1}"},
+                    data={"branch_id": str(api_branch), "label": f"Upload {i+1}"},
                 )
                 responses.append(response)
 
@@ -288,13 +322,13 @@ class TestConcurrency:
 
         # Revision IDs should increment
         revision_ids = [r.json()["revision_id"] for r in responses]
-        assert revision_ids == [1, 2, 3]
+        assert revision_ids[0] < revision_ids[1] < revision_ids[2]
 
 
 class TestIntegration:
     """Integration tests for full workflows."""
 
-    def test_full_workflow_upload_and_verify(self, client, test_ifc_file, db_pool):
+    def test_full_workflow_upload_and_verify(self, client, test_ifc_file, db_pool, api_branch):
         """Test complete workflow: upload IFC and verify in database."""
         from src.db import get_conn, put_conn
 
@@ -303,7 +337,7 @@ class TestIntegration:
             response = client.post(
                 "/upload-ifc",
                 files={"file": (test_ifc_file.name, f, "application/octet-stream")},
-                data={"label": "Integration Test"},
+                data={"branch_id": str(api_branch), "label": "Integration Test"},
             )
 
         assert response.status_code == status.HTTP_200_OK
@@ -336,7 +370,7 @@ class TestIntegration:
         finally:
             put_conn(conn)
 
-    def test_workflow_multiple_revisions(self, client, test_ifc_file, db_pool):
+    def test_workflow_multiple_revisions(self, client, test_ifc_file, db_pool, api_branch):
         """Test workflow with multiple revisions."""
         from src.db import get_conn, put_conn
 
@@ -346,7 +380,7 @@ class TestIntegration:
                 response = client.post(
                     "/upload-ifc",
                     files={"file": (test_ifc_file.name, f, "application/octet-stream")},
-                    data={"label": f"Revision {i+1}"},
+                    data={"branch_id": str(api_branch), "label": f"Revision {i+1}"},
                 )
                 assert response.status_code == status.HTTP_200_OK
 
@@ -354,7 +388,10 @@ class TestIntegration:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM revisions")
+                cur.execute(
+                    "SELECT COUNT(*) FROM revisions WHERE branch_id = %s",
+                    (api_branch,),
+                )
                 count = cur.fetchone()[0]
 
             assert count == 2

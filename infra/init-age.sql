@@ -6,26 +6,57 @@ SET search_path = ag_catalog, "$user", public;
 SELECT create_graph('bimatlas');
 
 -- ============================================================================
--- Revision tracking
+-- Projects
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS projects (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================================================
+-- Branches (each project has at least a "main" branch)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS branches (
+    id          SERIAL PRIMARY KEY,
+    project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL DEFAULT 'main',
+    created_at  TIMESTAMPTZ DEFAULT now(),
+
+    UNIQUE (project_id, name)
+);
+
+CREATE INDEX idx_branches_project ON branches (project_id);
+
+-- ============================================================================
+-- Revision tracking (scoped to a branch)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS revisions (
     id          SERIAL PRIMARY KEY,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
     label       TEXT,                       -- User-defined label, e.g. "v2.1 - structural update"
     ifc_filename TEXT NOT NULL,             -- Original filename for reference
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE INDEX idx_revisions_branch ON revisions (branch_id);
+
 -- ============================================================================
--- SCD Type 2 versioned product table
+-- SCD Type 2 versioned product table (scoped to a branch)
 -- ============================================================================
--- Each IFC file upload creates a revision. Products use Slowly Changing
--- Dimension Type 2: only changed/added products get new rows (detected via
--- content_hash); unchanged products carry forward implicitly via their open
--- valid_to_rev IS NULL window.
+-- Each IFC file upload creates a revision on a branch. Products use Slowly
+-- Changing Dimension Type 2: only changed/added products get new rows (detected
+-- via content_hash); unchanged products carry forward implicitly via their open
+-- valid_to_rev IS NULL window.  Products are scoped per-branch so each branch
+-- has an independent version history.
 
 CREATE TABLE IF NOT EXISTS ifc_products (
     id              SERIAL PRIMARY KEY,         -- Surrogate PK (multiple rows per global_id)
+    branch_id       INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
     global_id       TEXT NOT NULL,              -- IfcRoot.GlobalId (stable across revisions)
     ifc_class       TEXT NOT NULL,              -- Runtime entity, e.g. "IfcWall"
     name            TEXT,                       -- IfcRoot.Name
@@ -41,11 +72,11 @@ CREATE TABLE IF NOT EXISTS ifc_products (
     valid_from_rev  INTEGER NOT NULL REFERENCES revisions(id),  -- Revision that introduced this row
     valid_to_rev    INTEGER REFERENCES revisions(id),           -- NULL = current; set when superseded/deleted
 
-    UNIQUE (global_id, valid_from_rev)
+    UNIQUE (branch_id, global_id, valid_from_rev)
 );
 
 -- Indexes for efficient querying
-CREATE INDEX idx_ifc_products_current    ON ifc_products (global_id) WHERE valid_to_rev IS NULL;
-CREATE INDEX idx_ifc_products_class      ON ifc_products (ifc_class, valid_to_rev);
-CREATE INDEX idx_ifc_products_contained  ON ifc_products (contained_in) WHERE valid_to_rev IS NULL;
-CREATE INDEX idx_ifc_products_rev_range  ON ifc_products (valid_from_rev, valid_to_rev);
+CREATE INDEX idx_ifc_products_current    ON ifc_products (branch_id, global_id) WHERE valid_to_rev IS NULL;
+CREATE INDEX idx_ifc_products_class      ON ifc_products (branch_id, ifc_class, valid_to_rev);
+CREATE INDEX idx_ifc_products_contained  ON ifc_products (branch_id, contained_in) WHERE valid_to_rev IS NULL;
+CREATE INDEX idx_ifc_products_rev_range  ON ifc_products (branch_id, valid_from_rev, valid_to_rev);

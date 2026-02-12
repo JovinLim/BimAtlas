@@ -2,7 +2,8 @@
 
 Provides a threaded connection pool, a cursor context-manager that handles
 commit/rollback, and revision-scoped query functions for the SCD Type 2
-``ifc_products`` table and the ``revisions`` table.
+``ifc_products`` table, the ``revisions`` table, and the ``projects`` /
+``branches`` tables.
 """
 
 from __future__ import annotations
@@ -93,30 +94,120 @@ def get_cursor(dict_cursor: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# Revision helpers
+# Project helpers
 # ---------------------------------------------------------------------------
 
 
-def get_latest_revision_id() -> int | None:
-    """Return the most recent revision id, or ``None`` if no revisions exist."""
+def create_project(name: str, description: str | None = None) -> dict:
+    """Create a new project with a default 'main' branch. Returns the project dict."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO projects (name, description) VALUES (%s, %s) RETURNING id, name, description, created_at",
+            (name, description),
+        )
+        project = dict(cur.fetchone())
+
+        # Auto-create the default "main" branch
+        cur.execute(
+            "INSERT INTO branches (project_id, name) VALUES (%s, 'main') RETURNING id, project_id, name, created_at",
+            (project["id"],),
+        )
+    return project
+
+
+def fetch_projects() -> list[dict]:
+    """Return all projects ordered by created_at descending."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT id, name, description, created_at FROM projects ORDER BY created_at DESC"
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_project(project_id: int) -> dict | None:
+    """Return a single project by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT id, name, description, created_at FROM projects WHERE id = %s",
+            (project_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Branch helpers
+# ---------------------------------------------------------------------------
+
+
+def create_branch(project_id: int, name: str) -> dict:
+    """Create a new branch within a project. Returns the branch dict."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO branches (project_id, name) VALUES (%s, %s) RETURNING id, project_id, name, created_at",
+            (project_id, name),
+        )
+        return dict(cur.fetchone())
+
+
+def fetch_branches(project_id: int) -> list[dict]:
+    """Return all branches for a project, ordered by created_at."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT id, project_id, name, created_at FROM branches WHERE project_id = %s ORDER BY created_at ASC",
+            (project_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_branch(branch_id: int) -> dict | None:
+    """Return a single branch by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT id, project_id, name, created_at FROM branches WHERE id = %s",
+            (branch_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def fetch_branch_by_name(project_id: int, name: str) -> dict | None:
+    """Return a branch by project_id and name."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT id, project_id, name, created_at FROM branches WHERE project_id = %s AND name = %s",
+            (project_id, name),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Revision helpers (scoped to branch)
+# ---------------------------------------------------------------------------
+
+
+def get_latest_revision_id(branch_id: int) -> int | None:
+    """Return the most recent revision id for a branch, or ``None`` if none exist."""
     with get_cursor() as cur:
-        cur.execute("SELECT MAX(id) FROM revisions")
+        cur.execute("SELECT MAX(id) FROM revisions WHERE branch_id = %s", (branch_id,))
         row = cur.fetchone()
         return row[0] if row else None
 
 
-def fetch_revisions() -> list[dict]:
-    """Return all revisions ordered by id ascending."""
+def fetch_revisions(branch_id: int) -> list[dict]:
+    """Return all revisions for a branch, ordered by id ascending."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, label, ifc_filename, created_at "
-            "FROM revisions ORDER BY id ASC"
+            "SELECT id, branch_id, label, ifc_filename, created_at "
+            "FROM revisions WHERE branch_id = %s ORDER BY id ASC",
+            (branch_id,),
         )
         return [dict(r) for r in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
-# Product queries -- revision-scoped (SCD Type 2)
+# Product queries -- branch + revision scoped (SCD Type 2)
 # ---------------------------------------------------------------------------
 
 _PRODUCT_COLS = (
@@ -127,13 +218,13 @@ _PRODUCT_COLS = (
 _REV_FILTER = "valid_from_rev <= %s AND (valid_to_rev IS NULL OR valid_to_rev > %s)"
 
 
-def fetch_product_at_revision(global_id: str, rev: int) -> dict | None:
-    """Fetch a single product visible at *rev*."""
+def fetch_product_at_revision(global_id: str, rev: int, branch_id: int) -> dict | None:
+    """Fetch a single product visible at *rev* on *branch_id*."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
             f"SELECT {_PRODUCT_COLS} FROM ifc_products "
-            f"WHERE global_id = %s AND {_REV_FILTER} LIMIT 1",
-            (global_id, rev, rev),
+            f"WHERE global_id = %s AND branch_id = %s AND {_REV_FILTER} LIMIT 1",
+            (global_id, branch_id, rev, rev),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -141,12 +232,13 @@ def fetch_product_at_revision(global_id: str, rev: int) -> dict | None:
 
 def fetch_products_at_revision(
     rev: int,
+    branch_id: int,
     ifc_class: str | None = None,
     contained_in: str | None = None,
 ) -> list[dict]:
-    """List products visible at *rev*, optionally filtered by class or container."""
-    clauses: list[str] = [_REV_FILTER]
-    params: list = [rev, rev]
+    """List products visible at *rev* on *branch_id*, optionally filtered."""
+    clauses: list[str] = ["branch_id = %s", _REV_FILTER]
+    params: list = [branch_id, rev, rev]
 
     if ifc_class is not None:
         clauses.append("ifc_class = %s")
@@ -161,20 +253,20 @@ def fetch_products_at_revision(
         return [dict(r) for r in cur.fetchall()]
 
 
-def fetch_spatial_container(contained_in_gid: str | None, rev: int) -> dict | None:
+def fetch_spatial_container(contained_in_gid: str | None, rev: int, branch_id: int) -> dict | None:
     """Fetch the spatial container for an element (by contained_in GlobalId)."""
     if not contained_in_gid:
         return None
-    return fetch_product_at_revision(contained_in_gid, rev)
+    return fetch_product_at_revision(contained_in_gid, rev, branch_id)
 
 
 # ---------------------------------------------------------------------------
-# Revision diff -- state comparison between two revisions
+# Revision diff -- state comparison between two revisions (same branch)
 # ---------------------------------------------------------------------------
 
 
-def fetch_revision_diff(from_rev: int, to_rev: int) -> dict:
-    """Compare visible products between *from_rev* and *to_rev*.
+def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
+    """Compare visible products between *from_rev* and *to_rev* on a branch.
 
     Returns ``{"added": [...], "modified": [...], "deleted": [...]}`` where
     each element is a dict with ``global_id``, ``ifc_class``, ``name``.
@@ -184,15 +276,17 @@ def fetch_revision_diff(from_rev: int, to_rev: int) -> dict:
         cur.execute(
             "SELECT t.global_id, t.ifc_class, t.name "
             "FROM ifc_products t "
-            "WHERE t.valid_from_rev <= %s "
+            "WHERE t.branch_id = %s "
+            "  AND t.valid_from_rev <= %s "
             "  AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s) "
             "  AND NOT EXISTS ("
             "      SELECT 1 FROM ifc_products f "
-            "      WHERE f.global_id = t.global_id "
+            "      WHERE f.branch_id = %s "
+            "        AND f.global_id = t.global_id "
             "        AND f.valid_from_rev <= %s "
             "        AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s)"
             "  )",
-            (to_rev, to_rev, from_rev, from_rev),
+            (branch_id, to_rev, to_rev, branch_id, from_rev, from_rev),
         )
         added = [dict(r) for r in cur.fetchall()]
 
@@ -200,15 +294,17 @@ def fetch_revision_diff(from_rev: int, to_rev: int) -> dict:
         cur.execute(
             "SELECT f.global_id, f.ifc_class, f.name "
             "FROM ifc_products f "
-            "WHERE f.valid_from_rev <= %s "
+            "WHERE f.branch_id = %s "
+            "  AND f.valid_from_rev <= %s "
             "  AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s) "
             "  AND NOT EXISTS ("
             "      SELECT 1 FROM ifc_products t "
-            "      WHERE t.global_id = f.global_id "
+            "      WHERE t.branch_id = %s "
+            "        AND t.global_id = f.global_id "
             "        AND t.valid_from_rev <= %s "
             "        AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s)"
             "  )",
-            (from_rev, from_rev, to_rev, to_rev),
+            (branch_id, from_rev, from_rev, branch_id, to_rev, to_rev),
         )
         deleted = [dict(r) for r in cur.fetchall()]
 
@@ -217,12 +313,13 @@ def fetch_revision_diff(from_rev: int, to_rev: int) -> dict:
             "SELECT t.global_id, t.ifc_class, t.name "
             "FROM ifc_products t "
             "JOIN ifc_products f ON t.global_id = f.global_id "
-            "WHERE t.valid_from_rev <= %s "
+            "WHERE t.branch_id = %s AND f.branch_id = %s "
+            "  AND t.valid_from_rev <= %s "
             "  AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s) "
             "  AND f.valid_from_rev <= %s "
             "  AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s) "
             "  AND t.content_hash != f.content_hash",
-            (to_rev, to_rev, from_rev, from_rev),
+            (branch_id, branch_id, to_rev, to_rev, from_rev, from_rev),
         )
         modified = [dict(r) for r in cur.fetchall()]
 

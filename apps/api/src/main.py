@@ -15,8 +15,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
-from .db import close_pool, init_pool
-from .schema.queries import Query
+from .db import close_pool, fetch_branch, init_pool
+from .schema.queries import Mutation, Query
 from .services.ifc.ingestion import ingest_ifc
 
 logger = logging.getLogger("bimatlas")
@@ -41,13 +41,13 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
-schema = strawberry.Schema(query=Query)
+schema = strawberry.Schema(query=Query, mutation=Mutation)
 graphql_app = GraphQLRouter(schema)
 
 app = FastAPI(
     title="BimAtlas API",
     description="Extensible Spatial-Graph Engine for IFC models",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -69,14 +69,28 @@ async def health():
 
 
 @app.post("/upload-ifc")
-async def upload_ifc(file: UploadFile = File(...), label: str | None = Form(None)):
-    """Accept an IFC file upload, ingest it, and return the revision summary.
+async def upload_ifc(
+    file: UploadFile = File(...),
+    branch_id: int = Form(...),
+    label: str | None = Form(None),
+):
+    """Accept an IFC file upload, ingest it into a branch, and return the revision summary.
 
     The file is written to a temporary directory, processed by the ingestion
     pipeline (parse -> diff -> DB + graph), then cleaned up.
+
+    Args:
+        file: The IFC file to upload.
+        branch_id: The branch to ingest the file into.
+        label: Optional human-readable label for the revision.
     """
     if not file.filename or not file.filename.lower().endswith(".ifc"):
         raise HTTPException(status_code=400, detail="Only .ifc files are accepted")
+
+    # Verify branch exists
+    branch = fetch_branch(branch_id)
+    if branch is None:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / file.filename
@@ -84,7 +98,7 @@ async def upload_ifc(file: UploadFile = File(...), label: str | None = Form(None
         tmp_path.write_bytes(contents)
 
         try:
-            result = ingest_ifc(str(tmp_path), label=label)
+            result = ingest_ifc(str(tmp_path), branch_id=branch_id, label=label)
         except (OSError, ValueError) as e:
             logger.exception("IFC ingestion failed")
             raise HTTPException(
@@ -94,6 +108,7 @@ async def upload_ifc(file: UploadFile = File(...), label: str | None = Form(None
 
     return {
         "revision_id": result.revision_id,
+        "branch_id": result.branch_id,
         "total_products": result.total_products,
         "added": result.added,
         "modified": result.modified,
