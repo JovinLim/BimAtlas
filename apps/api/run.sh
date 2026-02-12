@@ -26,4 +26,4 @@ elif ! nc -z -w 2 "$DB_HOST" "$DB_PORT" 2>/dev/null; then
   exit 1
 fi
 
-exec uvicorn src.main:app --reload --port "${PORT:-8000}"
+exec uvicorn src.main:app --reload --host $DB_HOST --port "${PORT:-8000}"
