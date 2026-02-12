@@ -1,3 +1,8 @@
+# Node.js
+node_modules/
+.svelte-kit/
+build/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

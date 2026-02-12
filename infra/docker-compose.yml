@@ -1,0 +1,15 @@
+services:
+  age:
+    image: apache/age:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: bimatlas
+      POSTGRES_PASSWORD: bimatlas
+      POSTGRES_DB: bimatlas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-age.sql:/docker-entrypoint-initdb.d/init-age.sql
+
+volumes:
+  pgdata:
