@@ -1,6 +1,8 @@
 services:
-  age:
+  age-db:
     image: apache/age:latest
+    container_name: age_postgres
+    restart: always
     ports:
       - "5432:5432"
     environment:
@@ -8,7 +10,7 @@ services:
       POSTGRES_PASSWORD: bimatlas
       POSTGRES_DB: bimatlas
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
       - ./init-age.sql:/docker-entrypoint-initdb.d/init-age.sql
 
 volumes:
