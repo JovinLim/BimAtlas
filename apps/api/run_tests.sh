@@ -19,6 +19,14 @@ export TEST_DB_NAME="${TEST_DB_NAME:-bimatlas_test}"
 export TEST_DB_USER="${TEST_DB_USER:-bimatlas}"
 export TEST_DB_PASSWORD="${TEST_DB_PASSWORD:-bimatlas}"
 
+# CRITICAL: Also set BIMATLAS_* so app config uses test DB, not production
+export BIMATLAS_DB_HOST="$TEST_DB_HOST"
+export BIMATLAS_DB_PORT="$TEST_DB_PORT"
+export BIMATLAS_DB_NAME="$TEST_DB_NAME"
+export BIMATLAS_DB_USER="$TEST_DB_USER"
+export BIMATLAS_DB_PASSWORD="$TEST_DB_PASSWORD"
+export BIMATLAS_AGE_GRAPH="bimatlas_test"
+
 # Check if test database exists
 echo "🔍 Checking test database..."
 if docker exec age_postgres psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -c "SELECT 1;" &>/dev/null; then

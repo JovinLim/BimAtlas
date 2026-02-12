@@ -13,6 +13,8 @@ echo ""
 DB_CONTAINER="age_postgres"
 TEST_DB_NAME="bimatlas_test"
 TEST_DB_USER="bimatlas"
+# Use bimatlas (not postgres) - docker-compose sets POSTGRES_USER=bimatlas
+POSTGRES_SUPERUSER="bimatlas"
 
 # Check if PostgreSQL container is running
 echo "🔍 Checking if PostgreSQL container is running..."
@@ -26,7 +28,7 @@ echo ""
 
 # Check if database exists
 echo "🔍 Checking if test database exists..."
-DB_EXISTS=$(docker exec "$DB_CONTAINER" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEST_DB_NAME';")
+DB_EXISTS=$(docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -tAc "SELECT 1 FROM pg_database WHERE datname='$TEST_DB_NAME';")
 if [ "$DB_EXISTS" != "1" ]; then
     echo "⚠️  Test database '$TEST_DB_NAME' does not exist"
     echo "   Run ./setup_test_db.sh to create it"

@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import strawberry
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
@@ -69,7 +69,7 @@ async def health():
 
 
 @app.post("/upload-ifc")
-async def upload_ifc(file: UploadFile = File(...), label: str | None = None):
+async def upload_ifc(file: UploadFile = File(...), label: str | None = Form(None)):
     """Accept an IFC file upload, ingest it, and return the revision summary.
 
     The file is written to a temporary directory, processed by the ingestion
@@ -83,7 +83,14 @@ async def upload_ifc(file: UploadFile = File(...), label: str | None = None):
         contents = await file.read()
         tmp_path.write_bytes(contents)
 
-        result = ingest_ifc(str(tmp_path), label=label)
+        try:
+            result = ingest_ifc(str(tmp_path), label=label)
+        except (OSError, ValueError) as e:
+            logger.exception("IFC ingestion failed")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to parse IFC file: {e!s}",
+            ) from e
 
     return {
         "revision_id": result.revision_id,

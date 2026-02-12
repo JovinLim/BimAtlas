@@ -11,7 +11,7 @@ from src import db
 class TestConnectionPool:
     """Test connection pool lifecycle."""
     
-    def test_init_pool(self):
+    def test_init_pool(self, db_pool):
         """Test initializing connection pool."""
         # Pool should be initialized by fixture, test it works
         assert db._pool is not None

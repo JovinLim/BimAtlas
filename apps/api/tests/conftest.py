@@ -18,6 +18,21 @@ import tempfile
 from pathlib import Path
 from typing import Generator
 
+# CRITICAL: Force test database config BEFORE any app modules load.
+# The app reads BIMATLAS_DB_* and BIMATLAS_AGE_GRAPH at import time.
+# Without this, tests could run against production/development database.
+_test_db_host = os.getenv("TEST_DB_HOST", "localhost")
+_test_db_port = os.getenv("TEST_DB_PORT", "5432")
+_test_db_name = os.getenv("TEST_DB_NAME", "bimatlas_test")
+_test_db_user = os.getenv("TEST_DB_USER", "bimatlas")
+_test_db_password = os.getenv("TEST_DB_PASSWORD", "bimatlas")
+os.environ["BIMATLAS_DB_HOST"] = _test_db_host
+os.environ["BIMATLAS_DB_PORT"] = _test_db_port
+os.environ["BIMATLAS_DB_NAME"] = _test_db_name
+os.environ["BIMATLAS_DB_USER"] = _test_db_user
+os.environ["BIMATLAS_DB_PASSWORD"] = _test_db_password
+os.environ["BIMATLAS_AGE_GRAPH"] = "bimatlas_test"
+
 import psycopg2
 import psycopg2.pool
 import pytest
