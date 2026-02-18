@@ -115,8 +115,8 @@ PORT=8000
 
 ```bash
 cd apps/web
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 The SvelteKit app will be available at `http://localhost:5173`.
@@ -134,6 +134,7 @@ BimAtlas organises work into **projects** and **branches**, similar to Git:
 - **Revision** — A snapshot created by uploading an IFC file to a branch. Uploading a new IFC into the same branch creates a new revision with diff-aware SCD Type 2 versioning.
 
 **Workflow:**
+
 1. Create a project (auto-creates `main` branch)
 2. Upload IFC files into a branch → each upload creates a new revision
 3. Create additional branches for parallel exploration
@@ -171,7 +172,7 @@ Each IFC file upload creates a **revision** on a specific branch. Products are v
 
 ### Geometry Pipeline
 
-IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (transforms baked in). Meshes are stored as PostgreSQL BYTEA columns (vertices, normals, faces as typed arrays), serialized through GraphQL as Base64 strings via a custom Strawberry scalar, and decoded on the frontend into `THREE.BufferGeometry` for direct GPU upload.
+IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (transforms baked in). Meshes are stored as PostgreSQL BYTEA columns (vertices, normals, faces as typed arrays), serialized through GraphQL as Base64 strings via a custom Strawberry scalar, and decoded on the frontend into `THREE.BufferGeometry`.
 
 ### Hybrid Storage
 
@@ -193,9 +194,21 @@ query {
     globalId
     ifcClass
     name
-    containedIn { globalId ifcClass name }
-    mesh { vertices normals faces }
-    relations { globalId ifcClass relationship }
+    containedIn {
+      globalId
+      ifcClass
+      name
+    }
+    mesh {
+      vertices
+      normals
+      faces
+    }
+    relations {
+      globalId
+      ifcClass
+      relationship
+    }
   }
 }
 ```
@@ -212,7 +225,11 @@ query {
       globalId
       ifcClass
       name
-      containedElements { globalId ifcClass name }
+      containedElements {
+        globalId
+        ifcClass
+        name
+      }
     }
   }
 }
@@ -234,9 +251,24 @@ query {
 ```graphql
 query {
   revisionDiff(branchId: 1, fromRev: 1, toRev: 3) {
-    added { globalId ifcClass name changeType }
-    modified { globalId ifcClass name changeType }
-    deleted { globalId ifcClass name changeType }
+    added {
+      globalId
+      ifcClass
+      name
+      changeType
+    }
+    modified {
+      globalId
+      ifcClass
+      name
+      changeType
+    }
+    deleted {
+      globalId
+      ifcClass
+      name
+      changeType
+    }
   }
 }
 ```
@@ -264,7 +296,10 @@ mutation {
   createProject(name: "Hospital Wing B", description: "New wing extension") {
     id
     name
-    branches { id name }
+    branches {
+      id
+      name
+    }
   }
 }
 ```
@@ -295,16 +330,16 @@ The SvelteKit app uses Svelte 5 runes for shared reactive state:
 
 ## Design Decisions
 
-| Decision | Rationale |
-|---|---|
-| Projects + Branches | Organises multi-building work and enables parallel design exploration (like Git) |
-| Branch-scoped SCD Type 2 | Each branch has independent version history; diffs are per-branch |
-| Binary via Base64 in GraphQL | Avoids JSON overhead for large meshes while remaining GraphQL-compatible |
-| `USE_WORLD_COORDS` | Eliminates client-side transform matrix application; simpler Three.js code |
-| Snippet extensibility | `Viewport.svelte` accepts `Snippet` props for pluggable UI without subclassing |
-| AGE + relational hybrid | Attributes/blobs in SQL for fast retrieval; topology in graph for Cypher traversals |
-| SCD Type 2 + tagged graph | Avoids duplicating 100k+ unchanged elements per revision; enables full time-travel |
-| Spatial structure first-class | Enforces IFC 4.3 constraint: one physical element per single spatial container |
+| Decision                      | Rationale                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------- |
+| Projects + Branches           | Organises multi-building work and enables parallel design exploration (like Git)    |
+| Branch-scoped SCD Type 2      | Each branch has independent version history; diffs are per-branch                   |
+| Binary via Base64 in GraphQL  | Avoids JSON overhead for large meshes while remaining GraphQL-compatible            |
+| `USE_WORLD_COORDS`            | Eliminates client-side transform matrix application; simpler Three.js code          |
+| Snippet extensibility         | `Viewport.svelte` accepts `Snippet` props for pluggable UI without subclassing      |
+| AGE + relational hybrid       | Attributes/blobs in SQL for fast retrieval; topology in graph for Cypher traversals |
+| SCD Type 2 + tagged graph     | Avoids duplicating 100k+ unchanged elements per revision; enables full time-travel  |
+| Spatial structure first-class | Enforces IFC 4.3 constraint: one physical element per single spatial container      |
 
 ---
 

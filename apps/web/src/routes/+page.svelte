@@ -8,12 +8,15 @@
   import ForceGraph from "$lib/graph/ForceGraph.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
+  import Sidebar from "$lib/ui/Sidebar.svelte";
+  import DepthWidget from "$lib/ui/DepthWidget.svelte";
   import {
     getSelection,
     getRevisionState,
     getProjectState,
   } from "$lib/state/selection.svelte";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
+  import { computeSubgraph } from "$lib/graph/subgraph";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -76,9 +79,8 @@
     projects.find((p) => p.id === projectState.activeProjectId) ?? null,
   );
   let activeBranch = $derived(
-    activeProject?.branches.find(
-      (b) => b.id === projectState.activeBranchId,
-    ) ?? null,
+    activeProject?.branches.find((b) => b.id === projectState.activeBranchId) ??
+      null,
   );
 
   // ---- Lifecycle ----
@@ -110,12 +112,43 @@
   });
 
   // Load 3D geometry when revision changes and sceneManager is ready
+  let lastFetchedRev: number | null = $state(null);
+  let lastFetchedBranchId: number | null = $state(null);
   $effect(() => {
     const rev = revisionState.activeRevision;
     const branchId = projectState.activeBranchId;
     const mgr = sceneManager;
     if (!mgr || rev === null || !branchId) return;
-    untrack(() => loadGeometry(mgr, rev, branchId));
+
+    // Only fetch if revision or branchId changed
+    if (rev === lastFetchedRev && branchId === lastFetchedBranchId) return;
+
+    // Check loading state without tracking it
+    if (untrack(() => graphStore.loading)) return;
+
+    lastFetchedRev = rev;
+    lastFetchedBranchId = branchId;
+
+    untrack(() => {
+      loadGeometry(mgr, rev, branchId);
+      graphStore.fetchGraph(branchId, rev);
+    });
+  });
+
+  // Subgraph filter: recompute whenever selection or depth changes
+  $effect(() => {
+    const mgr = sceneManager;
+    if (!mgr) return;
+
+    const selectedId = selection.activeGlobalId;
+    const depth = selection.subgraphDepth;
+
+    if (selectedId) {
+      const subgraphIds = computeSubgraph(graphStore.data, selectedId, depth);
+      mgr.applySubgraphFilter(selectedId, subgraphIds);
+    } else {
+      mgr.applySubgraphFilter(null, null);
+    }
   });
 
   // ---- API helpers ----
@@ -462,64 +495,66 @@
         </div>
       </div>
     {:else if activeView === "viewport"}
-      <Viewport bind:manager={sceneManager}>
-        {#snippet overlay()}
-          <SelectionPanel />
-        {/snippet}
-        {#snippet toolbar()}
-          <div class="viewport-toolbar">
-            <button
-              class="toolbar-btn import-btn"
-              onclick={() => (showImportModal = true)}
+      <div class="viewport-container">
+        <Viewport bind:manager={sceneManager} />
+      </div>
+      <div class="viewport-overlay">
+        <Sidebar>
+          <!-- Import IFC -->
+          <button
+            class="toolbar-btn import-btn"
+            onclick={() => (showImportModal = true)}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              style="margin-right:0.35rem"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                style="margin-right:0.35rem"
-              >
-                <path
-                  d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <polyline
-                  points="17 8 12 3 7 8"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <line
-                  x1="12"
-                  y1="3"
-                  x2="12"
-                  y2="15"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              Import IFC
-            </button>
-            {#if sceneManager}
-              <button
-                class="toolbar-btn"
-                onclick={() => sceneManager?.fitToContent()}
-              >
-                Fit View
-              </button>
-              <span class="element-count"
-                >{sceneManager.elementCount} elements</span
-              >
-            {/if}
-          </div>
-        {/snippet}
-      </Viewport>
+              <path
+                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <polyline
+                points="17 8 12 3 7 8"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <line
+                x1="12"
+                y1="3"
+                x2="12"
+                y2="15"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            Import IFC
+          </button>
+          <!-- Fit view -->
+          <button
+            class="toolbar-btn"
+            onclick={() => sceneManager?.fitToContent()}
+          >
+            Fit View
+          </button>
+          <!-- Depth widget -->
+          <DepthWidget bind:value={selection.subgraphDepth} />
+        </Sidebar>
+        <!-- Element count -->
+        <span class="element-count"
+          >{sceneManager?.elementCount ?? 0} elements</span
+        >
+        <SelectionPanel />
+      </div>
     {:else}
       <div class="graph-wrapper">
         <ForceGraph />
@@ -798,6 +833,22 @@
     justify-content: center;
   }
 
+  .viewport-container {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+  }
+
+  .viewport-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    pointer-events: none;
+  }
+
   .graph-wrapper {
     flex: 1;
     position: relative;
@@ -975,16 +1026,6 @@
 
   /* ---- Viewport toolbar overlay ---- */
 
-  .viewport-toolbar {
-    position: absolute;
-    bottom: 1rem;
-    left: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    z-index: 5;
-  }
-
   .toolbar-btn {
     background: rgba(26, 26, 46, 0.85);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1005,6 +1046,9 @@
   }
 
   .element-count {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
     font-size: 0.72rem;
     color: #666;
   }
@@ -1012,6 +1056,7 @@
   .import-btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
   }
 
   /* ---- Modal (shared) ---- */
