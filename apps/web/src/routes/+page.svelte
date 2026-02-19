@@ -14,7 +14,14 @@
     getSelection,
     getRevisionState,
     getProjectState,
+    initializeFromSettings,
   } from "$lib/state/selection.svelte";
+  import { getSearchState } from "$lib/state/search.svelte";
+  import {
+    SEARCH_CHANNEL,
+    type ProductMeta,
+    type SearchMessage,
+  } from "$lib/search/protocol";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
   import type { SceneManager } from "$lib/engine/SceneManager";
@@ -30,15 +37,31 @@
     createBufferGeometry,
     type RawMeshData,
   } from "$lib/engine/BufferGeometryLoader";
-  import { untrack } from "svelte";
+  import { untrack, onMount, onDestroy } from "svelte";
+  import { loadSettings, saveSettings } from "$lib/state/persistence";
 
   const selection = getSelection();
   const revisionState = getRevisionState();
   const projectState = getProjectState();
   const graphStore = getGraphStore();
+  const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
   let activeView: "viewport" | "graph" = $state("viewport");
+  let searchPopup: Window | null = null;
+  let searchChannel: BroadcastChannel | null = null;
+  
+  // Load saved settings and initialize state (only in browser)
+  let settingsLoaded = $state(false);
+  $effect(() => {
+    if (typeof window === 'undefined' || settingsLoaded) return;
+    const savedSettings = loadSettings();
+    if (savedSettings) {
+      activeView = savedSettings.activeView;
+      initializeFromSettings(savedSettings);
+    }
+    settingsLoaded = true;
+  });
 
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
@@ -84,6 +107,19 @@
   );
 
   // ---- Lifecycle ----
+
+  // Persist settings to localStorage whenever they change (only after initial load)
+  $effect(() => {
+    if (typeof window === 'undefined' || !settingsLoaded) return;
+    saveSettings({
+      activeProjectId: projectState.activeProjectId,
+      activeBranchId: projectState.activeBranchId,
+      activeRevision: revisionState.activeRevision,
+      activeGlobalId: selection.activeGlobalId,
+      subgraphDepth: selection.subgraphDepth,
+      activeView: activeView,
+    });
+  });
 
   // Load projects on mount
   $effect(() => {
@@ -140,6 +176,9 @@
     const mgr = sceneManager;
     if (!mgr) return;
 
+    const matchingIds = searchState.matchingIds;
+    if (matchingIds !== null) return;
+
     const selectedId = selection.activeGlobalId;
     const depth = selection.subgraphDepth;
 
@@ -150,6 +189,63 @@
       mgr.applySubgraphFilter(null, null);
     }
   });
+
+  // Search filter: apply when search results change (takes priority over subgraph)
+  $effect(() => {
+    const mgr = sceneManager;
+    if (!mgr) return;
+
+    const matchingIds = searchState.matchingIds;
+    mgr.applySearchFilter(matchingIds);
+  });
+
+  // BroadcastChannel for cross-window search communication
+  onMount(() => {
+    searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
+    searchChannel.onmessage = (e: MessageEvent<SearchMessage>) => {
+      if (e.data.type === "search-results") {
+        searchState.matchingIds = e.data.matchingIds
+          ? new Set(e.data.matchingIds)
+          : null;
+      } else if (e.data.type === "products-sync-request") {
+        const prods = searchState.products;
+        if (prods.length > 0) {
+          searchChannel?.postMessage({
+            type: "products-sync",
+            products: prods,
+          } satisfies SearchMessage);
+        }
+      }
+    };
+  });
+
+  onDestroy(() => {
+    searchChannel?.close();
+  });
+
+  function openSearchPopup() {
+    if (!searchPopup || searchPopup.closed) {
+      searchPopup = window.open(
+        "/search",
+        "bimatlas-search",
+        "width=520,height=600",
+      );
+      schedulePushProducts();
+    } else {
+      searchPopup.focus();
+    }
+  }
+
+  function schedulePushProducts() {
+    const prods = searchState.products;
+    if (prods.length === 0) return;
+    setTimeout(() => {
+      searchChannel?.postMessage({
+        type: "products-sync",
+        products: prods,
+      } satisfies SearchMessage);
+    }, 800);
+  }
 
   // ---- API helpers ----
 
@@ -283,7 +379,18 @@
       const products = result.data?.ifcProducts || [];
       mgr.clearAll();
 
+      const metaList: ProductMeta[] = [];
+
       for (const product of products) {
+        metaList.push({
+          globalId: product.globalId,
+          ifcClass: product.ifcClass,
+          name: product.name ?? null,
+          description: product.description ?? null,
+          objectType: product.objectType ?? null,
+          tag: product.tag ?? null,
+        });
+
         if (product.mesh && product.mesh.vertices && product.mesh.faces) {
           try {
             const geometry = createBufferGeometry(product.mesh as RawMeshData);
@@ -296,6 +403,12 @@
           }
         }
       }
+
+      searchState.setProducts(metaList);
+      searchChannel?.postMessage({
+        type: "products-sync",
+        products: metaList,
+      } satisfies SearchMessage);
 
       if (mgr.elementCount > 0) {
         mgr.fitToContent();
@@ -549,6 +662,18 @@
           <!-- Depth widget -->
           <DepthWidget bind:value={selection.subgraphDepth} />
         </Sidebar>
+        <!-- Search button -->
+        <button
+          class="search-btn"
+          onclick={openSearchPopup}
+          aria-label="Search and filter"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
+            <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          Search
+        </button>
         <!-- Element count -->
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
@@ -846,6 +971,9 @@
     width: 100%;
     height: 100%;
     z-index: 1000;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
     pointer-events: none;
   }
 
@@ -1057,6 +1185,35 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .search-btn {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(26, 26, 46, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #ccc;
+    padding: 0.45rem 1rem;
+    border-radius: 0.4rem;
+    cursor: pointer;
+    font-size: 0.82rem;
+    backdrop-filter: blur(8px);
+    transition:
+      background 0.15s,
+      color 0.15s,
+      border-color 0.15s;
+  }
+
+  .search-btn:hover {
+    background: rgba(255, 102, 68, 0.2);
+    border-color: rgba(255, 136, 102, 0.3);
+    color: #fff;
   }
 
   /* ---- Modal (shared) ---- */
