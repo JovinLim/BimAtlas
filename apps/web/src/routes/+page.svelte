@@ -20,8 +20,10 @@
   import {
     SEARCH_CHANNEL,
     type ProductMeta,
+    type SearchFilter,
     type SearchMessage,
   } from "$lib/search/protocol";
+  import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
   import type { SceneManager } from "$lib/engine/SceneManager";
@@ -176,9 +178,6 @@
     const mgr = sceneManager;
     if (!mgr) return;
 
-    const matchingIds = searchState.matchingIds;
-    if (matchingIds !== null) return;
-
     const selectedId = selection.activeGlobalId;
     const depth = selection.subgraphDepth;
 
@@ -190,31 +189,12 @@
     }
   });
 
-  // Search filter: apply when search results change (takes priority over subgraph)
-  $effect(() => {
-    const mgr = sceneManager;
-    if (!mgr) return;
-
-    const matchingIds = searchState.matchingIds;
-    mgr.applySearchFilter(matchingIds);
-  });
-
   // BroadcastChannel for cross-window search communication
   onMount(() => {
     searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
     searchChannel.onmessage = (e: MessageEvent<SearchMessage>) => {
-      if (e.data.type === "search-results") {
-        searchState.matchingIds = e.data.matchingIds
-          ? new Set(e.data.matchingIds)
-          : null;
-      } else if (e.data.type === "products-sync-request") {
-        const prods = searchState.products;
-        if (prods.length > 0) {
-          searchChannel?.postMessage({
-            type: "products-sync",
-            products: prods,
-          } satisfies SearchMessage);
-        }
+      if (e.data.type === "apply-filters") {
+        handleApplyFilters(e.data.filters);
       }
     };
   });
@@ -230,21 +210,47 @@
         "bimatlas-search",
         "width=520,height=600",
       );
-      schedulePushProducts();
     } else {
       searchPopup.focus();
     }
   }
 
-  function schedulePushProducts() {
-    const prods = searchState.products;
-    if (prods.length === 0) return;
-    setTimeout(() => {
-      searchChannel?.postMessage({
-        type: "products-sync",
-        products: prods,
-      } satisfies SearchMessage);
-    }, 800);
+  function filtersToQueryVars(filters: SearchFilter[]): Record<string, unknown> {
+    const vars: Record<string, unknown> = {};
+    const allClasses: string[] = [];
+
+    for (const f of filters) {
+      if (f.mode === "class" && f.ifcClass) {
+        const descendants = getDescendantClasses(f.ifcClass);
+        for (const cls of descendants) allClasses.push(cls);
+      } else if (f.mode === "attribute" && f.attribute && f.value) {
+        const key = f.attribute === "objectType" ? "objectType" : f.attribute;
+        vars[key] = f.value;
+      }
+    }
+
+    if (allClasses.length > 0) {
+      vars.ifcClasses = [...new Set(allClasses)];
+    }
+
+    return vars;
+  }
+
+  async function handleApplyFilters(filters: SearchFilter[]) {
+    searchState.activeFilters = filters;
+    const mgr = sceneManager;
+    const rev = revisionState.activeRevision;
+    const branchId = projectState.activeBranchId;
+    if (!mgr || rev === null || !branchId) return;
+
+    const extraVars = filters.length > 0 ? filtersToQueryVars(filters) : {};
+    await loadGeometry(mgr, rev, branchId, extraVars);
+
+    searchChannel?.postMessage({
+      type: "filter-result-count",
+      count: mgr.elementCount,
+      total: searchState.totalProductCount,
+    } satisfies SearchMessage);
   }
 
   // ---- API helpers ----
@@ -362,6 +368,7 @@
     mgr: SceneManager,
     revision: number,
     branchId: number,
+    filterVars: Record<string, unknown> = {},
   ) {
     if (loadingGeometry) return;
     loadingGeometry = true;
@@ -370,6 +377,7 @@
       const result = await client.query(IFC_PRODUCTS_QUERY, {
         branchId,
         revision,
+        ...filterVars,
       });
       if (result.error) {
         console.error("Failed to fetch geometry:", result.error);
@@ -405,10 +413,10 @@
       }
 
       searchState.setProducts(metaList);
-      searchChannel?.postMessage({
-        type: "products-sync",
-        products: metaList,
-      } satisfies SearchMessage);
+
+      if (Object.keys(filterVars).length === 0) {
+        searchState.totalProductCount = metaList.length;
+      }
 
       if (mgr.elementCount > 0) {
         mgr.fitToContent();

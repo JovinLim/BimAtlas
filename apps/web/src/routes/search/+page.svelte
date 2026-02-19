@@ -1,19 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import SearchFilterRow from "$lib/ui/SearchFilter.svelte";
-  import { getDescendantClasses } from "$lib/ifc/schema";
   import {
     SEARCH_CHANNEL,
-    FILTERABLE_ATTRIBUTES,
-    type ProductMeta,
     type SearchFilter,
-    type FilterableAttribute,
     type SearchMessage,
   } from "$lib/search/protocol";
 
-  let products = $state<Map<string, ProductMeta>>(new Map());
   let filters = $state<SearchFilter[]>([]);
-  let applied = $state(false);
+  let resultCount = $state<number | null>(null);
+  let totalCount = $state<number | null>(null);
 
   let nextId = 0;
   function genId(): string {
@@ -26,117 +22,57 @@
 
   function removeFilter(id: string) {
     filters = filters.filter((f) => f.id !== id);
-    if (filters.length === 0) applied = false;
+    if (filters.length === 0) {
+      resultCount = null;
+      totalCount = null;
+    }
   }
 
   function updateFilter(id: string, patch: Partial<SearchFilter>) {
     filters = filters.map((f) => (f.id === id ? { ...f, ...patch } : f));
   }
 
+  /** Serialize filters to plain objects so BroadcastChannel can clone them. */
+  function filtersToPlain(list: SearchFilter[]): SearchFilter[] {
+    return list.map((f) => ({
+      id: f.id,
+      mode: f.mode,
+      ifcClass: f.ifcClass,
+      attribute: f.attribute,
+      value: f.value,
+    }));
+  }
+
   function clearFilters() {
     filters = [];
-    applied = false;
+    resultCount = null;
+    totalCount = null;
     channel?.postMessage({
-      type: "search-results",
-      matchingIds: null,
+      type: "apply-filters",
+      filters: [],
     } satisfies SearchMessage);
   }
 
-  function computeMatchingIds(): Set<string> | null {
-    if (!applied || filters.length === 0) return null;
-    const activeFilters = filters.filter((f) => {
-      if (f.mode === "class") return !!f.ifcClass;
-      return !!f.attribute && !!f.value;
-    });
-    if (activeFilters.length === 0) return null;
-
-    const matching = new Set<string>();
-
-    for (const [globalId, meta] of products) {
-      let passes = true;
-
-      for (const filter of activeFilters) {
-        if (filter.mode === "class" && filter.ifcClass) {
-          const allowed = getDescendantClasses(filter.ifcClass);
-          if (!allowed.has(meta.ifcClass)) {
-            passes = false;
-            break;
-          }
-        } else if (
-          filter.mode === "attribute" &&
-          filter.attribute &&
-          filter.value
-        ) {
-          const key = filter.attribute as FilterableAttribute;
-          const fieldValue = meta[key];
-          if (
-            !fieldValue ||
-            !fieldValue.toLowerCase().includes(filter.value.toLowerCase())
-          ) {
-            passes = false;
-            break;
-          }
-        }
-      }
-
-      if (passes) matching.add(globalId);
-    }
-
-    return matching;
-  }
-
   function handleApply() {
-    applied = true;
-    const ids = computeMatchingIds();
-    const payload: SearchMessage = {
-      type: "search-results",
-      matchingIds: ids ? [...ids] : null,
-    };
-    channel?.postMessage(payload);
+    channel?.postMessage({
+      type: "apply-filters",
+      filters: filtersToPlain(filters),
+    } satisfies SearchMessage);
   }
-
-  let matchCount = $derived.by(() => {
-    if (!applied) return null;
-    const ids = computeMatchingIds();
-    if (ids === null) return null;
-    return ids.size;
-  });
 
   let channel: BroadcastChannel | null = null;
-  let syncRetryTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
     channel = new BroadcastChannel(SEARCH_CHANNEL);
     channel.onmessage = (e: MessageEvent<SearchMessage>) => {
-      if (e.data.type === "products-sync") {
-        const map = new Map<string, ProductMeta>();
-        for (const p of e.data.products) map.set(p.globalId, p);
-        products = map;
-        console.log("products synced", products);
-        if (syncRetryTimer) {
-          clearInterval(syncRetryTimer);
-          syncRetryTimer = null;
-        }
+      if (e.data.type === "filter-result-count") {
+        resultCount = e.data.count;
+        totalCount = e.data.total;
       }
     };
-    channel.postMessage({
-      type: "products-sync-request",
-    } satisfies SearchMessage);
-
-    syncRetryTimer = setInterval(() => {
-      if (products.size > 0) {
-        clearInterval(syncRetryTimer!);
-        syncRetryTimer = null;
-        return;
-      }
-      channel?.postMessage({
-        type: "products-sync-request",
-      } satisfies SearchMessage);
-    }, 500);
   });
 
   onDestroy(() => {
-    if (syncRetryTimer) clearInterval(syncRetryTimer);
     channel?.close();
   });
 </script>
@@ -144,7 +80,9 @@
 <div class="search-page">
   <header class="page-header">
     <h2>Search &amp; Filter</h2>
-    <span class="product-count">{products.size} products loaded</span>
+    {#if resultCount !== null && totalCount !== null}
+      <span class="result-count">{resultCount} / {totalCount} elements</span>
+    {/if}
   </header>
 
   <div class="search-toolbar">
@@ -174,12 +112,6 @@
       />
     {/each}
   </div>
-
-  {#if matchCount !== null}
-    <p class="match-count">
-      {matchCount} / {products.size} elements match
-    </p>
-  {/if}
 
   <footer class="page-footer">
     <button
@@ -235,14 +167,14 @@
     color: #e0e0e0;
   }
 
-  .search-toolbar {
-    margin-bottom: 0.75rem;
+  .result-count {
+    font-size: 0.78rem;
+    color: #ff8866;
+    font-variant-numeric: tabular-nums;
   }
 
-  .product-count {
-    font-size: 0.72rem;
-    color: #666;
-    font-variant-numeric: tabular-nums;
+  .search-toolbar {
+    margin-bottom: 0.75rem;
   }
 
   .filter-list {
@@ -281,13 +213,6 @@
     background: rgba(255, 136, 102, 0.1);
     color: #ff8866;
     border-color: rgba(255, 136, 102, 0.3);
-  }
-
-  .match-count {
-    margin: 0.75rem 0 0;
-    font-size: 0.78rem;
-    color: #ff8866;
-    font-variant-numeric: tabular-nums;
   }
 
   .page-footer {

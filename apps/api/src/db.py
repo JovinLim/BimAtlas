@@ -234,18 +234,42 @@ def fetch_products_at_revision(
     rev: int,
     branch_id: int,
     ifc_class: str | None = None,
+    ifc_classes: list[str] | None = None,
     contained_in: str | None = None,
+    name: str | None = None,
+    object_type: str | None = None,
+    tag: str | None = None,
+    description: str | None = None,
+    global_id: str | None = None,
 ) -> list[dict]:
     """List products visible at *rev* on *branch_id*, optionally filtered."""
     clauses: list[str] = ["branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
-    if ifc_class is not None:
+    if ifc_classes is not None and len(ifc_classes) > 0:
+        clauses.append("ifc_class = ANY(%s)")
+        params.append(ifc_classes)
+    elif ifc_class is not None:
         clauses.append("ifc_class = %s")
         params.append(ifc_class)
     if contained_in is not None:
         clauses.append("contained_in = %s")
         params.append(contained_in)
+    if name is not None:
+        clauses.append("name ILIKE %s")
+        params.append(f"%{name}%")
+    if object_type is not None:
+        clauses.append("object_type ILIKE %s")
+        params.append(f"%{object_type}%")
+    if tag is not None:
+        clauses.append("tag ILIKE %s")
+        params.append(f"%{tag}%")
+    if description is not None:
+        clauses.append("description ILIKE %s")
+        params.append(f"%{description}%")
+    if global_id is not None:
+        clauses.append("global_id ILIKE %s")
+        params.append(f"%{global_id}%")
 
     where = " AND ".join(clauses)
     with get_cursor(dict_cursor=True) as cur:

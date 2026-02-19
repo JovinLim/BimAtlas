@@ -232,12 +232,29 @@ class Query:
         self,
         branch_id: int,
         ifc_class: Optional[str] = None,
+        ifc_classes: Optional[list[str]] = None,
         contained_in: Optional[str] = None,
+        name: Optional[str] = None,
+        object_type: Optional[str] = None,
+        tag: Optional[str] = None,
+        description: Optional[str] = None,
+        global_id: Optional[str] = None,
         revision: Optional[int] = None,
     ) -> list[IfcProduct]:
         """List products visible at a revision on a branch, optionally filtered."""
         rev = _resolve_revision(branch_id, revision)
-        rows = fetch_products_at_revision(rev, branch_id, ifc_class=ifc_class, contained_in=contained_in)
+        rows = fetch_products_at_revision(
+            rev,
+            branch_id,
+            ifc_class=ifc_class,
+            ifc_classes=ifc_classes,
+            contained_in=contained_in,
+            name=name,
+            object_type=object_type,
+            tag=tag,
+            description=description,
+            global_id=global_id,
+        )
         return [_row_to_product(r, rev, branch_id) for r in rows]
 
     @strawberry.field
