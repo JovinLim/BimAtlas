@@ -6,6 +6,7 @@
     type SearchFilter,
     type SearchMessage,
   } from "$lib/search/protocol";
+  import { loadSearchFilters, saveSearchFilters } from "$lib/state/persistence";
 
   let filters = $state<SearchFilter[]>([]);
   let resultCount = $state<number | null>(null);
@@ -14,6 +15,14 @@
   let nextId = 0;
   function genId(): string {
     return `f-${nextId++}`;
+  }
+
+  function initNextIdFromFilters(list: SearchFilter[]) {
+    const max = list.reduce((acc, f) => {
+      const n = parseInt(f.id.replace(/^f-/, ""), 10);
+      return Number.isNaN(n) ? acc : Math.max(acc, n + 1);
+    }, 0);
+    nextId = max;
   }
 
   function addFilter() {
@@ -61,8 +70,20 @@
   }
 
   let channel: BroadcastChannel | null = null;
+  let initialLoadDone = $state(false);
+
+  $effect(() => {
+    if (!initialLoadDone) return;
+    saveSearchFilters(filtersToPlain(filters));
+  });
 
   onMount(() => {
+    const saved = loadSearchFilters();
+    if (saved.length > 0) {
+      filters = saved;
+      initNextIdFromFilters(saved);
+    }
+    initialLoadDone = true;
     channel = new BroadcastChannel(SEARCH_CHANNEL);
     channel.onmessage = (e: MessageEvent<SearchMessage>) => {
       if (e.data.type === "filter-result-count") {
