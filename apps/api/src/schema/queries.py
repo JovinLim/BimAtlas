@@ -1,5 +1,8 @@
 """Root Query and Mutation resolvers for the BimAtlas GraphQL API.
 
+Streaming helpers for the /stream/ifc-products SSE endpoint live here so
+product row → JSON dict conversion stays in one place.
+
 All IFC queries require a ``branchId`` and accept an optional ``revision``
 parameter (defaults to latest on that branch).  Project/branch management
 is exposed via both queries and mutations.
@@ -11,15 +14,22 @@ geometry BYTEAs) with graph data from :mod:`src.services.graph.age_client`
 
 from __future__ import annotations
 
-from typing import Optional
+import base64
+from typing import Any, Optional
 
 import strawberry
 
 from ..db import (
+    apply_filter_sets,
     create_branch,
+    create_filter_set as db_create_filter_set,
     create_project,
+    delete_filter_set as db_delete_filter_set,
+    fetch_applied_filter_sets,
     fetch_branch,
     fetch_branches,
+    fetch_filter_set,
+    fetch_filter_sets_for_branch,
     fetch_product_at_revision,
     fetch_products_at_revision,
     fetch_project,
@@ -28,12 +38,18 @@ from ..db import (
     fetch_revisions,
     fetch_spatial_container,
     get_latest_revision_id,
+    search_filter_sets,
+    update_filter_set as db_update_filter_set,
 )
 from ..services.graph.age_client import build_spatial_tree, get_relations
 from .ifc_enums import IfcRelationshipType
 from .ifc_types import (
+    AppliedFilterSets,
     Branch,
     ChangeType,
+    FilterInput,
+    FilterSet,
+    FilterSetFilter,
     IfcMeshRepresentation,
     IfcProduct,
     IfcRelatedProduct,
@@ -49,6 +65,33 @@ from .ifc_types import (
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def row_to_stream_product(row: dict) -> dict[str, Any]:
+    """Convert a product row to a JSON-serializable dict (camelCase, base64 mesh) for SSE stream.
+
+    Does not fetch contained_in or relations; use for streaming geometry only.
+    """
+    mesh = None
+    if row.get("vertices") and row.get("faces"):
+        mesh = {
+            "vertices": base64.b64encode(bytes(row["vertices"])).decode("utf-8"),
+            "normals": (
+                base64.b64encode(bytes(row["normals"])).decode("utf-8")
+                if row.get("normals")
+                else None
+            ),
+            "faces": base64.b64encode(bytes(row["faces"])).decode("utf-8"),
+        }
+    return {
+        "globalId": row["global_id"],
+        "ifcClass": row["ifc_class"],
+        "name": row.get("name"),
+        "description": row.get("description"),
+        "objectType": row.get("object_type"),
+        "tag": row.get("tag"),
+        "mesh": mesh,
+    }
 
 
 def _resolve_revision(branch_id: int, revision: int | None) -> int:
@@ -140,6 +183,31 @@ def _dict_to_spatial_node(d: dict) -> IfcSpatialNode:
 def _to_iso(dt) -> str:
     """Convert a datetime to ISO 8601 string."""
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+def _row_to_filter_set(row: dict) -> FilterSet:
+    """Convert a db row dict into a :class:`FilterSet` GraphQL type."""
+    filters_data = row.get("filters") or []
+    if isinstance(filters_data, str):
+        import json
+        filters_data = json.loads(filters_data)
+    return FilterSet(
+        id=row["id"],
+        branch_id=row["branch_id"],
+        name=row["name"],
+        logic=row["logic"],
+        filters=[
+            FilterSetFilter(
+                mode=f.get("mode", "class"),
+                ifc_class=f.get("ifcClass") or f.get("ifc_class"),
+                attribute=f.get("attribute"),
+                value=f.get("value"),
+            )
+            for f in filters_data
+        ],
+        created_at=_to_iso(row["created_at"]),
+        updated_at=_to_iso(row["updated_at"]),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +386,34 @@ class Query:
             ],
         )
 
+    # ---- Filter set queries ------------------------------------------------
+
+    @strawberry.field
+    async def filter_sets(self, branch_id: int) -> list[FilterSet]:
+        """List all filter sets for a branch."""
+        rows = fetch_filter_sets_for_branch(branch_id)
+        return [_row_to_filter_set(r) for r in rows]
+
+    @strawberry.field
+    async def search_filter_sets(
+        self,
+        query: str,
+        branch_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+    ) -> list[FilterSet]:
+        """Search filter sets by name, optionally scoped to a branch or project."""
+        rows = search_filter_sets(query, branch_id=branch_id, project_id=project_id)
+        return [_row_to_filter_set(r) for r in rows]
+
+    @strawberry.field
+    async def applied_filter_sets(self, branch_id: int) -> AppliedFilterSets:
+        """Get the currently active filter sets for a branch."""
+        data = fetch_applied_filter_sets(branch_id)
+        return AppliedFilterSets(
+            filter_sets=[_row_to_filter_set(fs) for fs in data["filter_sets"]],
+            combination_logic=data["combination_logic"],
+        )
+
 
 # ---------------------------------------------------------------------------
 # Mutations
@@ -356,4 +452,72 @@ class Mutation:
             project_id=b["project_id"],
             name=b["name"],
             created_at=_to_iso(b["created_at"]),
+        )
+
+    # ---- Filter set mutations -----------------------------------------------
+
+    @strawberry.mutation
+    async def create_filter_set(
+        self,
+        branch_id: int,
+        name: str,
+        logic: str,
+        filters: list[FilterInput],
+    ) -> FilterSet:
+        """Create a new filter set on a branch."""
+        filters_json = [
+            {
+                "mode": f.mode,
+                "ifcClass": f.ifc_class,
+                "attribute": f.attribute,
+                "value": f.value,
+            }
+            for f in filters
+        ]
+        row = db_create_filter_set(branch_id, name, logic, filters_json)
+        return _row_to_filter_set(row)
+
+    @strawberry.mutation
+    async def update_filter_set(
+        self,
+        id: int,
+        name: Optional[str] = None,
+        logic: Optional[str] = None,
+        filters: Optional[list[FilterInput]] = None,
+    ) -> Optional[FilterSet]:
+        """Update an existing filter set."""
+        filters_json = (
+            [
+                {
+                    "mode": f.mode,
+                    "ifcClass": f.ifc_class,
+                    "attribute": f.attribute,
+                    "value": f.value,
+                }
+                for f in filters
+            ]
+            if filters is not None
+            else None
+        )
+        row = db_update_filter_set(id, name=name, logic=logic, filters_json=filters_json)
+        return _row_to_filter_set(row) if row else None
+
+    @strawberry.mutation
+    async def delete_filter_set(self, id: int) -> bool:
+        """Delete a filter set by id."""
+        return db_delete_filter_set(id)
+
+    @strawberry.mutation
+    async def apply_filter_sets(
+        self,
+        branch_id: int,
+        filter_set_ids: list[int],
+        combination_logic: str,
+    ) -> AppliedFilterSets:
+        """Set which filter sets are currently active on a branch."""
+        apply_filter_sets(branch_id, filter_set_ids, combination_logic)
+        data = fetch_applied_filter_sets(branch_id)
+        return AppliedFilterSets(
+            filter_sets=[_row_to_filter_set(fs) for fs in data["filter_sets"]],
+            combination_logic=data["combination_logic"],
         )

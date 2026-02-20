@@ -19,6 +19,7 @@
   import { getSearchState } from "$lib/state/search.svelte";
   import {
     SEARCH_CHANNEL,
+    type FilterSet,
     type ProductMeta,
     type SearchFilter,
     type SearchMessage,
@@ -29,7 +30,7 @@
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
-    IFC_PRODUCTS_QUERY,
+    APPLIED_FILTER_SETS_QUERY,
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
     CREATE_BRANCH_MUTATION,
@@ -73,6 +74,8 @@
   let importing = $state(false);
   let importError = $state<string | null>(null);
   let loadingGeometry = $state(false);
+  let loadingGeometryCurrent = $state(0);
+  let loadingGeometryTotal = $state(0);
 
   // ---- Project / Branch state ----
   interface ProjectData {
@@ -195,6 +198,8 @@
     searchChannel.onmessage = (e: MessageEvent<SearchMessage>) => {
       if (e.data.type === "apply-filters") {
         handleApplyFilters(e.data.filters);
+      } else if (e.data.type === "apply-filter-sets") {
+        handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
       }
     };
   });
@@ -203,15 +208,29 @@
     searchChannel?.close();
   });
 
+  function sendBranchContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    if (branchId && projectId) {
+      searchChannel?.postMessage({
+        type: "branch-context",
+        branchId,
+        projectId,
+      } satisfies SearchMessage);
+    }
+  }
+
   function openSearchPopup() {
     if (!searchPopup || searchPopup.closed) {
       searchPopup = window.open(
         "/search",
         "bimatlas-search",
-        "width=520,height=600",
+        "width=520,height=700",
       );
+      setTimeout(sendBranchContext, 500);
     } else {
       searchPopup.focus();
+      sendBranchContext();
     }
   }
 
@@ -238,6 +257,7 @@
 
   async function handleApplyFilters(filters: SearchFilter[]) {
     searchState.activeFilters = filters;
+    searchState.appliedFilterSets = [];
     const mgr = sceneManager;
     const rev = revisionState.activeRevision;
     const branchId = projectState.activeBranchId;
@@ -253,17 +273,97 @@
     } satisfies SearchMessage);
   }
 
+  function filterSetsToQueryVars(
+    filterSets: FilterSet[],
+    combinationLogic: "AND" | "OR",
+  ): Record<string, unknown> {
+    if (filterSets.length === 0) return {};
+
+    if (filterSets.length === 1) {
+      const fs = filterSets[0];
+      return filtersToQueryVars(fs.filters);
+    }
+
+    // For multiple filter sets we fall back to a flat merge.
+    // Full server-side compound logic would require a dedicated endpoint;
+    // for now we merge all filters and use the combination logic as a hint.
+    const allFilters: SearchFilter[] = [];
+    for (const fs of filterSets) {
+      for (const f of fs.filters) allFilters.push(f);
+    }
+    return filtersToQueryVars(allFilters);
+  }
+
+  async function handleApplyFilterSets(
+    filterSets: FilterSet[],
+    combinationLogic: "AND" | "OR",
+  ) {
+    searchState.appliedFilterSets = filterSets;
+    searchState.combinationLogic = combinationLogic;
+    searchState.activeFilters = [];
+    const mgr = sceneManager;
+    const rev = revisionState.activeRevision;
+    const branchId = projectState.activeBranchId;
+    if (!mgr || rev === null || !branchId) return;
+
+    const extraVars =
+      filterSets.length > 0
+        ? filterSetsToQueryVars(filterSets, combinationLogic)
+        : {};
+    await loadGeometry(mgr, rev, branchId, extraVars);
+
+    searchChannel?.postMessage({
+      type: "filter-result-count",
+      count: mgr.elementCount,
+      total: searchState.totalProductCount,
+    } satisfies SearchMessage);
+  }
+
+  async function autoLoadAppliedFilterSets(branchId: number) {
+    try {
+      const result = await client
+        .query(APPLIED_FILTER_SETS_QUERY, { branchId })
+        .toPromise();
+      const data = result.data?.appliedFilterSets;
+      if (data && data.filterSets && data.filterSets.length > 0) {
+        await handleApplyFilterSets(data.filterSets, data.combinationLogic ?? "AND");
+      }
+    } catch (err) {
+      console.error("Failed to auto-load applied filter sets:", err);
+    }
+  }
+
   // ---- API helpers ----
 
   async function loadProjects() {
     loadingProjects = true;
     try {
       const result = await client.query(PROJECTS_QUERY, {}).toPromise();
+      if (result.error) {
+        // Server/GraphQL error (e.g. 500) — fall back to landing so user can retry or pick another project
+        console.error("Failed to load projects:", result.error);
+        projectState.activeProjectId = null;
+        projectState.activeBranchId = null;
+        revisionState.activeRevision = null;
+        projects = [];
+        return;
+      }
       if (result.data?.projects) {
         projects = result.data.projects;
+        if (projects.length === 0) {
+          // No projects — show main landing so user can create one
+          projectState.activeProjectId = null;
+          projectState.activeBranchId = null;
+          revisionState.activeRevision = null;
+        }
       }
     } catch (err) {
+      // Network or other error — fall back to main landing page for project selection
       console.error("Failed to load projects:", err);
+      projectState.activeProjectId = null;
+      projectState.activeBranchId = null;
+      revisionState.activeRevision = null;
+      projects = [];
     } finally {
       loadingProjects = false;
     }
@@ -332,20 +432,23 @@
 
   function selectProject(projectId: number) {
     projectState.activeProjectId = projectId;
-    // Auto-select the main branch
     const proj = projects.find((p) => p.id === projectId);
     const mainBranch = proj?.branches.find((b) => b.name === "main");
     if (mainBranch) {
       projectState.activeBranchId = mainBranch.id;
     }
-    // Clear the scene
     sceneManager?.clearAll();
+    sendBranchContext();
+    if (mainBranch) {
+      autoLoadAppliedFilterSets(mainBranch.id);
+    }
   }
 
   function selectBranch(branchId: number) {
     projectState.activeBranchId = branchId;
-    // Clear the scene for the new branch
     sceneManager?.clearAll();
+    sendBranchContext();
+    autoLoadAppliedFilterSets(branchId);
   }
 
   async function fetchLatestRevision(branchId: number) {
@@ -364,6 +467,28 @@
     }
   }
 
+  /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
+  function streamQueryParams(
+    branchId: number,
+    revision: number,
+    filterVars: Record<string, unknown>,
+  ): URLSearchParams {
+    const params = new URLSearchParams();
+    params.set("branch_id", String(branchId));
+    params.set("revision", String(revision));
+    if (filterVars.ifcClass != null) params.set("ifc_class", String(filterVars.ifcClass));
+    if (filterVars.ifcClasses != null) {
+      for (const c of filterVars.ifcClasses as string[]) params.append("ifc_classes", c);
+    }
+    if (filterVars.containedIn != null) params.set("contained_in", String(filterVars.containedIn));
+    if (filterVars.name != null) params.set("name", String(filterVars.name));
+    if (filterVars.objectType != null) params.set("object_type", String(filterVars.objectType));
+    if (filterVars.tag != null) params.set("tag", String(filterVars.tag));
+    if (filterVars.description != null) params.set("description", String(filterVars.description));
+    if (filterVars.globalId != null) params.set("global_id", String(filterVars.globalId));
+    return params;
+  }
+
   async function loadGeometry(
     mgr: SceneManager,
     revision: number,
@@ -372,43 +497,103 @@
   ) {
     if (loadingGeometry) return;
     loadingGeometry = true;
+    loadingGeometryCurrent = 0;
+    loadingGeometryTotal = 0;
 
     try {
-      const result = await client.query(IFC_PRODUCTS_QUERY, {
-        branchId,
-        revision,
-        ...filterVars,
-      });
-      if (result.error) {
-        console.error("Failed to fetch geometry:", result.error);
+      const params = streamQueryParams(branchId, revision, filterVars);
+      const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        console.error("Failed to fetch geometry stream:", res.status);
         return;
       }
 
-      const products = result.data?.ifcProducts || [];
       mgr.clearAll();
-
       const metaList: ProductMeta[] = [];
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      for (const product of products) {
-        metaList.push({
-          globalId: product.globalId,
-          ifcClass: product.ifcClass,
-          name: product.name ?? null,
-          description: product.description ?? null,
-          objectType: product.objectType ?? null,
-          tag: product.tag ?? null,
-        });
+      if (!reader) {
+        throw new Error("No response body");
+      }
 
-        if (product.mesh && product.mesh.vertices && product.mesh.faces) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+
+        for (const chunk of lines) {
+          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
           try {
-            const geometry = createBufferGeometry(product.mesh as RawMeshData);
-            mgr.addElement(product.globalId, geometry);
-          } catch (err) {
-            console.warn(
-              `Failed to load geometry for ${product.globalId}:`,
-              err,
-            );
+            const data = JSON.parse(dataMatch[1]);
+            if (data.type === "error") {
+              console.error("Stream error:", data.message);
+              return;
+            }
+            if (data.type === "start") {
+              loadingGeometryTotal = data.total ?? 0;
+              continue;
+            }
+            if (data.type === "product") {
+              const product = data.product;
+              loadingGeometryCurrent = data.current ?? metaList.length + 1;
+              metaList.push({
+                globalId: product.globalId,
+                ifcClass: product.ifcClass,
+                name: product.name ?? null,
+                description: product.description ?? null,
+                objectType: product.objectType ?? null,
+                tag: product.tag ?? null,
+              });
+              if (product.mesh?.vertices && product.mesh?.faces) {
+                try {
+                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  mgr.addElement(product.globalId, geometry);
+                } catch (err) {
+                  console.warn(`Failed to load geometry for ${product.globalId}:`, err);
+                }
+              }
+              await new Promise((r) => requestAnimationFrame(r));
+              continue;
+            }
+            if (data.type === "end") {
+              break;
+            }
+          } catch (e) {
+            console.warn("Parse stream chunk:", e);
           }
+        }
+      }
+
+      if (buffer.trim()) {
+        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        if (dataMatch) {
+          try {
+            const data = JSON.parse(dataMatch[1]);
+            if (data.type === "product") {
+              const product = data.product;
+              metaList.push({
+                globalId: product.globalId,
+                ifcClass: product.ifcClass,
+                name: product.name ?? null,
+                description: product.description ?? null,
+                objectType: product.objectType ?? null,
+                tag: product.tag ?? null,
+              });
+              if (product.mesh?.vertices && product.mesh?.faces) {
+                try {
+                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  mgr.addElement(product.globalId, geometry);
+                } catch (_) {}
+              }
+            }
+          } catch (_) {}
         }
       }
 
@@ -425,6 +610,8 @@
       console.error("Failed to load geometry:", err);
     } finally {
       loadingGeometry = false;
+      loadingGeometryCurrent = 0;
+      loadingGeometryTotal = 0;
     }
   }
 
@@ -618,6 +805,28 @@
     {:else if activeView === "viewport"}
       <div class="viewport-container">
         <Viewport bind:manager={sceneManager} />
+        {#if loadingGeometry}
+          <div class="viewport-loading-overlay" aria-live="polite" aria-busy="true">
+            <div class="viewport-loading-card">
+              <Spinner size="3rem" />
+              <p class="viewport-loading-message">
+                {loadingGeometryTotal === 0
+                  ? "Loading model…"
+                  : `Rendering ${loadingGeometryCurrent}/${loadingGeometryTotal} objects`}
+              </p>
+              {#if loadingGeometryTotal > 0}
+                <div class="viewport-loading-bar">
+                  <div
+                    class="viewport-loading-fill"
+                    style="width: {Math.round(
+                      (loadingGeometryCurrent / loadingGeometryTotal) * 100
+                    )}%"
+                  ></div>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
       <div class="viewport-overlay">
         <Sidebar>
@@ -970,6 +1179,51 @@
     flex: 1;
     position: relative;
     min-height: 0;
+  }
+
+  .viewport-loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 26, 46, 0.75);
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .viewport-loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.5rem 2rem;
+    background: rgba(30, 30, 48, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .viewport-loading-message {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #aaa;
+    white-space: nowrap;
+  }
+
+  .viewport-loading-bar {
+    width: 200px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .viewport-loading-fill {
+    height: 100%;
+    background: #ff8866;
+    border-radius: 3px;
+    transition: width 0.1s ease-out;
   }
 
   .viewport-overlay {
