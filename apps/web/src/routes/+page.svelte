@@ -76,6 +76,7 @@
   let loadingGeometry = $state(false);
   let loadingGeometryCurrent = $state(0);
   let loadingGeometryTotal = $state(0);
+  let totalCountKey = $state<string | null>(null);
 
   // ---- Project / Branch state ----
   interface ProjectData {
@@ -219,6 +220,11 @@
         branchId,
         projectId,
       } satisfies SearchMessage);
+      searchChannel?.postMessage({
+        type: "filter-result-count",
+        count: sceneManager?.elementCount ?? searchState.products.length,
+        total: searchState.totalProductCount,
+      } satisfies SearchMessage);
     }
   }
 
@@ -350,6 +356,42 @@
     const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
     if (!hasAppliedSets) {
       await loadGeometry(mgr, revision, branchId);
+      return;
+    }
+    await ensureTotalProductCount(branchId, revision);
+  }
+
+  async function ensureTotalProductCount(branchId: number, revision: number) {
+    const key = `${branchId}:${revision}`;
+    if (totalCountKey === key) return;
+    try {
+      const params = streamQueryParams(branchId, revision, {});
+      const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+        for (const chunk of lines) {
+          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
+          const data = JSON.parse(dataMatch[1]);
+          if (data.type === "start") {
+            searchState.totalProductCount = data.total ?? 0;
+            totalCountKey = key;
+            await reader.cancel();
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch unfiltered total count:", err);
     }
   }
 
@@ -621,6 +663,7 @@
 
       if (Object.keys(filterVars).length === 0) {
         searchState.totalProductCount = metaList.length;
+        totalCountKey = `${branchId}:${revision}`;
       }
 
       if (mgr.elementCount > 0) {

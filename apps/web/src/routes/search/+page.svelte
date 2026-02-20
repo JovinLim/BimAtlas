@@ -34,8 +34,8 @@
   let editorName = $state("");
   let editorLogic = $state<"AND" | "OR">("AND");
 
-  let resultCount = $state<number | null>(null);
-  let totalCount = $state<number | null>(null);
+  let resultCount = $state(0);
+  let totalCount = $state(0);
 
   let nextId = 0;
   function genId(): string {
@@ -348,8 +348,14 @@
     editorName = "";
     editorLogic = "AND";
     filters = [];
-    resultCount = null;
-    totalCount = null;
+    resultCount = 0;
+    totalCount = 0;
+  }
+
+  function resetFilterSetBrowserSection() {
+    selectedSetIds = new Set();
+    searchQuery = "";
+    searchScope = "branch";
   }
 
   async function handleApplySelected() {
@@ -376,6 +382,7 @@
         filterSets: filterSetsToPlain(applied),
         combinationLogic,
       } satisfies SearchMessage);
+      resetFilterSetBrowserSection();
     } catch (err) {
       console.error("Failed to apply filter sets:", err);
     }
@@ -530,9 +537,7 @@
 <div class="search-page">
   <header class="page-header">
     <h2>Search &amp; Filter</h2>
-    {#if resultCount !== null && totalCount !== null}
-      <span class="result-count">{resultCount} / {totalCount} elements</span>
-    {/if}
+    <span class="result-count">{resultCount} / {totalCount} elements</span>
   </header>
 
   <!-- ═══════ Filter Set Browser ═══════ -->
@@ -1108,8 +1113,7 @@
   }
 
   .applied-list {
-    max-height: 280px;
-    overflow-y: auto;
+    height: fit-content;
   }
 
   .applied-item {
