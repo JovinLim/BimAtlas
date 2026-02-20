@@ -1,9 +1,5 @@
 -- BimAtlas: Bootstrap Apache AGE extension and versioned relational schema.
-
-CREATE EXTENSION IF NOT EXISTS age;
-LOAD 'age';
-SET search_path = ag_catalog, "$user", public;
-SELECT create_graph('bimatlas');
+-- Relational tables are created first so they exist even if AGE graph creation fails.
 
 -- ============================================================================
 -- Projects
@@ -108,3 +104,12 @@ CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
     applied_at      TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (branch_id, filter_set_id)
 );
+
+-- ============================================================================
+-- Apache AGE extension and graph (after relational schema)
+-- ============================================================================
+
+CREATE EXTENSION IF NOT EXISTS age;
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+SELECT create_graph('bimatlas');

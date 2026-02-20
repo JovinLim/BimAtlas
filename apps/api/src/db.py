@@ -363,13 +363,37 @@ def create_filter_set(
     branch_id: int, name: str, logic: str, filters_json: list[dict],
 ) -> dict:
     """Create a new filter set on a branch. Returns the new row."""
-    with get_cursor(dict_cursor=True) as cur:
-        cur.execute(
-            f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
-            f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
-            (branch_id, name, logic, json.dumps(filters_json)),
-        )
-        return dict(cur.fetchone())
+    # #region agent log
+    _log_path = "/home/jovin/projects/BimAtlas/.cursor/debug-69dfaf.log"
+    import time as _time
+    _ts = int(_time.time() * 1000)
+    try:
+        with open(_log_path, "a") as _f:
+            _f.write(
+                '{"sessionId":"69dfaf","id":"log_create_fs_entry","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set entry","data":{"branch_id":%s,"name":"%s"},"hypothesisId":"A"}\n'
+                % (_ts, branch_id, name.replace('"', '\\"'))
+            )
+    except Exception:
+        pass
+    # #endregion
+    try:
+        with get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
+                f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
+                (branch_id, name, logic, json.dumps(filters_json)),
+            )
+            return dict(cur.fetchone())
+    except Exception as e:  # #region agent log
+        try:
+            with open(_log_path, "a") as _f:
+                _f.write(
+                    '{"sessionId":"69dfaf","id":"log_create_fs_err","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set exception","data":{"error":"%s"},"hypothesisId":"A"}\n'
+                    % (int(_time.time() * 1000), str(e).replace('"', '\\"').replace("\n", " "))
+                )
+        except Exception:
+            pass
+        raise  # #endregion
 
 
 def update_filter_set(

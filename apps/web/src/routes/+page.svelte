@@ -171,7 +171,7 @@
     lastFetchedBranchId = branchId;
 
     untrack(() => {
-      loadGeometry(mgr, rev, branchId);
+      loadGeometryForActiveBranch(mgr, rev, branchId);
       graphStore.fetchGraph(branchId, rev);
     });
   });
@@ -200,6 +200,8 @@
         handleApplyFilters(e.data.filters);
       } else if (e.data.type === "apply-filter-sets") {
         handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
+      } else if (e.data.type === "request-branch-context") {
+        sendBranchContext();
       }
     };
   });
@@ -211,7 +213,7 @@
   function sendBranchContext() {
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
-    if (branchId && projectId) {
+    if (branchId != null && projectId != null) {
       searchChannel?.postMessage({
         type: "branch-context",
         branchId,
@@ -222,11 +224,14 @@
 
   function openSearchPopup() {
     if (!searchPopup || searchPopup.closed) {
-      searchPopup = window.open(
-        "/search",
-        "bimatlas-search",
-        "width=520,height=700",
-      );
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      const query = params.toString();
+      const url = query ? `/search?${query}` : "/search";
+      searchPopup = window.open(url, "bimatlas-search", "width=520,height=700");
       setTimeout(sendBranchContext, 500);
     } else {
       searchPopup.focus();
@@ -319,7 +324,7 @@
     } satisfies SearchMessage);
   }
 
-  async function autoLoadAppliedFilterSets(branchId: number) {
+  async function autoLoadAppliedFilterSets(branchId: number): Promise<boolean> {
     try {
       const result = await client
         .query(APPLIED_FILTER_SETS_QUERY, { branchId })
@@ -327,9 +332,24 @@
       const data = result.data?.appliedFilterSets;
       if (data && data.filterSets && data.filterSets.length > 0) {
         await handleApplyFilterSets(data.filterSets, data.combinationLogic ?? "AND");
+        return true;
       }
+      searchState.appliedFilterSets = [];
+      return false;
     } catch (err) {
       console.error("Failed to auto-load applied filter sets:", err);
+      return false;
+    }
+  }
+
+  async function loadGeometryForActiveBranch(
+    mgr: SceneManager,
+    revision: number,
+    branchId: number,
+  ) {
+    const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
+    if (!hasAppliedSets) {
+      await loadGeometry(mgr, revision, branchId);
     }
   }
 
@@ -651,7 +671,19 @@
 <main>
   <header class="app-header">
     <div class="brand">
-      <h1>BimAtlas</h1>
+      <button
+        type="button"
+        class="brand-title"
+        aria-label="BimAtlas – go to project selection"
+        title="Go to project selection"
+        onclick={() => {
+          projectState.activeProjectId = null;
+          projectState.activeBranchId = null;
+          revisionState.activeRevision = null;
+        }}
+      >
+        BimAtlas
+      </button>
     </div>
 
     <!-- Project selector -->
@@ -1040,8 +1072,12 @@
     gap: 1rem;
   }
 
-  .brand h1 {
+  .brand-title {
     margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: inherit;
     font-size: 1.1rem;
     font-weight: 700;
     letter-spacing: 0.03em;
@@ -1049,6 +1085,11 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    cursor: pointer;
+  }
+
+  .brand-title:hover {
+    opacity: 0.9;
   }
 
   .header-spacer {
