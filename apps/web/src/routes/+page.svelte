@@ -14,13 +14,23 @@
     getSelection,
     getRevisionState,
     getProjectState,
+    initializeFromSettings,
   } from "$lib/state/selection.svelte";
+  import { getSearchState } from "$lib/state/search.svelte";
+  import {
+    SEARCH_CHANNEL,
+    type FilterSet,
+    type ProductMeta,
+    type SearchFilter,
+    type SearchMessage,
+  } from "$lib/search/protocol";
+  import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
-    IFC_PRODUCTS_QUERY,
+    APPLIED_FILTER_SETS_QUERY,
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
     CREATE_BRANCH_MUTATION,
@@ -30,15 +40,31 @@
     createBufferGeometry,
     type RawMeshData,
   } from "$lib/engine/BufferGeometryLoader";
-  import { untrack } from "svelte";
+  import { untrack, onMount, onDestroy } from "svelte";
+  import { loadSettings, saveSettings } from "$lib/state/persistence";
 
   const selection = getSelection();
   const revisionState = getRevisionState();
   const projectState = getProjectState();
   const graphStore = getGraphStore();
+  const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
   let activeView: "viewport" | "graph" = $state("viewport");
+  let searchPopup: Window | null = null;
+  let searchChannel: BroadcastChannel | null = null;
+  
+  // Load saved settings and initialize state (only in browser)
+  let settingsLoaded = $state(false);
+  $effect(() => {
+    if (typeof window === 'undefined' || settingsLoaded) return;
+    const savedSettings = loadSettings();
+    if (savedSettings) {
+      activeView = savedSettings.activeView;
+      initializeFromSettings(savedSettings);
+    }
+    settingsLoaded = true;
+  });
 
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
@@ -48,6 +74,9 @@
   let importing = $state(false);
   let importError = $state<string | null>(null);
   let loadingGeometry = $state(false);
+  let loadingGeometryCurrent = $state(0);
+  let loadingGeometryTotal = $state(0);
+  let totalCountKey = $state<string | null>(null);
 
   // ---- Project / Branch state ----
   interface ProjectData {
@@ -84,6 +113,19 @@
   );
 
   // ---- Lifecycle ----
+
+  // Persist settings to localStorage whenever they change (only after initial load)
+  $effect(() => {
+    if (typeof window === 'undefined' || !settingsLoaded) return;
+    saveSettings({
+      activeProjectId: projectState.activeProjectId,
+      activeBranchId: projectState.activeBranchId,
+      activeRevision: revisionState.activeRevision,
+      activeGlobalId: selection.activeGlobalId,
+      subgraphDepth: selection.subgraphDepth,
+      activeView: activeView,
+    });
+  });
 
   // Load projects on mount
   $effect(() => {
@@ -130,7 +172,7 @@
     lastFetchedBranchId = branchId;
 
     untrack(() => {
-      loadGeometry(mgr, rev, branchId);
+      loadGeometryForActiveBranch(mgr, rev, branchId);
       graphStore.fetchGraph(branchId, rev);
     });
   });
@@ -151,17 +193,239 @@
     }
   });
 
+  // BroadcastChannel for cross-window search communication
+  onMount(() => {
+    searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
+    searchChannel.onmessage = (e: MessageEvent<SearchMessage>) => {
+      if (e.data.type === "apply-filters") {
+        handleApplyFilters(e.data.filters);
+      } else if (e.data.type === "apply-filter-sets") {
+        handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
+      } else if (e.data.type === "request-branch-context") {
+        sendBranchContext();
+      }
+    };
+  });
+
+  onDestroy(() => {
+    searchChannel?.close();
+  });
+
+  function sendBranchContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    if (branchId != null && projectId != null) {
+      searchChannel?.postMessage({
+        type: "branch-context",
+        branchId,
+        projectId,
+      } satisfies SearchMessage);
+      searchChannel?.postMessage({
+        type: "filter-result-count",
+        count: sceneManager?.elementCount ?? searchState.products.length,
+        total: searchState.totalProductCount,
+      } satisfies SearchMessage);
+    }
+  }
+
+  function openSearchPopup() {
+    if (!searchPopup || searchPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      const query = params.toString();
+      const url = query ? `/search?${query}` : "/search";
+      searchPopup = window.open(url, "bimatlas-search", "width=520,height=700");
+      setTimeout(sendBranchContext, 500);
+    } else {
+      searchPopup.focus();
+      sendBranchContext();
+    }
+  }
+
+  function filtersToQueryVars(filters: SearchFilter[]): Record<string, unknown> {
+    const vars: Record<string, unknown> = {};
+    const allClasses: string[] = [];
+
+    for (const f of filters) {
+      if (f.mode === "class" && f.ifcClass) {
+        const descendants = getDescendantClasses(f.ifcClass);
+        for (const cls of descendants) allClasses.push(cls);
+      } else if (f.mode === "attribute" && f.attribute && f.value) {
+        const key = f.attribute === "objectType" ? "objectType" : f.attribute;
+        vars[key] = f.value;
+      }
+    }
+
+    if (allClasses.length > 0) {
+      vars.ifcClasses = [...new Set(allClasses)];
+    }
+
+    return vars;
+  }
+
+  async function handleApplyFilters(filters: SearchFilter[]) {
+    searchState.activeFilters = filters;
+    searchState.appliedFilterSets = [];
+    const mgr = sceneManager;
+    const rev = revisionState.activeRevision;
+    const branchId = projectState.activeBranchId;
+    if (!mgr || rev === null || !branchId) return;
+
+    const extraVars = filters.length > 0 ? filtersToQueryVars(filters) : {};
+    await loadGeometry(mgr, rev, branchId, extraVars);
+
+    searchChannel?.postMessage({
+      type: "filter-result-count",
+      count: mgr.elementCount,
+      total: searchState.totalProductCount,
+    } satisfies SearchMessage);
+  }
+
+  function filterSetsToQueryVars(
+    filterSets: FilterSet[],
+    combinationLogic: "AND" | "OR",
+  ): Record<string, unknown> {
+    if (filterSets.length === 0) return {};
+
+    if (filterSets.length === 1) {
+      const fs = filterSets[0];
+      return filtersToQueryVars(fs.filters);
+    }
+
+    // For multiple filter sets we fall back to a flat merge.
+    // Full server-side compound logic would require a dedicated endpoint;
+    // for now we merge all filters and use the combination logic as a hint.
+    const allFilters: SearchFilter[] = [];
+    for (const fs of filterSets) {
+      for (const f of fs.filters) allFilters.push(f);
+    }
+    return filtersToQueryVars(allFilters);
+  }
+
+  async function handleApplyFilterSets(
+    filterSets: FilterSet[],
+    combinationLogic: "AND" | "OR",
+  ) {
+    searchState.appliedFilterSets = filterSets;
+    searchState.combinationLogic = combinationLogic;
+    searchState.activeFilters = [];
+    const mgr = sceneManager;
+    const rev = revisionState.activeRevision;
+    const branchId = projectState.activeBranchId;
+    if (!mgr || rev === null || !branchId) return;
+
+    const extraVars =
+      filterSets.length > 0
+        ? filterSetsToQueryVars(filterSets, combinationLogic)
+        : {};
+    await loadGeometry(mgr, rev, branchId, extraVars);
+
+    searchChannel?.postMessage({
+      type: "filter-result-count",
+      count: mgr.elementCount,
+      total: searchState.totalProductCount,
+    } satisfies SearchMessage);
+  }
+
+  async function autoLoadAppliedFilterSets(branchId: number): Promise<boolean> {
+    try {
+      const result = await client
+        .query(APPLIED_FILTER_SETS_QUERY, { branchId })
+        .toPromise();
+      const data = result.data?.appliedFilterSets;
+      if (data && data.filterSets && data.filterSets.length > 0) {
+        await handleApplyFilterSets(data.filterSets, data.combinationLogic ?? "AND");
+        return true;
+      }
+      searchState.appliedFilterSets = [];
+      return false;
+    } catch (err) {
+      console.error("Failed to auto-load applied filter sets:", err);
+      return false;
+    }
+  }
+
+  async function loadGeometryForActiveBranch(
+    mgr: SceneManager,
+    revision: number,
+    branchId: number,
+  ) {
+    const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
+    if (!hasAppliedSets) {
+      await loadGeometry(mgr, revision, branchId);
+      return;
+    }
+    await ensureTotalProductCount(branchId, revision);
+  }
+
+  async function ensureTotalProductCount(branchId: number, revision: number) {
+    const key = `${branchId}:${revision}`;
+    if (totalCountKey === key) return;
+    try {
+      const params = streamQueryParams(branchId, revision, {});
+      const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+        for (const chunk of lines) {
+          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
+          const data = JSON.parse(dataMatch[1]);
+          if (data.type === "start") {
+            searchState.totalProductCount = data.total ?? 0;
+            totalCountKey = key;
+            await reader.cancel();
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch unfiltered total count:", err);
+    }
+  }
+
   // ---- API helpers ----
 
   async function loadProjects() {
     loadingProjects = true;
     try {
       const result = await client.query(PROJECTS_QUERY, {}).toPromise();
+      if (result.error) {
+        // Server/GraphQL error (e.g. 500) — fall back to landing so user can retry or pick another project
+        console.error("Failed to load projects:", result.error);
+        projectState.activeProjectId = null;
+        projectState.activeBranchId = null;
+        revisionState.activeRevision = null;
+        projects = [];
+        return;
+      }
       if (result.data?.projects) {
         projects = result.data.projects;
+        if (projects.length === 0) {
+          // No projects — show main landing so user can create one
+          projectState.activeProjectId = null;
+          projectState.activeBranchId = null;
+          revisionState.activeRevision = null;
+        }
       }
     } catch (err) {
+      // Network or other error — fall back to main landing page for project selection
       console.error("Failed to load projects:", err);
+      projectState.activeProjectId = null;
+      projectState.activeBranchId = null;
+      revisionState.activeRevision = null;
+      projects = [];
     } finally {
       loadingProjects = false;
     }
@@ -230,20 +494,23 @@
 
   function selectProject(projectId: number) {
     projectState.activeProjectId = projectId;
-    // Auto-select the main branch
     const proj = projects.find((p) => p.id === projectId);
     const mainBranch = proj?.branches.find((b) => b.name === "main");
     if (mainBranch) {
       projectState.activeBranchId = mainBranch.id;
     }
-    // Clear the scene
     sceneManager?.clearAll();
+    sendBranchContext();
+    if (mainBranch) {
+      autoLoadAppliedFilterSets(mainBranch.id);
+    }
   }
 
   function selectBranch(branchId: number) {
     projectState.activeBranchId = branchId;
-    // Clear the scene for the new branch
     sceneManager?.clearAll();
+    sendBranchContext();
+    autoLoadAppliedFilterSets(branchId);
   }
 
   async function fetchLatestRevision(branchId: number) {
@@ -262,39 +529,141 @@
     }
   }
 
+  /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
+  function streamQueryParams(
+    branchId: number,
+    revision: number,
+    filterVars: Record<string, unknown>,
+  ): URLSearchParams {
+    const params = new URLSearchParams();
+    params.set("branch_id", String(branchId));
+    params.set("revision", String(revision));
+    if (filterVars.ifcClass != null) params.set("ifc_class", String(filterVars.ifcClass));
+    if (filterVars.ifcClasses != null) {
+      for (const c of filterVars.ifcClasses as string[]) params.append("ifc_classes", c);
+    }
+    if (filterVars.containedIn != null) params.set("contained_in", String(filterVars.containedIn));
+    if (filterVars.name != null) params.set("name", String(filterVars.name));
+    if (filterVars.objectType != null) params.set("object_type", String(filterVars.objectType));
+    if (filterVars.tag != null) params.set("tag", String(filterVars.tag));
+    if (filterVars.description != null) params.set("description", String(filterVars.description));
+    if (filterVars.globalId != null) params.set("global_id", String(filterVars.globalId));
+    return params;
+  }
+
   async function loadGeometry(
     mgr: SceneManager,
     revision: number,
     branchId: number,
+    filterVars: Record<string, unknown> = {},
   ) {
     if (loadingGeometry) return;
     loadingGeometry = true;
+    loadingGeometryCurrent = 0;
+    loadingGeometryTotal = 0;
 
     try {
-      const result = await client.query(IFC_PRODUCTS_QUERY, {
-        branchId,
-        revision,
-      });
-      if (result.error) {
-        console.error("Failed to fetch geometry:", result.error);
+      const params = streamQueryParams(branchId, revision, filterVars);
+      const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        console.error("Failed to fetch geometry stream:", res.status);
         return;
       }
 
-      const products = result.data?.ifcProducts || [];
       mgr.clearAll();
+      const metaList: ProductMeta[] = [];
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      for (const product of products) {
-        if (product.mesh && product.mesh.vertices && product.mesh.faces) {
+      if (!reader) {
+        throw new Error("No response body");
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+
+        for (const chunk of lines) {
+          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          if (!dataMatch) continue;
           try {
-            const geometry = createBufferGeometry(product.mesh as RawMeshData);
-            mgr.addElement(product.globalId, geometry);
-          } catch (err) {
-            console.warn(
-              `Failed to load geometry for ${product.globalId}:`,
-              err,
-            );
+            const data = JSON.parse(dataMatch[1]);
+            if (data.type === "error") {
+              console.error("Stream error:", data.message);
+              return;
+            }
+            if (data.type === "start") {
+              loadingGeometryTotal = data.total ?? 0;
+              continue;
+            }
+            if (data.type === "product") {
+              const product = data.product;
+              loadingGeometryCurrent = data.current ?? metaList.length + 1;
+              metaList.push({
+                globalId: product.globalId,
+                ifcClass: product.ifcClass,
+                name: product.name ?? null,
+                description: product.description ?? null,
+                objectType: product.objectType ?? null,
+                tag: product.tag ?? null,
+              });
+              if (product.mesh?.vertices && product.mesh?.faces) {
+                try {
+                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  mgr.addElement(product.globalId, geometry);
+                } catch (err) {
+                  console.warn(`Failed to load geometry for ${product.globalId}:`, err);
+                }
+              }
+              await new Promise((r) => requestAnimationFrame(r));
+              continue;
+            }
+            if (data.type === "end") {
+              break;
+            }
+          } catch (e) {
+            console.warn("Parse stream chunk:", e);
           }
         }
+      }
+
+      if (buffer.trim()) {
+        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        if (dataMatch) {
+          try {
+            const data = JSON.parse(dataMatch[1]);
+            if (data.type === "product") {
+              const product = data.product;
+              metaList.push({
+                globalId: product.globalId,
+                ifcClass: product.ifcClass,
+                name: product.name ?? null,
+                description: product.description ?? null,
+                objectType: product.objectType ?? null,
+                tag: product.tag ?? null,
+              });
+              if (product.mesh?.vertices && product.mesh?.faces) {
+                try {
+                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  mgr.addElement(product.globalId, geometry);
+                } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      searchState.setProducts(metaList);
+
+      if (Object.keys(filterVars).length === 0) {
+        searchState.totalProductCount = metaList.length;
+        totalCountKey = `${branchId}:${revision}`;
       }
 
       if (mgr.elementCount > 0) {
@@ -304,6 +673,8 @@
       console.error("Failed to load geometry:", err);
     } finally {
       loadingGeometry = false;
+      loadingGeometryCurrent = 0;
+      loadingGeometryTotal = 0;
     }
   }
 
@@ -343,7 +714,19 @@
 <main>
   <header class="app-header">
     <div class="brand">
-      <h1>BimAtlas</h1>
+      <button
+        type="button"
+        class="brand-title"
+        aria-label="BimAtlas – go to project selection"
+        title="Go to project selection"
+        onclick={() => {
+          projectState.activeProjectId = null;
+          projectState.activeBranchId = null;
+          revisionState.activeRevision = null;
+        }}
+      >
+        BimAtlas
+      </button>
     </div>
 
     <!-- Project selector -->
@@ -497,6 +880,28 @@
     {:else if activeView === "viewport"}
       <div class="viewport-container">
         <Viewport bind:manager={sceneManager} />
+        {#if loadingGeometry}
+          <div class="viewport-loading-overlay" aria-live="polite" aria-busy="true">
+            <div class="viewport-loading-card">
+              <Spinner size="3rem" />
+              <p class="viewport-loading-message">
+                {loadingGeometryTotal === 0
+                  ? "Loading model…"
+                  : `Rendering ${loadingGeometryCurrent}/${loadingGeometryTotal} objects`}
+              </p>
+              {#if loadingGeometryTotal > 0}
+                <div class="viewport-loading-bar">
+                  <div
+                    class="viewport-loading-fill"
+                    style="width: {Math.round(
+                      (loadingGeometryCurrent / loadingGeometryTotal) * 100
+                    )}%"
+                  ></div>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
       <div class="viewport-overlay">
         <Sidebar>
@@ -549,6 +954,18 @@
           <!-- Depth widget -->
           <DepthWidget bind:value={selection.subgraphDepth} />
         </Sidebar>
+        <!-- Search button -->
+        <button
+          class="search-btn"
+          onclick={openSearchPopup}
+          aria-label="Search and filter"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
+            <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          Search
+        </button>
         <!-- Element count -->
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
@@ -698,8 +1115,12 @@
     gap: 1rem;
   }
 
-  .brand h1 {
+  .brand-title {
     margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: inherit;
     font-size: 1.1rem;
     font-weight: 700;
     letter-spacing: 0.03em;
@@ -707,6 +1128,11 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    cursor: pointer;
+  }
+
+  .brand-title:hover {
+    opacity: 0.9;
   }
 
   .header-spacer {
@@ -839,6 +1265,51 @@
     min-height: 0;
   }
 
+  .viewport-loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 26, 46, 0.75);
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .viewport-loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.5rem 2rem;
+    background: rgba(30, 30, 48, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .viewport-loading-message {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #aaa;
+    white-space: nowrap;
+  }
+
+  .viewport-loading-bar {
+    width: 200px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .viewport-loading-fill {
+    height: 100%;
+    background: #ff8866;
+    border-radius: 3px;
+    transition: width 0.1s ease-out;
+  }
+
   .viewport-overlay {
     position: absolute;
     top: 0;
@@ -846,6 +1317,9 @@
     width: 100%;
     height: 100%;
     z-index: 1000;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
     pointer-events: none;
   }
 
@@ -1057,6 +1531,35 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .search-btn {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(26, 26, 46, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #ccc;
+    padding: 0.45rem 1rem;
+    border-radius: 0.4rem;
+    cursor: pointer;
+    font-size: 0.82rem;
+    backdrop-filter: blur(8px);
+    transition:
+      background 0.15s,
+      color 0.15s,
+      border-color 0.15s;
+  }
+
+  .search-btn:hover {
+    background: rgba(255, 102, 68, 0.2);
+    border-color: rgba(255, 136, 102, 0.3);
+    color: #fff;
   }
 
   /* ---- Modal (shared) ---- */

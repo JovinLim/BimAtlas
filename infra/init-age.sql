@@ -1,9 +1,5 @@
 -- BimAtlas: Bootstrap Apache AGE extension and versioned relational schema.
-
-CREATE EXTENSION IF NOT EXISTS age;
-LOAD 'age';
-SET search_path = ag_catalog, "$user", public;
-SELECT create_graph('bimatlas');
+-- Relational tables are created first so they exist even if AGE graph creation fails.
 
 -- ============================================================================
 -- Projects
@@ -80,3 +76,40 @@ CREATE INDEX idx_ifc_products_current    ON ifc_products (branch_id, global_id) 
 CREATE INDEX idx_ifc_products_class      ON ifc_products (branch_id, ifc_class, valid_to_rev);
 CREATE INDEX idx_ifc_products_contained  ON ifc_products (branch_id, contained_in) WHERE valid_to_rev IS NULL;
 CREATE INDEX idx_ifc_products_rev_range  ON ifc_products (branch_id, valid_from_rev, valid_to_rev);
+
+-- ============================================================================
+-- Filter sets (named, reusable filter collections scoped to a branch)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS filter_sets (
+    id          SERIAL PRIMARY KEY,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    logic       TEXT NOT NULL DEFAULT 'AND' CHECK (logic IN ('AND', 'OR')),
+    filters     JSONB NOT NULL DEFAULT '[]',
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_filter_sets_branch ON filter_sets (branch_id);
+
+-- ============================================================================
+-- Applied filter sets per branch (tracks which sets are currently active)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
+    branch_id       INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    filter_set_id   INTEGER NOT NULL REFERENCES filter_sets(id) ON DELETE CASCADE,
+    combination_logic TEXT NOT NULL DEFAULT 'AND' CHECK (combination_logic IN ('AND', 'OR')),
+    applied_at      TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (branch_id, filter_set_id)
+);
+
+-- ============================================================================
+-- Apache AGE extension and graph (after relational schema)
+-- ============================================================================
+
+CREATE EXTENSION IF NOT EXISTS age;
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+SELECT create_graph('bimatlas');

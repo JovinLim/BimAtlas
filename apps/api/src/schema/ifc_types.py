@@ -155,3 +155,47 @@ class Project:
     description: Optional[str]
     created_at: str  # ISO 8601
     branches: list[Branch] = strawberry.field(default_factory=list)
+
+
+# -- Filter set types --
+
+
+@strawberry.type
+class FilterSetFilter:
+    """A single filter within a filter set."""
+
+    mode: str  # "class" | "attribute"
+    ifc_class: Optional[str] = None
+    attribute: Optional[str] = None
+    value: Optional[str] = None
+
+
+@strawberry.type
+class FilterSet:
+    """A named, persisted collection of filters scoped to a branch."""
+
+    id: int
+    branch_id: int
+    name: str
+    logic: str  # "AND" | "OR"
+    filters: list[FilterSetFilter]
+    created_at: str  # ISO 8601
+    updated_at: str  # ISO 8601
+
+
+@strawberry.type
+class AppliedFilterSets:
+    """The currently active filter sets for a branch."""
+
+    filter_sets: list[FilterSet]
+    combination_logic: str  # "AND" | "OR"
+
+
+@strawberry.input
+class FilterInput:
+    """Input type for creating/updating individual filters in a filter set."""
+
+    mode: str
+    ifc_class: Optional[str] = None
+    attribute: Optional[str] = None
+    value: Optional[str] = None

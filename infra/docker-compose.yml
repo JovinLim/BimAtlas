@@ -13,5 +13,16 @@ services:
       - pgdata:/var/lib/postgresql
       - ./init-age.sql:/docker-entrypoint-initdb.d/init-age.sql
 
+  adminer:
+    image: adminer:latest
+    container_name: bimatlas_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - age-db
+    environment:
+      ADMINER_DEFAULT_SERVER: age-db
+
 volumes:
   pgdata:

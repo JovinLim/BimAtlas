@@ -5,7 +5,7 @@ from enum import Enum
 import strawberry
 
 
-@strawberry.enum
+@strawberry.enum(graphql_name_from="value")
 class IfcRelationshipType(Enum):
     """IFC 4.3 objectified relationship types used as graph edge labels."""
 

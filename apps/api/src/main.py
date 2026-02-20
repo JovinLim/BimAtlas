@@ -5,18 +5,26 @@ Run with::
     uvicorn src.main:app --reload
 """
 
+import json
 import logging
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import strawberry
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from strawberry.fastapi import GraphQLRouter
 
-from .db import close_pool, fetch_branch, init_pool
-from .schema.queries import Mutation, Query
+from .db import (
+    close_pool,
+    fetch_branch,
+    fetch_products_at_revision,
+    get_latest_revision_id,
+    init_pool,
+)
+from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
 from .services.ifc.ingestion import ingest_ifc
 
 logger = logging.getLogger("bimatlas")
@@ -41,7 +49,7 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
-schema = strawberry.Schema(query=Query, mutation=Mutation)
+schema = strawberry.Schema(query=GraphQLQuery, mutation=Mutation)
 graphql_app = GraphQLRouter(schema)
 
 app = FastAPI(
@@ -66,6 +74,87 @@ app.include_router(graphql_app, prefix="/graphql")
 async def health():
     """Basic liveness check."""
     return {"status": "ok"}
+
+
+def _stream_ifc_products_generator(
+    branch_id: int,
+    revision: int | None,
+    ifc_class: str | None,
+    ifc_classes: list[str] | None,
+    contained_in: str | None,
+    name: str | None,
+    object_type: str | None,
+    tag: str | None,
+    description: str | None,
+    global_id: str | None,
+):
+    """Yield SSE events for IFC products stream."""
+    rev = revision
+    if rev is None:
+        rev = get_latest_revision_id(branch_id)
+        if rev is None:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No revisions on this branch'})}\n\n"
+            return
+
+    rows = fetch_products_at_revision(
+        rev,
+        branch_id,
+        ifc_class=ifc_class,
+        ifc_classes=ifc_classes,
+        contained_in=contained_in,
+        name=name,
+        object_type=object_type,
+        tag=tag,
+        description=description,
+        global_id=global_id,
+    )
+
+    yield f"data: {json.dumps({'type': 'start', 'total': len(rows)})}\n\n"
+
+    for i, row in enumerate(rows):
+        product = row_to_stream_product(dict(row))
+        yield f"data: {json.dumps({'type': 'product', 'product': product, 'current': i + 1, 'total': len(rows)})}\n\n"
+
+    yield f"data: {json.dumps({'type': 'end'})}\n\n"
+
+
+@app.get("/stream/ifc-products")
+async def stream_ifc_products(
+    branch_id: int = Query(..., description="Branch ID"),
+    revision: int | None = Query(None, description="Revision ID (default: latest)"),
+    ifc_class: str | None = Query(None, description="Filter by IFC class"),
+    ifc_classes: list[str] | None = Query(None, description="Filter by IFC classes"),
+    contained_in: str | None = Query(None, description="Filter by container GlobalId"),
+    name: str | None = Query(None, description="Filter by name (ILIKE)"),
+    object_type: str | None = Query(None, description="Filter by object type (ILIKE)"),
+    tag: str | None = Query(None, description="Filter by tag (ILIKE)"),
+    description: str | None = Query(None, description="Filter by description (ILIKE)"),
+    global_id: str | None = Query(None, description="Filter by GlobalId (ILIKE)"),
+):
+    """Stream IFC products with geometry as Server-Sent Events.
+
+    Events: start { total }, product { product, current, total }, end.
+    """
+    return StreamingResponse(
+        _stream_ifc_products_generator(
+            branch_id=branch_id,
+            revision=revision,
+            ifc_class=ifc_class,
+            ifc_classes=ifc_classes,
+            contained_in=contained_in,
+            name=name,
+            object_type=object_type,
+            tag=tag,
+            description=description,
+            global_id=global_id,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/upload-ifc")

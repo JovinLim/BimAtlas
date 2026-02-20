@@ -2,12 +2,14 @@
 
 Provides a threaded connection pool, a cursor context-manager that handles
 commit/rollback, and revision-scoped query functions for the SCD Type 2
-``ifc_products`` table, the ``revisions`` table, and the ``projects`` /
-``branches`` tables.
+``ifc_products`` table, the ``revisions`` table, the ``projects`` /
+``branches`` tables, and the ``filter_sets`` / ``branch_applied_filter_sets``
+tables.
 """
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 import psycopg2
@@ -234,18 +236,42 @@ def fetch_products_at_revision(
     rev: int,
     branch_id: int,
     ifc_class: str | None = None,
+    ifc_classes: list[str] | None = None,
     contained_in: str | None = None,
+    name: str | None = None,
+    object_type: str | None = None,
+    tag: str | None = None,
+    description: str | None = None,
+    global_id: str | None = None,
 ) -> list[dict]:
     """List products visible at *rev* on *branch_id*, optionally filtered."""
     clauses: list[str] = ["branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
-    if ifc_class is not None:
+    if ifc_classes is not None and len(ifc_classes) > 0:
+        clauses.append("ifc_class = ANY(%s)")
+        params.append(ifc_classes)
+    elif ifc_class is not None:
         clauses.append("ifc_class = %s")
         params.append(ifc_class)
     if contained_in is not None:
         clauses.append("contained_in = %s")
         params.append(contained_in)
+    if name is not None:
+        clauses.append("name ILIKE %s")
+        params.append(f"%{name}%")
+    if object_type is not None:
+        clauses.append("object_type ILIKE %s")
+        params.append(f"%{object_type}%")
+    if tag is not None:
+        clauses.append("tag ILIKE %s")
+        params.append(f"%{tag}%")
+    if description is not None:
+        clauses.append("description ILIKE %s")
+        params.append(f"%{description}%")
+    if global_id is not None:
+        clauses.append("global_id ILIKE %s")
+        params.append(f"%{global_id}%")
 
     where = " AND ".join(clauses)
     with get_cursor(dict_cursor=True) as cur:
@@ -324,3 +350,266 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
         modified = [dict(r) for r in cur.fetchall()]
 
     return {"added": added, "modified": modified, "deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# Filter set CRUD
+# ---------------------------------------------------------------------------
+
+_FILTER_SET_COLS = "id, branch_id, name, logic, filters, created_at, updated_at"
+
+
+def create_filter_set(
+    branch_id: int, name: str, logic: str, filters_json: list[dict],
+) -> dict:
+    """Create a new filter set on a branch. Returns the new row."""
+    # #region agent log
+    _log_path = "/home/jovin/projects/BimAtlas/.cursor/debug-69dfaf.log"
+    import time as _time
+    _ts = int(_time.time() * 1000)
+    try:
+        with open(_log_path, "a") as _f:
+            _f.write(
+                '{"sessionId":"69dfaf","id":"log_create_fs_entry","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set entry","data":{"branch_id":%s,"name":"%s"},"hypothesisId":"A"}\n'
+                % (_ts, branch_id, name.replace('"', '\\"'))
+            )
+    except Exception:
+        pass
+    # #endregion
+    try:
+        with get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
+                f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
+                (branch_id, name, logic, json.dumps(filters_json)),
+            )
+            return dict(cur.fetchone())
+    except Exception as e:  # #region agent log
+        try:
+            with open(_log_path, "a") as _f:
+                _f.write(
+                    '{"sessionId":"69dfaf","id":"log_create_fs_err","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set exception","data":{"error":"%s"},"hypothesisId":"A"}\n'
+                    % (int(_time.time() * 1000), str(e).replace('"', '\\"').replace("\n", " "))
+                )
+        except Exception:
+            pass
+        raise  # #endregion
+
+
+def update_filter_set(
+    filter_set_id: int,
+    name: str | None = None,
+    logic: str | None = None,
+    filters_json: list[dict] | None = None,
+) -> dict | None:
+    """Update specified fields on a filter set. Returns the updated row."""
+    sets: list[str] = ["updated_at = now()"]
+    params: list = []
+    if name is not None:
+        sets.append("name = %s")
+        params.append(name)
+    if logic is not None:
+        sets.append("logic = %s")
+        params.append(logic)
+    if filters_json is not None:
+        sets.append("filters = %s")
+        params.append(json.dumps(filters_json))
+    params.append(filter_set_id)
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"UPDATE filter_sets SET {', '.join(sets)} WHERE id = %s "
+            f"RETURNING {_FILTER_SET_COLS}",
+            params,
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def delete_filter_set(filter_set_id: int) -> bool:
+    """Delete a filter set by id. Returns True if a row was deleted."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM filter_sets WHERE id = %s", (filter_set_id,))
+        return cur.rowcount > 0
+
+
+def fetch_filter_set(filter_set_id: int) -> dict | None:
+    """Fetch a single filter set by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_FILTER_SET_COLS} FROM filter_sets WHERE id = %s",
+            (filter_set_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def fetch_filter_sets_for_branch(branch_id: int) -> list[dict]:
+    """Return all filter sets for a branch, newest first."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_FILTER_SET_COLS} FROM filter_sets "
+            f"WHERE branch_id = %s ORDER BY updated_at DESC",
+            (branch_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def search_filter_sets(
+    query: str,
+    branch_id: int | None = None,
+    project_id: int | None = None,
+) -> list[dict]:
+    """Search filter sets by name with optional scope narrowing.
+
+    - *branch_id* only: filter sets on that branch.
+    - *project_id* only: filter sets on any branch of that project.
+    - Neither: search across all filter sets.
+    """
+    clauses: list[str] = ["fs.name ILIKE %s"]
+    params: list = [f"%{query}%"]
+
+    if branch_id is not None:
+        clauses.append("fs.branch_id = %s")
+        params.append(branch_id)
+    elif project_id is not None:
+        clauses.append("b.project_id = %s")
+        params.append(project_id)
+
+    needs_join = project_id is not None and branch_id is None
+    join = "JOIN branches b ON fs.branch_id = b.id" if needs_join else ""
+    where = " AND ".join(clauses)
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT fs.id, fs.branch_id, fs.name, fs.logic, fs.filters, "
+            f"fs.created_at, fs.updated_at "
+            f"FROM filter_sets fs {join} WHERE {where} ORDER BY fs.updated_at DESC",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Applied filter sets (tracks active filter sets per branch)
+# ---------------------------------------------------------------------------
+
+
+def apply_filter_sets(
+    branch_id: int, filter_set_ids: list[int], combination_logic: str,
+) -> None:
+    """Replace the applied filter sets for a branch."""
+    with get_cursor() as cur:
+        cur.execute(
+            "DELETE FROM branch_applied_filter_sets WHERE branch_id = %s",
+            (branch_id,),
+        )
+        for fs_id in filter_set_ids:
+            cur.execute(
+                "INSERT INTO branch_applied_filter_sets "
+                "(branch_id, filter_set_id, combination_logic) VALUES (%s, %s, %s)",
+                (branch_id, fs_id, combination_logic),
+            )
+
+
+def fetch_applied_filter_sets(branch_id: int) -> dict:
+    """Return the currently applied filter sets for a branch.
+
+    Returns ``{"filter_sets": [...], "combination_logic": "AND"|"OR"}``.
+    """
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT ba.combination_logic, ba.filter_set_id, "
+            f"fs.id, fs.branch_id, fs.name, fs.logic, fs.filters, "
+            f"fs.created_at, fs.updated_at "
+            "FROM branch_applied_filter_sets ba "
+            "JOIN filter_sets fs ON ba.filter_set_id = fs.id "
+            "WHERE ba.branch_id = %s ORDER BY ba.applied_at ASC",
+            (branch_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    if not rows:
+        return {"filter_sets": [], "combination_logic": "AND"}
+
+    combination_logic = rows[0]["combination_logic"]
+    filter_sets = [
+        {
+            "id": r["id"],
+            "branch_id": r["branch_id"],
+            "name": r["name"],
+            "logic": r["logic"],
+            "filters": r["filters"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    ]
+    return {"filter_sets": filter_sets, "combination_logic": combination_logic}
+
+
+# ---------------------------------------------------------------------------
+# Product filtering with structured filter sets
+# ---------------------------------------------------------------------------
+
+
+def _build_filter_clause(f: dict, params: list) -> str | None:
+    """Convert a single filter dict into a SQL clause, appending bind params."""
+    mode = f.get("mode")
+    if mode == "class":
+        ifc_class = f.get("ifcClass") or f.get("ifc_class")
+        if ifc_class:
+            params.append(ifc_class)
+            return "ifc_class = %s"
+    elif mode == "attribute":
+        attr = f.get("attribute")
+        value = f.get("value")
+        col_map = {
+            "globalId": "global_id",
+            "name": "name",
+            "objectType": "object_type",
+            "tag": "tag",
+            "description": "description",
+        }
+        col = col_map.get(attr, attr) if attr else None
+        if col and value:
+            params.append(f"%{value}%")
+            return f"{col} ILIKE %s"
+    return None
+
+
+def fetch_products_with_filter_sets(
+    rev: int,
+    branch_id: int,
+    filter_sets_data: list[dict],
+    combination_logic: str = "AND",
+) -> list[dict]:
+    """Query products matching multiple filter sets with configurable logic.
+
+    Each entry in *filter_sets_data* has keys ``logic`` (``"AND"``/``"OR"``)
+    and ``filters`` (list of filter dicts).  Conditions within a set are
+    joined by the set's ``logic``; the resulting groups are joined by
+    *combination_logic*.
+    """
+    base_clauses: list[str] = ["branch_id = %s", _REV_FILTER]
+    params: list = [branch_id, rev, rev]
+
+    group_sqls: list[str] = []
+    for fs in filter_sets_data:
+        fs_logic = fs.get("logic", "AND")
+        filter_clauses: list[str] = []
+        for f in fs.get("filters", []):
+            clause = _build_filter_clause(f, params)
+            if clause:
+                filter_clauses.append(clause)
+        if filter_clauses:
+            joiner = f" {fs_logic} "
+            group_sqls.append(f"({joiner.join(filter_clauses)})")
+
+    if group_sqls:
+        set_joiner = f" {combination_logic} "
+        base_clauses.append(f"({set_joiner.join(group_sqls)})")
+
+    where = " AND ".join(base_clauses)
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(f"SELECT {_PRODUCT_COLS} FROM ifc_products WHERE {where}", params)
+        return [dict(r) for r in cur.fetchall()]

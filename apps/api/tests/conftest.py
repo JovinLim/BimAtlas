@@ -86,6 +86,8 @@ TEST_DB_CONFIG = {
 
 SCHEMA_SQL = """
 -- Drop existing tables if they exist
+DROP TABLE IF EXISTS branch_applied_filter_sets CASCADE;
+DROP TABLE IF EXISTS filter_sets CASCADE;
 DROP TABLE IF EXISTS ifc_products CASCADE;
 DROP TABLE IF EXISTS revisions CASCADE;
 DROP TABLE IF EXISTS branches CASCADE;
@@ -138,6 +140,26 @@ CREATE TABLE IF NOT EXISTS ifc_products (
     CONSTRAINT ifc_products_validity CHECK (valid_to_rev IS NULL OR valid_to_rev > valid_from_rev)
 );
 
+-- Create filter_sets table
+CREATE TABLE IF NOT EXISTS filter_sets (
+    id SERIAL PRIMARY KEY,
+    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    logic TEXT NOT NULL DEFAULT 'AND' CHECK (logic IN ('AND', 'OR')),
+    filters JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Applied filter sets per branch
+CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
+    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    filter_set_id INTEGER NOT NULL REFERENCES filter_sets(id) ON DELETE CASCADE,
+    combination_logic TEXT NOT NULL DEFAULT 'AND' CHECK (combination_logic IN ('AND', 'OR')),
+    applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (branch_id, filter_set_id)
+);
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_branches_project ON branches(project_id);
 CREATE INDEX IF NOT EXISTS idx_revisions_branch ON revisions(branch_id);
@@ -145,6 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_ifc_products_global_id ON ifc_products(branch_id,
 CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_from ON ifc_products(valid_from_rev);
 CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_to ON ifc_products(valid_to_rev);
 CREATE INDEX IF NOT EXISTS idx_ifc_products_current ON ifc_products(branch_id, global_id) WHERE valid_to_rev IS NULL;
+CREATE INDEX IF NOT EXISTS idx_filter_sets_branch ON filter_sets(branch_id);
 """
 
 GRAPH_SETUP_SQL = """
@@ -229,7 +252,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     
                     # Truncate tables to leave database clean
                     try:
-                        cur.execute("TRUNCATE TABLE ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
+                        cur.execute("TRUNCATE TABLE branch_applied_filter_sets, filter_sets, ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
                         print("  ✅ Truncated test tables")
                     except Exception as e:
                         print(f"  ⚠️  Could not truncate tables: {e}")
@@ -255,7 +278,7 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
     
     with conn.cursor() as cur:
         # Truncate tables (order matters due to FK constraints)
-        cur.execute("TRUNCATE TABLE ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE branch_applied_filter_sets, filter_sets, ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
         
         # Clear graph
         try:

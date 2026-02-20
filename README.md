@@ -64,7 +64,7 @@ BimAtlas/
       run.sh                   # Start server (loads .env)
 
   infra/
-    docker-compose.yml          # PostgreSQL/AGE container
+    docker-compose.yml          # PostgreSQL/AGE + Adminer (DB web UI on :8080)
     init-age.sql                # Bootstrap: AGE extension + versioned schema (projects, branches, revisions, products)
 ```
 
@@ -88,7 +88,21 @@ cd infra
 docker compose up -d
 ```
 
-This spins up a PostgreSQL instance with the Apache AGE graph extension, creates the `bimatlas` graph, and bootstraps the schema (projects, branches, revisions, ifc_products with SCD Type 2 columns).
+This spins up a PostgreSQL instance with the Apache AGE graph extension, creates the `bimatlas` graph, and bootstraps the schema (projects, branches, revisions, ifc_products with SCD Type 2 columns). It also starts **Adminer**, a web interface for viewing and querying the PostgreSQL database.
+
+**Viewing the database with Adminer**
+
+After `docker compose up -d`, open **http://localhost:8080** to use Adminer. Log in with:
+
+| Field      | Value     |
+| ---------- | --------- |
+| System     | PostgreSQL |
+| Server     | age-db    |
+| Username   | bimatlas  |
+| Password   | bimatlas  |
+| Database   | bimatlas  |
+
+You can browse tables, run SQL, and inspect schema from the Adminer UI.
 
 ### 2. Start the API
 
