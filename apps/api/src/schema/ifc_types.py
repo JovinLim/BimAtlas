@@ -164,10 +164,11 @@ class Project:
 class FilterSetFilter:
     """A single filter within a filter set."""
 
-    mode: str  # "class" | "attribute"
+    mode: str  # "class" | "attribute" | "relation"
     ifc_class: Optional[str] = None
     attribute: Optional[str] = None
     value: Optional[str] = None
+    relation: Optional[str] = None
 
 
 @strawberry.type
@@ -199,3 +200,4 @@ class FilterInput:
     ifc_class: Optional[str] = None
     attribute: Optional[str] = None
     value: Optional[str] = None
+    relation: Optional[str] = None

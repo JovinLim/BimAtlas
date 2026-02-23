@@ -340,6 +340,14 @@ The SvelteKit app uses Svelte 5 runes for shared reactive state:
 - **ForceGraph** — 3d-force-graph component for topological exploration, synced to shared selection state.
 - **Selection state** — `activeProjectId`, `activeBranchId`, `activeGlobalId` and `activeRevision` as `$state` runes, importable from both `.svelte` and `.ts` files.
 
+### Search and filters
+
+Product search supports three filter modes:
+
+- **Class** — Restrict by IFC product class (e.g. IfcWall, IfcSlab) via a combobox over the IFC product hierarchy.
+- **Attribute** — Filter by attribute name and value (e.g. Name contains "A-101").
+- **Relation** — Restrict to products connected in the AGE graph by a chosen IFC relationship type (e.g. IfcRelContainedInSpatialStructure, IfcRelAggregates). The backend queries the graph for all `global_id`s reachable via that edge type, then restricts the product stream to those IDs.
+
 ---
 
 ## Design Decisions

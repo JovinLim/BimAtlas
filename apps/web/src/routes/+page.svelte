@@ -53,11 +53,11 @@
   let activeView: "viewport" | "graph" = $state("viewport");
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
-  
+
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
   $effect(() => {
-    if (typeof window === 'undefined' || settingsLoaded) return;
+    if (typeof window === "undefined" || settingsLoaded) return;
     const savedSettings = loadSettings();
     if (savedSettings) {
       activeView = savedSettings.activeView;
@@ -116,7 +116,7 @@
 
   // Persist settings to localStorage whenever they change (only after initial load)
   $effect(() => {
-    if (typeof window === 'undefined' || !settingsLoaded) return;
+    if (typeof window === "undefined" || !settingsLoaded) return;
     saveSettings({
       activeProjectId: projectState.activeProjectId,
       activeBranchId: projectState.activeBranchId,
@@ -245,9 +245,12 @@
     }
   }
 
-  function filtersToQueryVars(filters: SearchFilter[]): Record<string, unknown> {
+  function filtersToQueryVars(
+    filters: SearchFilter[],
+  ): Record<string, unknown> {
     const vars: Record<string, unknown> = {};
     const allClasses: string[] = [];
+    const allRelations: string[] = [];
 
     for (const f of filters) {
       if (f.mode === "class" && f.ifcClass) {
@@ -256,11 +259,16 @@
       } else if (f.mode === "attribute" && f.attribute && f.value) {
         const key = f.attribute === "objectType" ? "objectType" : f.attribute;
         vars[key] = f.value;
+      } else if (f.mode === "relation" && f.relation) {
+        allRelations.push(f.relation);
       }
     }
 
     if (allClasses.length > 0) {
       vars.ifcClasses = [...new Set(allClasses)];
+    }
+    if (allRelations.length > 0) {
+      vars.relationTypes = [...new Set(allRelations)];
     }
 
     return vars;
@@ -337,7 +345,10 @@
         .toPromise();
       const data = result.data?.appliedFilterSets;
       if (data && data.filterSets && data.filterSets.length > 0) {
-        await handleApplyFilterSets(data.filterSets, data.combinationLogic ?? "AND");
+        await handleApplyFilterSets(
+          data.filterSets,
+          data.combinationLogic ?? "AND",
+        );
         return true;
       }
       searchState.appliedFilterSets = [];
@@ -538,16 +549,26 @@
     const params = new URLSearchParams();
     params.set("branch_id", String(branchId));
     params.set("revision", String(revision));
-    if (filterVars.ifcClass != null) params.set("ifc_class", String(filterVars.ifcClass));
+    if (filterVars.ifcClass != null)
+      params.set("ifc_class", String(filterVars.ifcClass));
     if (filterVars.ifcClasses != null) {
-      for (const c of filterVars.ifcClasses as string[]) params.append("ifc_classes", c);
+      for (const c of filterVars.ifcClasses as string[])
+        params.append("ifc_classes", c);
     }
-    if (filterVars.containedIn != null) params.set("contained_in", String(filterVars.containedIn));
+    if (filterVars.containedIn != null)
+      params.set("contained_in", String(filterVars.containedIn));
     if (filterVars.name != null) params.set("name", String(filterVars.name));
-    if (filterVars.objectType != null) params.set("object_type", String(filterVars.objectType));
+    if (filterVars.objectType != null)
+      params.set("object_type", String(filterVars.objectType));
     if (filterVars.tag != null) params.set("tag", String(filterVars.tag));
-    if (filterVars.description != null) params.set("description", String(filterVars.description));
-    if (filterVars.globalId != null) params.set("global_id", String(filterVars.globalId));
+    if (filterVars.description != null)
+      params.set("description", String(filterVars.description));
+    if (filterVars.globalId != null)
+      params.set("global_id", String(filterVars.globalId));
+    if (filterVars.relationTypes != null) {
+      for (const r of filterVars.relationTypes as string[])
+        params.append("relation_types", r);
+    }
     return params;
   }
 
@@ -615,10 +636,15 @@
               });
               if (product.mesh?.vertices && product.mesh?.faces) {
                 try {
-                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  const geometry = createBufferGeometry(
+                    product.mesh as RawMeshData,
+                  );
                   mgr.addElement(product.globalId, geometry);
                 } catch (err) {
-                  console.warn(`Failed to load geometry for ${product.globalId}:`, err);
+                  console.warn(
+                    `Failed to load geometry for ${product.globalId}:`,
+                    err,
+                  );
                 }
               }
               await new Promise((r) => requestAnimationFrame(r));
@@ -650,7 +676,9 @@
               });
               if (product.mesh?.vertices && product.mesh?.faces) {
                 try {
-                  const geometry = createBufferGeometry(product.mesh as RawMeshData);
+                  const geometry = createBufferGeometry(
+                    product.mesh as RawMeshData,
+                  );
                   mgr.addElement(product.globalId, geometry);
                 } catch (_) {}
               }
@@ -881,7 +909,11 @@
       <div class="viewport-container">
         <Viewport bind:manager={sceneManager} />
         {#if loadingGeometry}
-          <div class="viewport-loading-overlay" aria-live="polite" aria-busy="true">
+          <div
+            class="viewport-loading-overlay"
+            aria-live="polite"
+            aria-busy="true"
+          >
             <div class="viewport-loading-card">
               <Spinner size="3rem" />
               <p class="viewport-loading-message">
@@ -894,7 +926,7 @@
                   <div
                     class="viewport-loading-fill"
                     style="width: {Math.round(
-                      (loadingGeometryCurrent / loadingGeometryTotal) * 100
+                      (loadingGeometryCurrent / loadingGeometryTotal) * 100,
                     )}%"
                   ></div>
                 </div>
@@ -910,13 +942,7 @@
             class="toolbar-btn import-btn"
             onclick={() => (showImportModal = true)}
           >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              style="margin-right:0.35rem"
-            >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path
                 d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
                 stroke="currentColor"
@@ -961,8 +987,19 @@
           aria-label="Search and filter"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
-            <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            <circle
+              cx="11"
+              cy="11"
+              r="7"
+              stroke="currentColor"
+              stroke-width="2"
+            />
+            <path
+              d="M16.5 16.5L21 21"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
           </svg>
           Search
         </button>
@@ -1081,14 +1118,6 @@
 </main>
 
 <style>
-  :global(html, body) {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-    background: #12121e;
-  }
-
   main {
     display: flex;
     flex-direction: column;
@@ -1158,7 +1187,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: #666;
-    margin-right: 0.15rem;
   }
 
   .selector {
@@ -1185,7 +1213,6 @@
   .separator {
     color: #555;
     font-size: 1rem;
-    margin: 0 0.1rem;
   }
 
   .icon-btn {
@@ -1340,6 +1367,9 @@
   }
 
   .picker-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     background: #1e1e30;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.75rem;
@@ -1350,14 +1380,12 @@
   }
 
   .picker-card h2 {
-    margin: 0 0 0.5rem;
     font-size: 1.2rem;
     font-weight: 600;
     color: #e0e0e0;
   }
 
   .picker-subtitle {
-    margin: 0 0 1.5rem;
     color: #888;
     font-size: 0.85rem;
   }
@@ -1366,7 +1394,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    margin-bottom: 1.25rem;
   }
 
   .project-item {
@@ -1418,21 +1445,18 @@
     color: #666;
     font-size: 0.85rem;
     text-align: center;
-    margin: 1.5rem 0;
   }
 
   .create-form {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-    margin-top: 1rem;
   }
 
   .form-actions {
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
-    margin-top: 0.25rem;
   }
 
   .input {
@@ -1456,7 +1480,6 @@
 
   .create-project-btn {
     width: 100%;
-    margin-top: 0.5rem;
   }
 
   /* ---- Buttons ---- */
@@ -1531,6 +1554,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 0.35rem;
   }
 
   .search-btn {
@@ -1576,6 +1600,9 @@
   }
 
   .modal {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     background: #1e1e30;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.75rem;
@@ -1589,11 +1616,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
   }
 
   .modal-header h2 {
-    margin: 0;
     font-size: 1.05rem;
     font-weight: 600;
     color: #e0e0e0;
@@ -1616,7 +1641,6 @@
   }
 
   .modal-subtitle {
-    margin: 0 0 1rem;
     font-size: 0.82rem;
     color: #888;
     line-height: 1.4;
@@ -1629,14 +1653,12 @@
   .modal-input {
     width: 100%;
     box-sizing: border-box;
-    margin-bottom: 0.5rem;
   }
 
   .modal-footer {
     display: flex;
     justify-content: flex-end;
     gap: 0.6rem;
-    margin-top: 1rem;
   }
 
   /* ---- Loading overlay ---- */

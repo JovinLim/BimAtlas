@@ -87,6 +87,7 @@ def _stream_ifc_products_generator(
     tag: str | None,
     description: str | None,
     global_id: str | None,
+    relation_types: list[str] | None = None,
 ):
     """Yield SSE events for IFC products stream."""
     rev = revision
@@ -107,6 +108,7 @@ def _stream_ifc_products_generator(
         tag=tag,
         description=description,
         global_id=global_id,
+        relation_types=relation_types,
     )
 
     yield f"data: {json.dumps({'type': 'start', 'total': len(rows)})}\n\n"
@@ -130,6 +132,7 @@ async def stream_ifc_products(
     tag: str | None = Query(None, description="Filter by tag (ILIKE)"),
     description: str | None = Query(None, description="Filter by description (ILIKE)"),
     global_id: str | None = Query(None, description="Filter by GlobalId (ILIKE)"),
+    relation_types: list[str] | None = Query(None, description="Filter by IFC relation types"),
 ):
     """Stream IFC products with geometry as Server-Sent Events.
 
@@ -147,6 +150,7 @@ async def stream_ifc_products(
             tag=tag,
             description=description,
             global_id=global_id,
+            relation_types=relation_types,
         ),
         media_type="text/event-stream",
         headers={

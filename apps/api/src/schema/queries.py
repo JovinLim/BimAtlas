@@ -202,6 +202,7 @@ def _row_to_filter_set(row: dict) -> FilterSet:
                 ifc_class=f.get("ifcClass") or f.get("ifc_class"),
                 attribute=f.get("attribute"),
                 value=f.get("value"),
+                relation=f.get("relation"),
             )
             for f in filters_data
         ],
@@ -471,6 +472,7 @@ class Mutation:
                 "ifcClass": f.ifc_class,
                 "attribute": f.attribute,
                 "value": f.value,
+                "relation": f.relation,
             }
             for f in filters
         ]
@@ -493,6 +495,7 @@ class Mutation:
                     "ifcClass": f.ifc_class,
                     "attribute": f.attribute,
                     "value": f.value,
+                    "relation": f.relation,
                 }
                 for f in filters
             ]

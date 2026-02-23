@@ -362,6 +362,20 @@ def get_relations(global_id: str, rev: int, branch_id: int) -> list[dict]:
     return results
 
 
+def get_product_ids_by_relation(
+    rel_type: str, rev: int, branch_id: int,
+) -> list[str]:
+    """Return global_ids of all products participating in edges of *rel_type*."""
+    label = _validate_label(rel_type)
+    cypher = cypher_tpl.PRODUCTS_BY_RELATION.format(
+        rel_type=label,
+        r_filter=_rev_filter("r", rev, branch_id),
+        n_filter=_rev_filter("n", rev, branch_id),
+    )
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]
+
+
 def get_spatial_tree_roots(rev: int, branch_id: int) -> list[dict]:
     """Return ``IfcProject`` root nodes visible at *rev* on *branch_id*."""
     cypher = cypher_tpl.SPATIAL_ROOTS.format(p_filter=_rev_filter("p", rev, branch_id))

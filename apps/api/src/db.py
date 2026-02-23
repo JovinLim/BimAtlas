@@ -232,6 +232,18 @@ def fetch_product_at_revision(global_id: str, rev: int, branch_id: int) -> dict 
         return dict(row) if row else None
 
 
+def _resolve_relation_gids(
+    relation_types: list[str], rev: int, branch_id: int,
+) -> list[str]:
+    """Query the AGE graph for product global_ids connected via *relation_types*."""
+    from .services.graph.age_client import get_product_ids_by_relation
+
+    all_gids: set[str] = set()
+    for rt in relation_types:
+        all_gids.update(get_product_ids_by_relation(rt, rev, branch_id))
+    return list(all_gids)
+
+
 def fetch_products_at_revision(
     rev: int,
     branch_id: int,
@@ -243,6 +255,7 @@ def fetch_products_at_revision(
     tag: str | None = None,
     description: str | None = None,
     global_id: str | None = None,
+    relation_types: list[str] | None = None,
 ) -> list[dict]:
     """List products visible at *rev* on *branch_id*, optionally filtered."""
     clauses: list[str] = ["branch_id = %s", _REV_FILTER]
@@ -272,6 +285,13 @@ def fetch_products_at_revision(
     if global_id is not None:
         clauses.append("global_id ILIKE %s")
         params.append(f"%{global_id}%")
+    if relation_types:
+        gids = _resolve_relation_gids(relation_types, rev, branch_id)
+        if gids:
+            clauses.append("global_id = ANY(%s)")
+            params.append(gids)
+        else:
+            return []
 
     where = " AND ".join(clauses)
     with get_cursor(dict_cursor=True) as cur:
@@ -552,7 +572,9 @@ def fetch_applied_filter_sets(branch_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _build_filter_clause(f: dict, params: list) -> str | None:
+def _build_filter_clause(
+    f: dict, params: list, rev: int = 0, branch_id: int = 0,
+) -> str | None:
     """Convert a single filter dict into a SQL clause, appending bind params."""
     mode = f.get("mode")
     if mode == "class":
@@ -574,6 +596,14 @@ def _build_filter_clause(f: dict, params: list) -> str | None:
         if col and value:
             params.append(f"%{value}%")
             return f"{col} ILIKE %s"
+    elif mode == "relation":
+        relation = f.get("relation")
+        if relation and rev and branch_id:
+            gids = _resolve_relation_gids([relation], rev, branch_id)
+            if gids:
+                params.append(gids)
+                return "global_id = ANY(%s)"
+            return "FALSE"
     return None
 
 
@@ -598,7 +628,7 @@ def fetch_products_with_filter_sets(
         fs_logic = fs.get("logic", "AND")
         filter_clauses: list[str] = []
         for f in fs.get("filters", []):
-            clause = _build_filter_clause(f, params)
+            clause = _build_filter_clause(f, params, rev=rev, branch_id=branch_id)
             if clause:
                 filter_clauses.append(clause)
         if filter_clauses:

@@ -30,6 +30,7 @@
   let projectId = $state<number | null>(null);
 
   // ---- Filter editor state ----
+  let filterSetEditorOpen = $state(false);
   let filters = $state<SearchFilter[]>([]);
   let editorName = $state("");
   let editorLogic = $state<"AND" | "OR">("AND");
@@ -69,6 +70,7 @@
       ifcClass: f.ifcClass,
       attribute: f.attribute,
       value: f.value,
+      relation: f.relation,
     }));
   }
 
@@ -86,15 +88,41 @@
 
   // ---- Filter set browser state ----
   let searchQuery = $state("");
-  let searchScope = $state<SearchScope>("branch");
+  let searchScope = $state<SearchScope>("project");
   let browserFilterSets = $state<FilterSet[]>([]);
   let selectedSetIds = $state<Set<number>>(new Set());
-  let combinationLogic = $state<"AND" | "OR">("AND");
+  let combinationLogic = $state<"AND" | "OR">("OR");
   let appliedFilterSets = $state<FilterSet[]>([]);
+  let collapsedAppliedIds = $state<Set<number>>(new Set());
   let appliedNameDrafts = $state<Record<number, string>>({});
   const appliedNameInputs: Record<number, HTMLInputElement | null> = {};
   let editingAppliedFilterKey = $state<string | null>(null);
   let editingAppliedFilterDraft = $state<SearchFilter | null>(null);
+
+  function toggleAppliedItem(id: number) {
+    const next = new Set(collapsedAppliedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    collapsedAppliedIds = next;
+  }
+
+  let lastAppliedSetIds = new Set<number>();
+  $effect(() => {
+    const sets = appliedFilterSets;
+    if (sets.length === 0) {
+      lastAppliedSetIds = new Set();
+      return;
+    }
+    const newIds = new Set(sets.map((fs) => fs.id));
+    const idsChanged =
+      lastAppliedSetIds.size !== newIds.size ||
+      [...newIds].some((id) => !lastAppliedSetIds.has(id));
+    if (idsChanged) {
+      collapsedAppliedIds = new Set(newIds);
+      lastAppliedSetIds = new Set(newIds);
+    }
+  });
+
   let loadingBrowser = $state(false);
   let savingFilterSet = $state(false);
 
@@ -109,9 +137,10 @@
     saveSearchFilters(filtersToPlain(filters));
   });
 
-  async function loadFilterSets() {
+  async function loadFilterSets(forceNetwork = false) {
     if (!branchId) return;
     loadingBrowser = true;
+    const context = forceNetwork ? { requestPolicy: "network-only" as const } : undefined;
     try {
       const query = searchQuery.trim();
       if (query || searchScope !== "branch") {
@@ -122,12 +151,12 @@
           else vars.branchId = branchId;
         }
         const result = await client
-          .query(SEARCH_FILTER_SETS_QUERY, vars)
+          .query(SEARCH_FILTER_SETS_QUERY, vars, context)
           .toPromise();
         browserFilterSets = result.data?.searchFilterSets ?? [];
       } else {
         const result = await client
-          .query(FILTER_SETS_QUERY, { branchId })
+          .query(FILTER_SETS_QUERY, { branchId }, context)
           .toPromise();
         browserFilterSets = result.data?.filterSets ?? [];
       }
@@ -146,9 +175,9 @@
         .toPromise();
       const data = result.data?.appliedFilterSets;
       if (data) {
-        combinationLogic = data.combinationLogic ?? "AND";
         const sets = data.filterSets ?? [];
         appliedFilterSets = sets;
+        combinationLogic = "OR";
         appliedNameDrafts = Object.fromEntries(
           sets.map((fs: FilterSet) => [fs.id, fs.name]),
         );
@@ -176,6 +205,7 @@
       ifcClass: f.ifcClass ?? null,
       attribute: f.attribute ?? null,
       value: f.value ?? null,
+      relation: f.relation ?? null,
     }));
   }
 
@@ -194,8 +224,10 @@
       })
       .toPromise();
     setAppliedName(id, name);
+    appliedFilterSets = appliedFilterSets.map((fs) =>
+      fs.id === id ? { ...fs, name, logic, filters: nextFilters } : fs,
+    );
     await loadFilterSets();
-    await loadApplied();
     channel?.postMessage({
       type: "apply-filter-sets",
       filterSets: filterSetsToPlain(appliedFilterSets),
@@ -216,10 +248,11 @@
           filters: toFilterInputs(filters),
         })
         .toPromise();
-      await loadFilterSets();
+      await loadFilterSets(true);
       editorName = "";
       editorLogic = "AND";
       filters = [];
+      filterSetEditorOpen = false;
     } catch (err) {
       console.error("Failed to save filter set:", err);
     } finally {
@@ -334,6 +367,21 @@
     }
   }
 
+  async function addFilterToAppliedSet(fs: FilterSet) {
+    const newFilter: SearchFilter = { id: genId(), mode: "class" };
+    const nextFilters = [...fs.filters, newFilter];
+    try {
+      await persistFilterSet(fs, nextFilters);
+      const updatedFs = appliedFilterSets.find((s) => s.id === fs.id);
+      if (updatedFs?.filters.length) {
+        const idx = updatedFs.filters.length - 1;
+        beginEditAppliedFilter(updatedFs, updatedFs.filters[idx], idx);
+      }
+    } catch (err) {
+      console.error("Failed to add filter to set:", err);
+    }
+  }
+
   function focusEditorToAddFilter(fs: FilterSet) {
     loadFilterSetIntoEditor(fs);
     addFilter();
@@ -355,7 +403,7 @@
   function resetFilterSetBrowserSection() {
     selectedSetIds = new Set();
     searchQuery = "";
-    searchScope = "branch";
+    searchScope = "project";
   }
 
   async function handleApplySelected() {
@@ -610,19 +658,6 @@
 
     {#if selectedSetIds.size > 0}
       <div class="apply-bar">
-        <div class="logic-toggle">
-          <span class="logic-label">Combine:</span>
-          <button
-            class="mode-btn"
-            class:active={combinationLogic === "AND"}
-            onclick={() => (combinationLogic = "AND")}>AND</button
-          >
-          <button
-            class="mode-btn"
-            class:active={combinationLogic === "OR"}
-            onclick={() => (combinationLogic = "OR")}>OR</button
-          >
-        </div>
         <button class="btn btn-primary" onclick={handleApplySelected}>
           Apply {selectedSetIds.size} Set{selectedSetIds.size === 1 ? "" : "s"}
         </button>
@@ -631,86 +666,114 @@
   </section>
 
   <!-- ═══════ Filter Set Editor ═══════ -->
-  <section class="section" id="filter-set-editor">
-    <div class="section-header">
-      <h3>New Filter Set</h3>
+  {#if !filterSetEditorOpen}
+    <div class="filter-set-editor-trigger">
+      <button
+        type="button"
+        class="btn btn-secondary"
+        onclick={() => (filterSetEditorOpen = true)}
+      >
+        New Filter Set
+      </button>
     </div>
-
-    {#if !branchId}
-      <p class="empty-hint">
-        Open a project from the main view to save filter sets.
-      </p>
-    {/if}
-
-    <div class="editor-row">
-      <input
-        class="editor-name"
-        type="text"
-        placeholder="Filter set name…"
-        bind:value={editorName}
-      />
-      <div class="logic-toggle">
+  {:else}
+    <section class="section" id="filter-set-editor">
+      <div class="section-header section-header--with-close">
+        <h3>New Filter Set</h3>
         <button
-          class="mode-btn"
-          class:active={editorLogic === "AND"}
-          onclick={() => (editorLogic = "AND")}>AND</button
+          type="button"
+          class="icon-btn icon-btn-close"
+          aria-label="Close filter set editor"
+          onclick={() => (filterSetEditorOpen = false)}
         >
-        <button
-          class="mode-btn"
-          class:active={editorLogic === "OR"}
-          onclick={() => (editorLogic = "OR")}>OR</button
-        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M4 4L12 12M12 4L4 12"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
       </div>
-    </div>
 
-    <div class="filter-list">
-      {#if filters.length === 0}
-        <p class="empty-hint">No filters yet. Add one to start.</p>
+      {#if !branchId}
+        <p class="empty-hint">
+          Open a project from the main view to save filter sets.
+        </p>
       {/if}
 
-      {#each filters as filter (filter.id)}
-        <SearchFilterRow
-          {filter}
-          onupdate={(patch) => updateFilter(filter.id, patch)}
-          onremove={() => removeFilter(filter.id)}
+      <div class="editor-row">
+        <input
+          class="editor-name"
+          type="text"
+          placeholder="Filter set name…"
+          bind:value={editorName}
         />
-      {/each}
-    </div>
-
-    <div class="editor-toolbar">
-      <button class="add-btn" onclick={addFilter}>
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <path
-            d="M8 3v10M3 8h10"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-          />
-        </svg>
-        Add Filter
-      </button>
-      <div class="editor-actions">
-        <button class="btn btn-secondary" onclick={clearAll}>Clear All</button>
-        <button
-          class="btn btn-secondary"
-          disabled={filters.length === 0}
-          onclick={handleApplyAdHoc}
-        >
-          Apply Ad-hoc
-        </button>
-        <button
-          class="btn btn-primary"
-          disabled={!branchId ||
-            !editorName.trim() ||
-            filters.length === 0 ||
-            savingFilterSet}
-          onclick={handleSaveFilterSet}
-        >
-          Save Filter Set
-        </button>
+        <div class="logic-toggle">
+          <button
+            class="mode-btn"
+            class:active={editorLogic === "AND"}
+            onclick={() => (editorLogic = "AND")}>AND</button
+          >
+          <button
+            class="mode-btn"
+            class:active={editorLogic === "OR"}
+            onclick={() => (editorLogic = "OR")}>OR</button
+          >
+        </div>
       </div>
-    </div>
-  </section>
+
+      <div class="filter-list">
+        {#if filters.length === 0}
+          <p class="empty-hint">No filters yet. Add one to start.</p>
+        {/if}
+
+        {#each filters as filter (filter.id)}
+          <SearchFilterRow
+            {filter}
+            onupdate={(patch) => updateFilter(filter.id, patch)}
+            onremove={() => removeFilter(filter.id)}
+          />
+        {/each}
+      </div>
+
+      <div class="editor-toolbar">
+        <button class="add-btn" aria-label="Add filter" onclick={addFilter}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M8 3v10M3 8h10"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+          </svg>
+          Add Filter
+        </button>
+        <div class="editor-actions">
+          <button class="btn btn-secondary" onclick={clearAll}>Clear All</button
+          >
+          <button
+            class="btn btn-secondary"
+            disabled={filters.length === 0}
+            onclick={handleApplyAdHoc}
+          >
+            Apply Ad-hoc
+          </button>
+          <button
+            class="btn btn-primary"
+            disabled={!branchId ||
+              !editorName.trim() ||
+              filters.length === 0 ||
+              savingFilterSet}
+            onclick={handleSaveFilterSet}
+          >
+            Save Filter Set
+          </button>
+        </div>
+      </div>
+    </section>
+  {/if}
 
   <!-- ═══════ Applied to view (below editor) ═══════ -->
   <section class="section section--applied" id="applied-panel">
@@ -729,167 +792,201 @@
         </p>
       {:else}
         {#each appliedFilterSets as fs (fs.id)}
-          <div class="applied-item">
-            <div class="editor-row applied-editor-row">
-              <input
-                class="editor-name applied-name"
-                type="text"
-                value={getAppliedName(fs)}
-                bind:this={appliedNameInputs[fs.id]}
-                oninput={(e) => setAppliedName(fs.id, e.currentTarget.value)}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleUpdateAppliedFilterSet(fs);
-                  }
-                }}
-              />
-              <div class="logic-toggle">
-                <button
-                  class="mode-btn"
-                  class:active={fs.logic === "AND"}
-                  disabled>AND</button
-                >
-                <button
-                  class="mode-btn"
-                  class:active={fs.logic === "OR"}
-                  disabled>OR</button
-                >
+          {@const isCollapsed = collapsedAppliedIds.has(fs.id)}
+          <div class="applied-item" class:collapsed={isCollapsed}>
+            <div class="applied-item-header">
+              <div class="editor-row applied-editor-row">
+                <input
+                  class="editor-name applied-name"
+                  type="text"
+                  value={getAppliedName(fs)}
+                  bind:this={appliedNameInputs[fs.id]}
+                  oninput={(e) => setAppliedName(fs.id, e.currentTarget.value)}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleUpdateAppliedFilterSet(fs);
+                    }
+                  }}
+                />
+                <div class="logic-toggle">
+                  <button
+                    class="mode-btn"
+                    class:active={fs.logic === "AND"}
+                    disabled>AND</button
+                  >
+                  <button
+                    class="mode-btn"
+                    class:active={fs.logic === "OR"}
+                    disabled>OR</button
+                  >
+                </div>
               </div>
-            </div>
-            <div class="filter-list applied-filter-list">
-              {#if fs.filters.length === 0}
-                <p class="empty-hint">No filters in this set.</p>
-              {:else}
-                {#each fs.filters as f, idx}
-                  {@const lineKey = appliedFilterKey(fs, f, idx)}
-                  {#if editingAppliedFilterKey === lineKey && editingAppliedFilterDraft}
-                    <div class="applied-filter-edit">
-                      <SearchFilterRow
-                        filter={editingAppliedFilterDraft}
-                        onupdate={(patch) =>
-                          (editingAppliedFilterDraft = {
-                            ...editingAppliedFilterDraft!,
-                            ...patch,
-                          })}
-                        onremove={() => deleteAppliedFilter(fs, idx)}
-                      />
-                      <div class="editor-actions applied-filter-edit-actions">
-                        <button
-                          type="button"
-                          class="btn btn-secondary"
-                          onclick={cancelEditAppliedFilter}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          class="btn btn-primary"
-                          onclick={() => saveAppliedFilterEdit(fs, idx)}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  {:else}
-                    <div class="applied-filter-line">
-                      {#if f.mode === "class"}
-                        <span class="applied-filter-mode">Class</span>
-                        <span class="applied-filter-value"
-                          >{f.ifcClass ?? "—"}</span
-                        >
-                      {:else}
-                        <span class="applied-filter-mode">Attr</span>
-                        <span class="applied-filter-value"
-                          >{f.attribute ?? "—"} = {f.value ?? "—"}</span
-                        >
-                      {/if}
-                      <div class="applied-filter-actions">
-                        <button
-                          type="button"
-                          class="icon-btn"
-                          aria-label="Edit filter"
-                          onclick={() => beginEditAppliedFilter(fs, f, idx)}
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 16 16"
-                            fill="none"
-                          >
-                            <path
-                              d="M3 11.75V13h1.25L11.5 5.75l-1.25-1.25L3 11.75ZM12.2 5.05l.75-.75a.884.884 0 0 0 0-1.25l-.5-.5a.884.884 0 0 0-1.25 0l-.75.75 1.75 1.75Z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          class="icon-btn icon-btn-danger"
-                          aria-label="Delete filter"
-                          disabled={fs.filters.length <= 1}
-                          onclick={() => deleteAppliedFilter(fs, idx)}
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 16 16"
-                            fill="none"
-                          >
-                            <path
-                              d="M4 4L12 12M12 4L4 12"
-                              stroke="currentColor"
-                              stroke-width="1.5"
-                              stroke-linecap="round"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  {/if}
-                {/each}
-              {/if}
-            </div>
-            <div class="editor-toolbar applied-toolbar">
               <button
                 type="button"
-                class="add-btn"
-                onclick={() => focusEditorToAddFilter(fs)}
+                class="applied-item-toggle"
+                aria-label={isCollapsed ? "Expand" : "Collapse"}
+                aria-expanded={!isCollapsed}
+                onclick={() => toggleAppliedItem(fs.id)}
               >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  class="chevron"
+                  class:rotated={isCollapsed}
+                >
                   <path
-                    d="M8 3v10M3 8h10"
+                    d="M4 6l4 4 4-4"
                     stroke="currentColor"
                     stroke-width="1.5"
                     stroke-linecap="round"
+                    stroke-linejoin="round"
                   />
                 </svg>
-                Add Filter
               </button>
-              <div class="editor-actions">
-                <button
-                  type="button"
-                  class="btn btn-secondary"
-                  onclick={() => handleUpdateAppliedFilterSet(fs)}
-                >
-                  Update
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-secondary"
-                  onclick={() => handleUnapplyFilterSet(fs.id)}
-                >
-                  Unapply
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-danger"
-                  onclick={() => handleDeleteFilterSet(fs.id)}
-                >
-                  Delete
-                </button>
-              </div>
             </div>
+            {#if !isCollapsed}
+              <div class="filter-list applied-filter-list">
+                {#if fs.filters.length === 0}
+                  <p class="empty-hint">No filters in this set.</p>
+                {:else}
+                  {#each fs.filters as f, idx}
+                    {@const lineKey = appliedFilterKey(fs, f, idx)}
+                    {#if editingAppliedFilterKey === lineKey && editingAppliedFilterDraft}
+                      <div class="applied-filter-edit">
+                        <SearchFilterRow
+                          filter={editingAppliedFilterDraft}
+                          onupdate={(patch) =>
+                            (editingAppliedFilterDraft = {
+                              ...editingAppliedFilterDraft!,
+                              ...patch,
+                            })}
+                          onremove={() => deleteAppliedFilter(fs, idx)}
+                        />
+                        <div class="editor-actions applied-filter-edit-actions">
+                          <button
+                            type="button"
+                            class="btn btn-secondary"
+                            onclick={cancelEditAppliedFilter}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            class="btn btn-primary"
+                            onclick={() => saveAppliedFilterEdit(fs, idx)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    {:else}
+                      <div class="applied-filter-line">
+                        {#if f.mode === "class"}
+                          <span class="applied-filter-mode">Class</span>
+                          <span class="applied-filter-value"
+                            >{f.ifcClass ?? "—"}</span
+                          >
+                        {:else if f.mode === "relation"}
+                          <span class="applied-filter-mode">Relation</span>
+                          <span class="applied-filter-value"
+                            >{f.relation ?? "—"}</span
+                          >
+                        {:else}
+                          <span class="applied-filter-mode">Attr</span>
+                          <span class="applied-filter-value"
+                            >{f.attribute ?? "—"} = {f.value ?? "—"}</span
+                          >
+                        {/if}
+                        <div class="applied-filter-actions">
+                          <button
+                            type="button"
+                            class="icon-btn"
+                            aria-label="Edit filter"
+                            onclick={() => beginEditAppliedFilter(fs, f, idx)}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                            >
+                              <path
+                                d="M3 11.75V13h1.25L11.5 5.75l-1.25-1.25L3 11.75ZM12.2 5.05l.75-.75a.884.884 0 0 0 0-1.25l-.5-.5a.884.884 0 0 0-1.25 0l-.75.75 1.75 1.75Z"
+                                fill="currentColor"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            class="icon-btn icon-btn-danger"
+                            aria-label="Delete filter"
+                            disabled={fs.filters.length <= 1}
+                            onclick={() => deleteAppliedFilter(fs, idx)}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                            >
+                              <path
+                                d="M4 4L12 12M12 4L4 12"
+                                stroke="currentColor"
+                                stroke-width="1.5"
+                                stroke-linecap="round"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                  {/each}
+                {/if}
+              </div>
+              <div class="editor-toolbar applied-toolbar">
+                <button
+                  type="button"
+                  class="add-btn"
+                  onclick={() => addFilterToAppliedSet(fs)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M8 3v10M3 8h10"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                  Add Filter
+                </button>
+                <div class="editor-actions">
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    onclick={() => handleUpdateAppliedFilterSet(fs)}
+                  >
+                    Update
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    onclick={() => handleUnapplyFilterSet(fs.id)}
+                  >
+                    Unapply
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-danger"
+                    onclick={() => handleDeleteFilterSet(fs.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            {/if}
           </div>
         {/each}
       {/if}
@@ -908,6 +1005,7 @@
   .search-page {
     display: flex;
     flex-direction: column;
+    gap: 1rem;
     min-height: 100vh;
     padding: 1rem;
     background: #12121e;
@@ -923,11 +1021,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
   }
 
   .page-header h2 {
-    margin: 0;
     font-size: 1.05rem;
     font-weight: 600;
     color: #e0e0e0;
@@ -942,22 +1038,26 @@
   /* ---- Sections ---- */
 
   .section {
-    margin-bottom: 1rem;
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 0.5rem;
     padding: 0.75rem;
     background: rgba(255, 255, 255, 0.02);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 
   .section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.5rem;
+  }
+
+  .section-header--with-close .icon-btn-close {
+    margin-left: auto;
   }
 
   .section-header h3 {
-    margin: 0;
     font-size: 0.85rem;
     font-weight: 600;
     color: #ccc;
@@ -975,7 +1075,6 @@
     padding: 0.4rem 0.55rem;
     font-size: 0.78rem;
     outline: none;
-    margin-bottom: 0.5rem;
   }
 
   .search-input:focus {
@@ -1089,8 +1188,6 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
 
@@ -1102,10 +1199,6 @@
     padding: 0;
   }
 
-  .section--applied .section-header {
-    margin-bottom: 0.4rem;
-  }
-
   .applied-logic {
     font-size: 0.7rem;
     color: #888;
@@ -1113,6 +1206,9 @@
   }
 
   .applied-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
     height: fit-content;
   }
 
@@ -1120,26 +1216,57 @@
     border-radius: 0.45rem;
     background: rgba(255, 255, 255, 0.015);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    margin-bottom: 0.55rem;
     font-size: 0.78rem;
     outline: none;
     transition:
       border-color 0.15s,
       background 0.15s;
     padding: 0.55rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .applied-item-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .applied-item-header .applied-editor-row {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .applied-item-toggle {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    padding: 0.2rem;
+    border-radius: 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s;
+  }
+
+  .applied-item-toggle:hover {
+    color: #ccc;
+  }
+
+  .applied-item-toggle .chevron {
+    transition: transform 0.2s ease;
+  }
+
+  .applied-item-toggle .chevron.rotated {
+    transform: rotate(90deg);
   }
 
   .applied-item:hover {
     border-color: rgba(255, 136, 102, 0.24);
     background: rgba(255, 136, 102, 0.03);
-  }
-
-  .applied-item:last-child {
-    margin-bottom: 0;
-  }
-
-  .applied-editor-row {
-    margin-bottom: 0.45rem;
   }
 
   .applied-name {
@@ -1149,10 +1276,6 @@
 
   .applied-name:focus {
     border-color: rgba(255, 255, 255, 0.1);
-  }
-
-  .applied-filter-list {
-    margin-bottom: 0.5rem;
   }
 
   .applied-filter-line {
@@ -1165,7 +1288,6 @@
     color: #bbb;
     background: rgba(255, 255, 255, 0.015);
     border: 1px solid rgba(255, 255, 255, 0.05);
-    margin-bottom: 0.3rem;
   }
 
   .applied-filter-mode {
@@ -1173,7 +1295,7 @@
     color: #888;
     font-size: 0.7rem;
     text-transform: uppercase;
-    width: 2.5rem;
+    width: 4rem;
   }
 
   .applied-filter-value {
@@ -1231,7 +1353,6 @@
     border-radius: 0.35rem;
     background: rgba(255, 255, 255, 0.02);
     padding: 0.15rem 0.45rem 0.45rem;
-    margin-bottom: 0.3rem;
   }
 
   .applied-filter-edit-actions {
@@ -1239,7 +1360,6 @@
   }
 
   .applied-toolbar {
-    margin-top: 0;
     padding-top: 0.45rem;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
   }
@@ -1250,12 +1370,6 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-  }
-
-  .logic-label {
-    font-size: 0.7rem;
-    color: #888;
-    margin-right: 0.15rem;
   }
 
   .mode-btn {
@@ -1287,7 +1401,6 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
-    margin-bottom: 0.5rem;
   }
 
   .editor-name {
@@ -1310,9 +1423,9 @@
   }
 
   .filter-list {
-    overflow-y: auto;
-    max-height: 220px;
-    min-height: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
   .editor-toolbar {
@@ -1321,7 +1434,6 @@
     justify-content: space-between;
     gap: 0.5rem;
     flex-wrap: wrap;
-    margin-top: 0.25rem;
   }
 
   .editor-actions {
@@ -1355,7 +1467,6 @@
   }
 
   .empty-hint {
-    margin: 0;
     padding: 0.75rem 0;
     text-align: center;
     font-size: 0.78rem;
