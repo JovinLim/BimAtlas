@@ -329,6 +329,20 @@ mutation {
 }
 ```
 
+**Delete project, branch, or revision (mutations):**
+
+```graphql
+mutation {
+  deleteProject(id: 1)
+}
+mutation {
+  deleteBranch(id: 2)
+}
+mutation {
+  deleteRevision(id: 3)
+}
+```
+
 ---
 
 ## Frontend

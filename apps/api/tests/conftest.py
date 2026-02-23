@@ -349,16 +349,23 @@ def test_branch(db_pool) -> int:
 
 @pytest.fixture(scope="session")
 def test_ifc_file() -> Path:
-    """Provide path to the test IFC file."""
-    ifc_path = Path(__file__).parent.parent.parent / "tests" / "files" / "Ifc4_SampleHouse.ifc"
-    if not ifc_path.exists():
-        # Try alternative location
-        ifc_path = Path(__file__).parent.parent.parent / "tests" / "Ifc4_SampleHouse.ifc"
-    
-    if not ifc_path.exists():
-        pytest.skip(f"Test IFC file not found at {ifc_path}")
-    
-    return ifc_path
+    """Provide path to the test IFC file (Ifc4_SampleHouse.ifc)."""
+    # Search order: api tests/files, then apps/test_files (shared), then repo tests
+    _base = Path(__file__).resolve().parent  # apps/api/tests
+    _apps = _base.parent.parent  # apps
+    _root = _apps.parent  # repo root
+    candidates = [
+        _base / "files" / "Ifc4_SampleHouse.ifc",
+        _apps / "test_files" / "Ifc4_SampleHouse.ifc",
+        _root / "tests" / "files" / "Ifc4_SampleHouse.ifc",
+        _root / "tests" / "Ifc4_SampleHouse.ifc",
+        _apps / "tests" / "Ifc4_SampleHouse.ifc",
+    ]
+    for ifc_path in candidates:
+        if ifc_path.exists():
+            return ifc_path
+    pytest.skip(f"Test IFC file not found. Tried: {[str(p) for p in candidates]}")
+    return Path()  # unreachable; skip raises
 
 
 @pytest.fixture
