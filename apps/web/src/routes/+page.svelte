@@ -34,6 +34,8 @@
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
     CREATE_BRANCH_MUTATION,
+    DELETE_PROJECT_MUTATION,
+    DELETE_BRANCH_MUTATION,
     REVISIONS_QUERY,
   } from "$lib/api/client";
   import {
@@ -102,6 +104,12 @@
   let newBranchName = $state("");
   let creatingProject = $state(false);
   let creatingBranch = $state(false);
+  let showDeleteProject = $state(false);
+  let showDeleteBranch = $state(false);
+  let projectToDelete = $state<ProjectData | null>(null);
+  let branchToDelete = $state<BranchData | null>(null);
+  let deletingProject = $state(false);
+  let deletingBranch = $state(false);
 
   // Derived: currently selected project and its branches
   let activeProject = $derived(
@@ -408,10 +416,16 @@
 
   // ---- API helpers ----
 
-  async function loadProjects() {
+  async function loadProjects(forceNetwork = false) {
     loadingProjects = true;
     try {
-      const result = await client.query(PROJECTS_QUERY, {}).toPromise();
+      const result = await client
+        .query(
+          PROJECTS_QUERY,
+          {},
+          forceNetwork ? { requestPolicy: "network-only" } : undefined,
+        )
+        .toPromise();
       if (result.error) {
         // Server/GraphQL error (e.g. 500) — fall back to landing so user can retry or pick another project
         console.error("Failed to load projects:", result.error);
@@ -495,6 +509,10 @@
         projectState.activeBranchId = branch.id;
         showCreateBranch = false;
         newBranchName = "";
+        // Switch viewer to the new branch and update the view
+        sceneManager?.clearAll();
+        sendBranchContext();
+        autoLoadAppliedFilterSets(branch.id);
       }
     } catch (err) {
       console.error("Failed to create branch:", err);
@@ -519,9 +537,64 @@
 
   function selectBranch(branchId: number) {
     projectState.activeBranchId = branchId;
+    revisionState.activeRevision = null;
     sceneManager?.clearAll();
     sendBranchContext();
     autoLoadAppliedFilterSets(branchId);
+  }
+
+  async function handleDeleteProject() {
+    if (!projectToDelete) return;
+    deletingProject = true;
+    try {
+      const result = await client
+        .mutation(DELETE_PROJECT_MUTATION, { id: projectToDelete.id })
+        .toPromise();
+      if (result.data?.deleteProject) {
+        showDeleteProject = false;
+        projectToDelete = null;
+        projectState.activeProjectId = null;
+        projectState.activeBranchId = null;
+        revisionState.activeRevision = null;
+        selection.activeGlobalId = null;
+        await loadProjects(true);
+      }
+    } catch (err) {
+      console.error("Failed to delete project:", err);
+    } finally {
+      deletingProject = false;
+    }
+  }
+
+  async function handleDeleteBranch() {
+    if (!branchToDelete) return;
+    deletingBranch = true;
+    try {
+      const result = await client
+        .mutation(DELETE_BRANCH_MUTATION, { id: branchToDelete.id })
+        .toPromise();
+      if (result.data?.deleteBranch) {
+        showDeleteBranch = false;
+        const projectId = projectState.activeProjectId;
+        branchToDelete = null;
+        revisionState.activeRevision = null;
+        selection.activeGlobalId = null;
+        await loadProjects(true);
+        // Select another branch (main or first remaining)
+        const proj = projects.find((p) => p.id === projectId);
+        if (proj && proj.branches.length > 0) {
+          const main = proj.branches.find((b) => b.name === "main");
+          projectState.activeBranchId = main ? main.id : proj.branches[0].id;
+          sceneManager?.clearAll();
+          sendBranchContext();
+          autoLoadAppliedFilterSets(projectState.activeBranchId);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete branch:", err);
+    } finally {
+      deletingBranch = false;
+    }
   }
 
   async function fetchLatestRevision(branchId: number) {
@@ -798,6 +871,35 @@
           >
             +
           </button>
+          <button
+            type="button"
+            class="icon-btn icon-btn--danger"
+            title="Delete branch"
+            aria-label="Delete branch {activeBranch?.name}"
+            disabled={!activeProject || activeProject.branches.length <= 1}
+            onclick={() => {
+              if (activeBranch) {
+                branchToDelete = activeBranch;
+                showDeleteBranch = true;
+              }
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M10 11v6M14 11v6"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -844,22 +946,53 @@
           {#if projects.length > 0}
             <div class="project-list">
               {#each projects as p}
-                <button
-                  class="project-item"
-                  onclick={() => selectProject(p.id)}
-                >
-                  <div class="project-item-info">
-                    <span class="project-item-name">{p.name}</span>
-                    {#if p.description}
-                      <span class="project-item-desc">{p.description}</span>
-                    {/if}
-                  </div>
-                  <span class="project-item-branches"
-                    >{p.branches.length} branch{p.branches.length !== 1
-                      ? "es"
-                      : ""}</span
+                <div class="project-item">
+                  <button
+                    type="button"
+                    class="project-item-main"
+                    onclick={() => selectProject(p.id)}
                   >
-                </button>
+                    <div class="project-item-info">
+                      <span class="project-item-name">{p.name}</span>
+                      {#if p.description}
+                        <span class="project-item-desc">{p.description}</span>
+                      {/if}
+                    </div>
+                    <span class="project-item-branches"
+                      >{p.branches.length} branch{p.branches.length !== 1
+                        ? "es"
+                        : ""}</span
+                    >
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn icon-btn--danger no-background"
+                    title="Delete project"
+                    aria-label="Delete project {p.name}"
+                    onclick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      projectToDelete = p;
+                      showDeleteProject = true;
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                      <path
+                        d="M10 11v6M14 11v6"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
               {/each}
             </div>
           {:else}
@@ -977,8 +1110,11 @@
           >
             Fit View
           </button>
-          <!-- Depth widget -->
-          <DepthWidget bind:value={selection.subgraphDepth} />
+          <!-- View Options section -->
+          <section class="sidebar-section" aria-labelledby="view-options-heading">
+            <h2 id="view-options-heading" class="sidebar-section-heading">View Options</h2>
+            <DepthWidget bind:value={selection.subgraphDepth} />
+          </section>
         </Sidebar>
         <!-- Search button -->
         <button
@@ -1024,6 +1160,144 @@
       onclose={() => (showImportModal = false)}
       onsubmit={handleImportSubmit}
     />
+
+    <!-- Delete project confirmation modal -->
+    {#if showDeleteProject && projectToDelete}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete project"
+        tabindex="-1"
+        onclick={(e) => {
+          if (e.target === e.currentTarget) {
+            showDeleteProject = false;
+            projectToDelete = null;
+          }
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Escape") {
+            showDeleteProject = false;
+            projectToDelete = null;
+          }
+        }}
+      >
+        <div class="modal">
+          <header class="modal-header">
+            <h2>Delete project</h2>
+            <button
+              class="close-btn"
+              onclick={() => {
+                showDeleteProject = false;
+                projectToDelete = null;
+              }}
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 4L12 12M12 4L4 12"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </header>
+          <p class="modal-subtitle">
+            Delete project <strong>{projectToDelete.name}</strong>? This will
+            permanently delete all branches, revisions, and model data.
+          </p>
+          <footer class="modal-footer">
+            <button
+              class="btn btn-secondary"
+              onclick={() => {
+                showDeleteProject = false;
+                projectToDelete = null;
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              class="btn btn-danger"
+              disabled={deletingProject}
+              onclick={handleDeleteProject}
+            >
+              {deletingProject ? "Deleting..." : "Delete project"}
+            </button>
+          </footer>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Delete branch confirmation modal -->
+    {#if showDeleteBranch && branchToDelete}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete branch"
+        tabindex="-1"
+        onclick={(e) => {
+          if (e.target === e.currentTarget) {
+            showDeleteBranch = false;
+            branchToDelete = null;
+          }
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Escape") {
+            showDeleteBranch = false;
+            branchToDelete = null;
+          }
+        }}
+      >
+        <div class="modal">
+          <header class="modal-header">
+            <h2>Delete branch</h2>
+            <button
+              class="close-btn"
+              onclick={() => {
+                showDeleteBranch = false;
+                branchToDelete = null;
+              }}
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 4L12 12M12 4L4 12"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </header>
+          <p class="modal-subtitle">
+            Delete branch <strong>{branchToDelete.name}</strong>? This will
+            permanently delete all revisions and model data on this branch.
+          </p>
+          <footer class="modal-footer">
+            <button
+              class="btn btn-secondary"
+              onclick={() => {
+                showDeleteBranch = false;
+                branchToDelete = null;
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              class="btn btn-danger"
+              disabled={deletingBranch}
+              onclick={handleDeleteBranch}
+            >
+              {deletingBranch ? "Deleting..." : "Delete branch"}
+            </button>
+          </footer>
+        </div>
+      </div>
+    {/if}
 
     <!-- Create branch modal -->
     {#if showCreateBranch}
@@ -1233,9 +1507,37 @@
     padding: 0;
   }
 
+  .icon-btn.no-background {
+    background: none;
+    border: none;
+  }
+
+  .icon-btn.no-background:hover:not(:disabled) {
+    background: none;
+  }
+
+  .icon-btn--danger.no-background:hover:not(:disabled) {
+    background: none;
+    color: #ee8888;
+  }
+
   .icon-btn:hover {
     background: rgba(255, 136, 102, 0.2);
     color: #ff8866;
+  }
+
+  .icon-btn--danger {
+    color: #cc6666;
+  }
+
+  .icon-btn--danger:hover:not(:disabled) {
+    background: rgba(204, 68, 68, 0.2);
+    color: #ee8888;
+  }
+
+  .icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* ---- View toggle tabs ---- */
@@ -1399,23 +1701,34 @@
   .project-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.5rem;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
-    cursor: pointer;
-    transition:
-      background 0.15s,
-      border-color 0.15s;
-    text-align: left;
-    width: 100%;
-    color: inherit;
+    transition: background 0.15s, border-color 0.15s;
   }
 
   .project-item:hover {
     background: rgba(255, 136, 102, 0.08);
     border-color: rgba(255, 136, 102, 0.2);
+  }
+
+  .project-item-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    border-radius: 0.3rem;
   }
 
   .project-item-info {
@@ -1521,6 +1834,16 @@
     color: #ffaa88;
   }
 
+  .btn-danger {
+    background: rgba(204, 68, 68, 0.2);
+    color: #cc6666;
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background: rgba(204, 68, 68, 0.35);
+    color: #ee8888;
+  }
+
   /* ---- Viewport toolbar overlay ---- */
 
   .toolbar-btn {
@@ -1540,6 +1863,21 @@
   .toolbar-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     color: #fff;
+  }
+
+  .sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .sidebar-section-heading {
+    margin: 0;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #666;
   }
 
   .element-count {
@@ -1666,7 +2004,7 @@
   .loading-overlay {
     position: fixed;
     inset: 0;
-    z-index: 200;
+    z-index: 1100;
     display: flex;
     align-items: center;
     justify-content: center;

@@ -452,6 +452,62 @@ def delete_filter_set(filter_set_id: int) -> bool:
         return cur.rowcount > 0
 
 
+# ---------------------------------------------------------------------------
+# Delete project / branch / revision
+# ---------------------------------------------------------------------------
+
+
+def delete_project(project_id: int) -> bool:
+    """Delete a project and all its branches, revisions, and graph data.
+
+    Fetches branch IDs for graph cleanup, deletes AGE graph data per branch,
+    then deletes the project (CASCADE removes branches, revisions, ifc_products,
+    filter_sets). Returns True if a row was deleted.
+    """
+    from .services.graph.age_client import delete_branch_graph_data
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute("SELECT id FROM branches WHERE project_id = %s", (project_id,))
+        branch_ids = [r["id"] for r in cur.fetchall()]
+    for bid in branch_ids:
+        delete_branch_graph_data(bid)
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+        return cur.rowcount > 0
+
+
+def delete_branch(branch_id: int) -> bool:
+    """Delete a branch and all its revisions and graph data.
+
+    Deletes AGE graph data for the branch, then deletes the branch (CASCADE
+    removes revisions, ifc_products, filter_sets). Returns True if a row was
+    deleted.
+    """
+    from .services.graph.age_client import delete_branch_graph_data
+
+    delete_branch_graph_data(branch_id)
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM branches WHERE id = %s", (branch_id,))
+        return cur.rowcount > 0
+
+
+def delete_revision(revision_id: int) -> bool:
+    """Delete a revision and clean up ifc_products that reference it.
+
+    Removes ifc_products rows where valid_from_rev = revision_id, sets
+    valid_to_rev = NULL where valid_to_rev = revision_id, then deletes the
+    revision. Returns True if a row was deleted.
+    """
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM ifc_products WHERE valid_from_rev = %s", (revision_id,))
+        cur.execute(
+            "UPDATE ifc_products SET valid_to_rev = NULL WHERE valid_to_rev = %s",
+            (revision_id,),
+        )
+        cur.execute("DELETE FROM revisions WHERE id = %s", (revision_id,))
+        return cur.rowcount > 0
+
+
 def fetch_filter_set(filter_set_id: int) -> dict | None:
     """Fetch a single filter set by id."""
     with get_cursor(dict_cursor=True) as cur:

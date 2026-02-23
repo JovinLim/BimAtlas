@@ -24,7 +24,10 @@ from ..db import (
     create_branch,
     create_filter_set as db_create_filter_set,
     create_project,
+    delete_branch as db_delete_branch,
     delete_filter_set as db_delete_filter_set,
+    delete_project as db_delete_project,
+    delete_revision as db_delete_revision,
     fetch_applied_filter_sets,
     fetch_branch,
     fetch_branches,
@@ -454,6 +457,21 @@ class Mutation:
             name=b["name"],
             created_at=_to_iso(b["created_at"]),
         )
+
+    @strawberry.mutation
+    async def delete_project(self, id: int) -> bool:
+        """Delete a project and all its branches, revisions, and model data."""
+        return db_delete_project(id)
+
+    @strawberry.mutation
+    async def delete_branch(self, id: int) -> bool:
+        """Delete a branch and all its revisions and model data."""
+        return db_delete_branch(id)
+
+    @strawberry.mutation
+    async def delete_revision(self, id: int) -> bool:
+        """Delete a revision and clean up referencing product rows."""
+        return db_delete_revision(id)
 
     # ---- Filter set mutations -----------------------------------------------
 

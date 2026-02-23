@@ -213,3 +213,6 @@ __marimo__/
 
 # Tests
 apps/tests/
+
+# Test files
+test_files/

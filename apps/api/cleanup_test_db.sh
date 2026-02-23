@@ -37,23 +37,35 @@ fi
 echo "✅ Test database exists"
 echo ""
 
-# Clear test graph
-echo "🧹 Clearing test graph..."
-docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -c "
+# Terminate active connections
+# This prevents "database is being accessed by other users" errors
+echo "🔌 Terminating active connections to '$TEST_DB_NAME'..."
+docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "postgres" -c \
+"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$TEST_DB_NAME' AND pid <> pg_backend_pid();" > /dev/null
+echo "✅ Connections cleared"
+
+# Reset Apache AGE Graph
+# Drop if exists (ignore error when graph doesn't exist), then create
+echo "🧹 Recreating Apache AGE graph..."
+docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -c "
     LOAD 'age';
     SET search_path = ag_catalog, \"\$user\", public;
-    SELECT * FROM cypher('bimatlas_test', \$\$MATCH (n) DETACH DELETE n\$\$) as (result agtype);
-" 2>/dev/null || echo "  ℹ️  Graph already empty or doesn't exist"
-echo "✅ Test graph cleared"
-echo ""
-
-# Truncate tables
-echo "🧹 Truncating test tables..."
-docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -c "
-    TRUNCATE TABLE ifc_products, revisions RESTART IDENTITY CASCADE;
+    DO \$\$
+    BEGIN
+        PERFORM drop_graph('$TEST_DB_NAME', true);
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'Graph $TEST_DB_NAME does not exist, skipping drop';
+    END \$\$;
+    SELECT create_graph('$TEST_DB_NAME');
 "
-echo "✅ Test tables truncated"
-echo ""
+echo "✅ Graph reset (metadata and data cleared)"
+
+# Truncate Relational Tables
+echo "🧹 Truncating relational tables and resetting IDs..."
+docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -c "
+    TRUNCATE TABLE ifc_products, revisions RESTART IDENTITY CASCADE;
+" > /dev/null
+echo "✅ Tables truncated & IDs reset"
 
 # Verify cleanup
 echo "🔍 Verifying cleanup..."

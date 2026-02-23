@@ -324,6 +324,22 @@ def close_edges_for_node(global_id: str, rev_id: int, branch_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Graph cleanup (branch/project deletion)
+# ---------------------------------------------------------------------------
+
+
+def delete_branch_graph_data(branch_id: int) -> None:
+    """Delete all graph nodes and edges for the given branch.
+
+    Used when deleting a branch or a project (called per branch). Uses
+    DETACH DELETE so edges are removed with their nodes.
+    """
+    b = int(branch_id)
+    cypher = f"MATCH (n {{branch_id: {b}}}) DETACH DELETE n RETURN true"
+    _exec_cypher_write(cypher)
+
+
+# ---------------------------------------------------------------------------
 # Public query functions
 # ---------------------------------------------------------------------------
 
