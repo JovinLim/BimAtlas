@@ -59,21 +59,22 @@ def _pack_geometry(
 ) -> bytes | None:
     """Pack separate geometry buffers into a single BYTEA blob.
 
-    Format: for each buffer in order (vertices, normals, faces, matrix),
-    write an unsigned 64-bit big-endian length followed by the raw bytes.
-    A length of 0 means the buffer is absent.
+    Format: four big-endian uint64 lengths (vertices, normals, faces, matrix)
+    followed by the raw buffers in order. A length of 0 means the buffer is
+    absent. Matches _unpack_geometry in schema/queries.py.
     """
     if not any((vertices, normals, faces, matrix)):
         return None
 
-    parts: list[bytes] = []
-    for buf in (vertices, normals, faces, matrix):
-        if not buf:
-            parts.append(struct.pack(">Q", 0))
-        else:
-            parts.append(struct.pack(">Q", len(buf)))
-            parts.append(buf)
-    return b"".join(parts)
+    lengths = [
+        len(vertices) if vertices else 0,
+        len(normals) if normals else 0,
+        len(faces) if faces else 0,
+        len(matrix) if matrix else 0,
+    ]
+    header = b"".join(struct.pack(">Q", n) for n in lengths)
+    buffers = [b for b in (vertices, normals, faces, matrix) if b]
+    return header + b"".join(buffers)
 
 
 def _build_containment_map(model: ifcopenshell.file) -> dict[str, str]:
