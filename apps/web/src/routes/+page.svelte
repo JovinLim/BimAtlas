@@ -82,15 +82,15 @@
 
   // ---- Project / Branch state ----
   interface ProjectData {
-    id: number;
+    id: string;
     name: string;
     description: string | null;
     createdAt: string;
     branches: BranchData[];
   }
   interface BranchData {
-    id: number;
-    projectId: number;
+    id: string;
+    projectId: string;
     name: string;
     createdAt: string;
   }
@@ -163,7 +163,7 @@
 
   // Load 3D geometry when revision changes and sceneManager is ready
   let lastFetchedRev: number | null = $state(null);
-  let lastFetchedBranchId: number | null = $state(null);
+  let lastFetchedBranchId: string | null = $state(null);
   $effect(() => {
     const rev = revisionState.activeRevision;
     const branchId = projectState.activeBranchId;
@@ -172,9 +172,6 @@
 
     // Only fetch if revision or branchId changed
     if (rev === lastFetchedRev && branchId === lastFetchedBranchId) return;
-
-    // Check loading state without tracking it
-    if (untrack(() => graphStore.loading)) return;
 
     lastFetchedRev = rev;
     lastFetchedBranchId = branchId;
@@ -346,7 +343,7 @@
     } satisfies SearchMessage);
   }
 
-  async function autoLoadAppliedFilterSets(branchId: number): Promise<boolean> {
+  async function autoLoadAppliedFilterSets(branchId: string): Promise<boolean> {
     try {
       const result = await client
         .query(APPLIED_FILTER_SETS_QUERY, { branchId })
@@ -370,7 +367,7 @@
   async function loadGeometryForActiveBranch(
     mgr: SceneManager,
     revision: number,
-    branchId: number,
+    branchId: string,
   ) {
     const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
     if (!hasAppliedSets) {
@@ -380,7 +377,7 @@
     await ensureTotalProductCount(branchId, revision);
   }
 
-  async function ensureTotalProductCount(branchId: number, revision: number) {
+  async function ensureTotalProductCount(branchId: string, revision: number) {
     const key = `${branchId}:${revision}`;
     if (totalCountKey === key) return;
     try {
@@ -521,7 +518,7 @@
     }
   }
 
-  function selectProject(projectId: number) {
+  function selectProject(projectId: string) {
     projectState.activeProjectId = projectId;
     const proj = projects.find((p) => p.id === projectId);
     const mainBranch = proj?.branches.find((b) => b.name === "main");
@@ -535,7 +532,7 @@
     }
   }
 
-  function selectBranch(branchId: number) {
+  function selectBranch(branchId: string) {
     projectState.activeBranchId = branchId;
     revisionState.activeRevision = null;
     sceneManager?.clearAll();
@@ -597,7 +594,7 @@
     }
   }
 
-  async function fetchLatestRevision(branchId: number) {
+  async function fetchLatestRevision(branchId: string) {
     try {
       const result = await client
         .query(REVISIONS_QUERY, { branchId })
@@ -605,7 +602,7 @@
 
       const revisions = result.data?.revisions || [];
       if (revisions.length > 0) {
-        const latest = Math.max(...revisions.map((r: any) => r.id));
+        const latest = Math.max(...revisions.map((r: { revisionSeq: number }) => r.revisionSeq));
         revisionState.activeRevision = latest;
       }
     } catch (err) {
@@ -615,7 +612,7 @@
 
   /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
   function streamQueryParams(
-    branchId: number,
+    branchId: string,
     revision: number,
     filterVars: Record<string, unknown>,
   ): URLSearchParams {
@@ -648,7 +645,7 @@
   async function loadGeometry(
     mgr: SceneManager,
     revision: number,
-    branchId: number,
+    branchId: string,
     filterVars: Record<string, unknown> = {},
   ) {
     if (loadingGeometry) return;
@@ -803,7 +800,7 @@
       }
 
       const result = await res.json();
-      revisionState.activeRevision = result.revision_id;
+      revisionState.activeRevision = result.revision_seq;
     } catch (err) {
       importError = err instanceof Error ? err.message : "Import failed";
     } finally {
@@ -840,7 +837,7 @@
             class="selector"
             value={projectState.activeProjectId}
             onchange={(e) =>
-              selectProject(Number((e.target as HTMLSelectElement).value))}
+              selectProject((e.target as HTMLSelectElement).value)}
           >
             {#each projects as p}
               <option value={p.id}>{p.name}</option>
@@ -858,7 +855,7 @@
             class="selector"
             value={projectState.activeBranchId}
             onchange={(e) =>
-              selectBranch(Number((e.target as HTMLSelectElement).value))}
+              selectBranch((e.target as HTMLSelectElement).value)}
           >
             {#each activeProject.branches as b}
               <option value={b.id}>{b.name}</option>

@@ -29,7 +29,7 @@ import psycopg2.extras
 
 from ...db import get_conn, put_conn
 from ..graph import age_client
-from .geometry import IfcProductRecord, extract_products_from_model
+from .geometry import IfcEntityRecord, extract_products_from_model
 
 logger = logging.getLogger("bimatlas.ingestion")
 
@@ -60,8 +60,9 @@ class IfcRelationshipRecord:
 class IngestionResult:
     """Summary of a completed ingestion run."""
 
-    revision_id: int
-    branch_id: int
+    revision_id: str
+    revision_seq: int
+    branch_id: str
     total_products: int
     added: int
     modified: int
@@ -180,23 +181,23 @@ def _extract_relationships(
 
 
 def _diff_products(
-    new_records: list[IfcProductRecord],
+    new_records: list[IfcEntityRecord],
     current_hashes: dict[str, str],
 ) -> tuple[
-    list[IfcProductRecord],  # added
-    list[IfcProductRecord],  # modified
+    list[IfcEntityRecord],  # added
+    list[IfcEntityRecord],  # modified
     set[str],  # deleted_gids
     set[str],  # unchanged_gids
-]:
-    """Diff new product records against the current revision's content hashes.
+    ]:
+    """Diff new entity records against the current revision's content hashes.
 
     Classification:
-      - **Added**: ``global_id`` not present in *current_hashes*.
-      - **Modified**: ``global_id`` present but ``content_hash`` differs.
-      - **Deleted**: ``global_id`` in *current_hashes* but not in *new_records*.
-      - **Unchanged**: same ``global_id`` and same ``content_hash``.
+      - **Added**: ``ifc_global_id`` not present in *current_hashes*.
+      - **Modified**: ``ifc_global_id`` present but ``content_hash`` differs.
+      - **Deleted**: ``ifc_global_id`` in *current_hashes* but not in *new_records*.
+      - **Unchanged**: same ``ifc_global_id`` and same ``content_hash``.
     """
-    new_by_gid: dict[str, IfcProductRecord] = {r.global_id: r for r in new_records}
+    new_by_gid: dict[str, IfcEntityRecord] = {r.ifc_global_id: r for r in new_records}
     new_gids = set(new_by_gid.keys())
     current_gids = set(current_hashes.keys())
 
@@ -226,69 +227,66 @@ def _diff_products(
 
 def _create_revision(
     cur,
-    branch_id: int,
+    branch_id: str,
     ifc_filename: str,
     label: str | None,
-) -> int:
-    """Insert a new revision row linked to a branch and return its id."""
+) -> tuple[str, int]:
+    """Insert a new revision row linked to a branch and return its id and seq."""
     cur.execute(
-        "INSERT INTO revisions (branch_id, label, ifc_filename) VALUES (%s, %s, %s) RETURNING id",
-        (branch_id, label, ifc_filename),
+        "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
+        "VALUES (%s, %s, %s) RETURNING revision_id, revision_seq",
+        (branch_id, ifc_filename, label),
     )
-    return cur.fetchone()[0]
+    revision_id, revision_seq = cur.fetchone()
+    return revision_id, int(revision_seq)
 
 
-def _load_current_hashes(cur, branch_id: int) -> dict[str, str]:
-    """Load ``global_id -> content_hash`` for all current (non-closed) products on a branch."""
+def _load_current_hashes(cur, branch_id: str) -> dict[str, str]:
+    """Load ``ifc_global_id -> content_hash`` for all current (non-closed) entities on a branch."""
     cur.execute(
-        "SELECT global_id, content_hash FROM ifc_products WHERE branch_id = %s AND valid_to_rev IS NULL",
+        "SELECT ifc_global_id, content_hash "
+        "FROM ifc_entity "
+        "WHERE branch_id = %s AND obsoleted_in_revision_id IS NULL",
         (branch_id,),
     )
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def _close_product_rows(cur, global_ids: list[str], rev_id: int, branch_id: int) -> None:
-    """Close SCD Type 2 rows for the given global_ids on a branch."""
+def _close_product_rows(cur, global_ids: list[str], revision_id: str, branch_id: str) -> None:
+    """Close SCD Type 2 rows for the given ifc_global_ids on a branch."""
     if not global_ids:
         return
     cur.execute(
-        "UPDATE ifc_products SET valid_to_rev = %s "
-        "WHERE branch_id = %s AND global_id = ANY(%s) AND valid_to_rev IS NULL",
-        (rev_id, branch_id, global_ids),
+        "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
+        "WHERE branch_id = %s AND ifc_global_id = ANY(%s) "
+        "AND obsoleted_in_revision_id IS NULL",
+        (revision_id, branch_id, global_ids),
     )
 
 
 def _insert_product_rows(
     cur,
-    records: list[IfcProductRecord],
-    rev_id: int,
-    branch_id: int,
+    records: list[IfcEntityRecord],
+    revision_id: str,
+    branch_id: str,
 ) -> None:
-    """Batch-insert product rows for a revision on a branch."""
+    """Batch-insert entity rows for a revision on a branch."""
     if not records:
         return
     psycopg2.extras.execute_values(
         cur,
-        "INSERT INTO ifc_products "
-        "(branch_id, global_id, ifc_class, name, description, object_type, tag, "
-        "contained_in, vertices, normals, faces, matrix, "
-        "content_hash, valid_from_rev) VALUES %s",
+        "INSERT INTO ifc_entity "
+        "(branch_id, ifc_global_id, ifc_class, attributes, geometry, "
+        "content_hash, created_in_revision_id) VALUES %s",
         [
             (
                 branch_id,
-                r.global_id,
+                r.ifc_global_id,
                 r.ifc_class,
-                r.name,
-                r.description,
-                r.object_type,
-                r.tag,
-                r.contained_in,
-                psycopg2.Binary(r.vertices) if r.vertices else None,
-                psycopg2.Binary(r.normals) if r.normals else None,
-                psycopg2.Binary(r.faces) if r.faces else None,
-                psycopg2.Binary(r.matrix) if r.matrix else None,
+                psycopg2.extras.Json(r.attributes),
+                psycopg2.Binary(r.geometry) if r.geometry is not None else None,
                 r.content_hash,
-                rev_id,
+                revision_id,
             )
             for r in records
         ],
@@ -300,28 +298,28 @@ def _insert_product_rows(
 # ---------------------------------------------------------------------------
 
 
-def _close_graph_entities(changed_gids: set[str], rev_id: int, branch_id: int) -> None:
+def _close_graph_entities(changed_gids: set[str], rev_seq: int, branch_id: str) -> None:
     """Close graph nodes and their edges for modified/deleted products on a branch."""
     for gid in changed_gids:
         try:
-            age_client.close_edges_for_node(gid, rev_id, branch_id)
+            age_client.close_edges_for_node(gid, rev_seq, branch_id)
         except Exception as exc:
             logger.warning("Failed to close edges for node %s: %s", gid, exc)
         try:
-            age_client.close_node(gid, rev_id, branch_id)
+            age_client.close_node(gid, rev_seq, branch_id)
         except Exception as exc:
             logger.warning("Failed to close graph node %s: %s", gid, exc)
 
 
-def _create_graph_nodes(records: list[IfcProductRecord], rev_id: int, branch_id: int) -> None:
+def _create_graph_nodes(records: list[IfcEntityRecord], rev_seq: int, branch_id: str) -> None:
     """Create revision-tagged, branch-scoped graph nodes for added/modified products."""
     for record in records:
         try:
             age_client.create_node(
                 ifc_class=record.ifc_class,
-                global_id=record.global_id,
-                name=record.name,
-                rev_id=rev_id,
+                global_id=record.ifc_global_id,
+                name=record.attributes.get("Name"),
+                rev_id=rev_seq,
                 branch_id=branch_id,
             )
         except Exception as exc:
@@ -337,8 +335,8 @@ def _create_graph_edges(
     relationships: list[IfcRelationshipRecord],
     changed_or_new_gids: set[str],
     all_new_gids: set[str],
-    rev_id: int,
-    branch_id: int,
+    rev_seq: int,
+    branch_id: str,
 ) -> int:
     """Create revision-tagged, branch-scoped graph edges for relationships.
 
@@ -363,7 +361,7 @@ def _create_graph_edges(
                 from_gid=rel.from_global_id,
                 to_gid=rel.to_global_id,
                 rel_type=rel.relationship_type,
-                rev_id=rev_id,
+                rev_id=rev_seq,
                 branch_id=branch_id,
             )
             created += 1
@@ -385,7 +383,7 @@ def _create_graph_edges(
 
 def ingest_ifc(
     ifc_path: str,
-    branch_id: int,
+    branch_id: str,
     label: str | None = None,
 ) -> IngestionResult:
     """Ingest an IFC file into a branch, creating a new revision with diff-aware SCD2 storage.
@@ -414,13 +412,13 @@ def ingest_ifc(
         An :class:`IngestionResult` summarising the ingestion.
     """
     ifc_filename = Path(ifc_path).name
-    logger.info("Starting ingestion of %s into branch %d", ifc_filename, branch_id)
+    logger.info("Starting ingestion of %s into branch %s", ifc_filename, branch_id)
 
     # ---- Phase 1: Extract from IFC ----------------------------------------
     model = ifcopenshell.open(ifc_path)
     records = extract_products_from_model(model)
     relationships = _extract_relationships(model)
-    new_by_gid: dict[str, IfcProductRecord] = {r.global_id: r for r in records}
+    new_by_gid: dict[str, IfcEntityRecord] = {r.ifc_global_id: r for r in records}
     all_new_gids = set(new_by_gid.keys())
 
     logger.info(
@@ -435,8 +433,14 @@ def ingest_ifc(
     try:
         with conn.cursor() as cur:
             # Step 2: Create revision on the branch
-            rev_id = _create_revision(cur, branch_id, ifc_filename, label)
-            logger.info("Created revision %d for %s on branch %d", rev_id, ifc_filename, branch_id)
+            revision_id, revision_seq = _create_revision(cur, branch_id, ifc_filename, label)
+            logger.info(
+                "Created revision %s (seq %d) for %s on branch %s",
+                revision_id,
+                revision_seq,
+                ifc_filename,
+                branch_id,
+            )
 
             # Step 3: Load current hashes for this branch & diff
             current_hashes = _load_current_hashes(cur, branch_id)
@@ -445,7 +449,7 @@ def ingest_ifc(
             )
             logger.info(
                 "Revision %d diff: %d added, %d modified, %d deleted, %d unchanged",
-                rev_id,
+                revision_seq,
                 len(added),
                 len(modified),
                 len(deleted_gids),
@@ -453,15 +457,15 @@ def ingest_ifc(
             )
 
             # Step 4: Close modified/deleted rows on this branch
-            close_gids = list(deleted_gids | {r.global_id for r in modified})
-            _close_product_rows(cur, close_gids, rev_id, branch_id)
+            close_gids = list(deleted_gids | {r.ifc_global_id for r in modified})
+            _close_product_rows(cur, close_gids, revision_id, branch_id)
 
             # Step 5: Insert added/modified rows on this branch
             insert_records = added + modified
-            _insert_product_rows(cur, insert_records, rev_id, branch_id)
+            _insert_product_rows(cur, insert_records, revision_id, branch_id)
 
         conn.commit()
-        logger.info("Relational changes committed for revision %d", rev_id)
+        logger.info("Relational changes committed for revision %s", revision_id)
     except Exception:
         conn.rollback()
         raise
@@ -469,8 +473,8 @@ def ingest_ifc(
         put_conn(conn)
 
     # ---- Phase 2 continued: Graph changes (best-effort) -------------------
-    modified_gids = {r.global_id for r in modified}
-    added_gids = {r.global_id for r in added}
+    modified_gids = {r.ifc_global_id for r in modified}
+    added_gids = {r.ifc_global_id for r in added}
     changed_or_new_gids = added_gids | modified_gids
 
     # Step 6: Close graph nodes + edges for modified/deleted
@@ -479,31 +483,32 @@ def ingest_ifc(
         logger.info(
             "Closing %d graph nodes (+ edges) for revision %d",
             len(gids_to_close),
-            rev_id,
+            revision_seq,
         )
-        _close_graph_entities(gids_to_close, rev_id, branch_id)
+        _close_graph_entities(gids_to_close, revision_seq, branch_id)
 
     # Step 7: Create graph nodes for added/modified
     if insert_records:
         logger.info(
             "Creating %d graph nodes for revision %d",
             len(insert_records),
-            rev_id,
+            revision_seq,
         )
-        _create_graph_nodes(insert_records, rev_id, branch_id)
+        _create_graph_nodes(insert_records, revision_seq, branch_id)
 
     # Step 8: Create edges for relationships involving changed products
     edges_created = _create_graph_edges(
-        relationships, changed_or_new_gids, all_new_gids, rev_id, branch_id
+        relationships, changed_or_new_gids, all_new_gids, revision_seq, branch_id
     )
     logger.info(
         "Created %d graph edges for revision %d",
         edges_created,
-        rev_id,
+        revision_seq,
     )
 
     result = IngestionResult(
-        revision_id=rev_id,
+        revision_id=revision_id,
+        revision_seq=revision_seq,
         branch_id=branch_id,
         total_products=len(records),
         added=len(added),

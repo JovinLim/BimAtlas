@@ -10,6 +10,7 @@ import logging
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import UUID
 
 import strawberry
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -20,8 +21,8 @@ from strawberry.fastapi import GraphQLRouter
 from .db import (
     close_pool,
     fetch_branch,
-    fetch_products_at_revision,
-    get_latest_revision_id,
+    fetch_entities_at_revision,
+    get_latest_revision_seq,
     init_pool,
 )
 from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
@@ -77,7 +78,7 @@ async def health():
 
 
 def _stream_ifc_products_generator(
-    branch_id: int,
+    branch_id: str,
     revision: int | None,
     ifc_class: str | None,
     ifc_classes: list[str] | None,
@@ -92,12 +93,12 @@ def _stream_ifc_products_generator(
     """Yield SSE events for IFC products stream."""
     rev = revision
     if rev is None:
-        rev = get_latest_revision_id(branch_id)
+        rev = get_latest_revision_seq(branch_id)
         if rev is None:
             yield f"data: {json.dumps({'type': 'error', 'message': 'No revisions on this branch'})}\n\n"
             return
 
-    rows = fetch_products_at_revision(
+    rows = fetch_entities_at_revision(
         rev,
         branch_id,
         ifc_class=ifc_class,
@@ -122,7 +123,7 @@ def _stream_ifc_products_generator(
 
 @app.get("/stream/ifc-products")
 async def stream_ifc_products(
-    branch_id: int = Query(..., description="Branch ID"),
+    branch_id: str = Query(..., description="Branch ID (UUID)"),
     revision: int | None = Query(None, description="Revision ID (default: latest)"),
     ifc_class: str | None = Query(None, description="Filter by IFC class"),
     ifc_classes: list[str] | None = Query(None, description="Filter by IFC classes"),
@@ -135,9 +136,14 @@ async def stream_ifc_products(
     relation_types: list[str] | None = Query(None, description="Filter by IFC relation types"),
 ):
     """Stream IFC products with geometry as Server-Sent Events.
-
+    
     Events: start { total }, product { product, current, total }, end.
     """
+    # Validate branch_id early to avoid DB casting errors
+    try:
+        UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
     return StreamingResponse(
         _stream_ifc_products_generator(
             branch_id=branch_id,
@@ -164,7 +170,7 @@ async def stream_ifc_products(
 @app.post("/upload-ifc")
 async def upload_ifc(
     file: UploadFile = File(...),
-    branch_id: int = Form(...),
+    branch_id: str = Form(...),
     label: str | None = Form(None),
 ):
     """Accept an IFC file upload, ingest it into a branch, and return the revision summary.
@@ -179,6 +185,12 @@ async def upload_ifc(
     """
     if not file.filename or not file.filename.lower().endswith(".ifc"):
         raise HTTPException(status_code=400, detail="Only .ifc files are accepted")
+
+    # Validate branch_id format early so invalid values return a clean 404
+    try:
+        UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
 
     # Verify branch exists
     branch = fetch_branch(branch_id)
@@ -201,6 +213,7 @@ async def upload_ifc(
 
     return {
         "revision_id": result.revision_id,
+        "revision_seq": result.revision_seq,
         "branch_id": result.branch_id,
         "total_products": result.total_products,
         "added": result.added,

@@ -45,7 +45,7 @@ BimAtlas/
       src/
         main.py                 # App entry, mounts Strawberry router
         config.py               # DB connection settings
-        db.py                   # Postgres/AGE connection pool + project/branch/product queries
+        db.py                   # Postgres/AGE connection pool + project/branch/entity queries (JSONB attributes)
         services/
           ifc/
             geometry.py         # IfcOpenShell mesh extraction
@@ -65,7 +65,7 @@ BimAtlas/
 
   infra/
     docker-compose.yml          # PostgreSQL/AGE + Adminer (DB web UI on :8080)
-    init-age.sql                # Bootstrap: AGE extension + versioned schema (projects, branches, revisions, products)
+    init-age.sql                # Bootstrap: AGE extension + schema (project, branch, revision, ifc_entity, filter_sets, etc.)
 ```
 
 ---
@@ -88,7 +88,7 @@ cd infra
 docker compose up -d
 ```
 
-This spins up a PostgreSQL instance with the Apache AGE graph extension, creates the `bimatlas` graph, and bootstraps the schema (projects, branches, revisions, ifc_products with SCD Type 2 columns). It also starts **Adminer**, a web interface for viewing and querying the PostgreSQL database.
+This spins up a PostgreSQL instance with the Apache AGE graph extension, creates the `bimatlas` graph, and bootstraps the schema (project, branch, revision, ifc_entity with JSONB attributes and SCD Type 2 columns, plus filter_sets, ifc_schema, validation_rule, merge_request, merge_conflict_log). It also starts **Adminer**, a web interface for viewing and querying the PostgreSQL database.
 
 **Viewing the database with Adminer**
 
@@ -171,13 +171,14 @@ Graph nodes are labeled by their IFC class name. Graph edges are labeled by thei
 
 ### Versioning (SCD Type 2, per Branch)
 
-Each IFC file upload creates a **revision** on a specific branch. Products are versioned using Slowly Changing Dimension Type 2, scoped per branch:
+Each IFC file upload creates a **revision** on a specific branch. Entities are versioned using Slowly Changing Dimension Type 2, scoped per branch:
 
-- Only changed/added products get new rows (detected via `content_hash` — SHA-256 of serialized attributes + geometry).
-- Unchanged products carry forward implicitly via their open `valid_to_rev IS NULL` window.
-- The AGE graph mirrors this with `branch_id`, `valid_from_rev` / `valid_to_rev` properties on every node and edge.
-- All GraphQL queries require a `branchId` and accept an optional `revision` parameter, defaulting to latest on that branch.
-- The `revisionDiff` query computes added/modified/deleted sets between any two revisions on the same branch.
+- Only changed/added entities get new rows (detected via `content_hash` — SHA-256 of serialized attributes + geometry).
+- Unchanged entities carry forward implicitly via their open `obsoleted_in_revision_id IS NULL` window.
+- Revisions use a UUID primary key (`revision_id`) plus a monotonic `revision_seq` (SERIAL) for temporal ordering.
+- The AGE graph mirrors this with `branch_id` (UUID string) and `revision_seq` on every node and edge.
+- All GraphQL queries require a `branchId` (UUID string) and accept an optional `revision` (revision_seq integer), defaulting to latest on that branch.
+- The `revisionDiff` query computes added/modified/deleted sets between any two revision sequences on the same branch.
 
 ### Two-Phase Ingestion
 
@@ -186,13 +187,13 @@ Each IFC file upload creates a **revision** on a specific branch. Products are v
 
 ### Geometry Pipeline
 
-IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (transforms baked in). Meshes are stored as PostgreSQL BYTEA columns (vertices, normals, faces as typed arrays), serialized through GraphQL as Base64 strings via a custom Strawberry scalar, and decoded on the frontend into `THREE.BufferGeometry`.
+IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (transforms baked in). Meshes are stored as a single PostgreSQL BYTEA column (`ifc_entity.geometry`) with vertices, normals, faces and matrix packed in a defined binary format, serialized through GraphQL as Base64 via a custom Strawberry scalar, and decoded on the frontend into `THREE.BufferGeometry`.
 
 ### Hybrid Storage
 
-- **Relational table (`ifc_products`):** IFC attributes and binary geometry blobs for efficient retrieval. Scoped by `branch_id`.
-- **AGE graph:** Topology and relationships where each vertex is labeled by IFC class and edges by IFC relationship entity name. All nodes/edges carry `branch_id` for branch scoping. Enables Cypher traversals for relations, spatial trees, and connectivity queries.
-- **GraphQL resolver** joins both sources into a unified `IfcProduct` response.
+- **Relational table (`ifc_entity`):** UUID primary keys; IFC attributes in a single **JSONB** column (`attributes`) for flexible querying (GIN index); one **geometry BYTEA** column per entity. Scoped by `branch_id` with `created_in_revision_id` / `obsoleted_in_revision_id` for SCD Type 2.
+- **AGE graph:** Topology and relationships where each vertex is labeled by IFC class and edges by IFC relationship entity name. Nodes/edges carry `branch_id` (UUID string) and `revision_seq` for temporal filtering. Enables Cypher traversals for relations, spatial trees, and connectivity queries.
+- **GraphQL resolver** joins both sources into a unified `IfcProduct` response (IDs and attributes resolved from JSONB).
 
 ---
 
@@ -204,7 +205,7 @@ IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (tr
 
 ```graphql
 query {
-  ifcProduct(branchId: 1, globalId: "2O2Fr$t4X7Zf8NOew3FL9r") {
+  ifcProduct(branchId: "550e8400-e29b-41d4-a716-446655440000", globalId: "2O2Fr$t4X7Zf8NOew3FL9r") {
     globalId
     ifcClass
     name
@@ -231,7 +232,7 @@ query {
 
 ```graphql
 query {
-  spatialTree(branchId: 1) {
+  spatialTree(branchId: "550e8400-e29b-41d4-a716-446655440000") {
     globalId
     ifcClass
     name
@@ -249,22 +250,22 @@ query {
 }
 ```
 
-**Time-travel to a specific revision on a branch:**
+**Time-travel to a specific revision on a branch (revision = revision_seq integer):**
 
 ```graphql
 query {
-  ifcProducts(branchId: 1, ifcClass: "IfcWall", revision: 2) {
+  ifcProducts(branchId: "550e8400-e29b-41d4-a716-446655440000", ifcClass: "IfcWall", revision: 2) {
     globalId
     name
   }
 }
 ```
 
-**Diff between revisions on a branch:**
+**Diff between revisions on a branch (fromRev/toRev = revision_seq):**
 
 ```graphql
 query {
-  revisionDiff(branchId: 1, fromRev: 1, toRev: 3) {
+  revisionDiff(branchId: "550e8400-e29b-41d4-a716-446655440000", fromRev: 1, toRev: 3) {
     added {
       globalId
       ifcClass
@@ -287,7 +288,7 @@ query {
 }
 ```
 
-**List all projects:**
+**List all projects (IDs are UUIDs):**
 
 ```graphql
 query {
@@ -322,24 +323,24 @@ mutation {
 
 ```graphql
 mutation {
-  createBranch(projectId: 1, name: "structural-update") {
+  createBranch(projectId: "550e8400-e29b-41d4-a716-446655440000", name: "structural-update") {
     id
     name
   }
 }
 ```
 
-**Delete project, branch, or revision (mutations):**
+**Delete project, branch, or revision (mutations; IDs are UUID strings):**
 
 ```graphql
 mutation {
-  deleteProject(id: 1)
+  deleteProject(id: "550e8400-e29b-41d4-a716-446655440000")
 }
 mutation {
-  deleteBranch(id: 2)
+  deleteBranch(id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 }
 mutation {
-  deleteRevision(id: 3)
+  deleteRevision(id: "7c9e6679-7425-40de-944b-e07fc1f90ae7")
 }
 ```
 
@@ -374,6 +375,7 @@ Product search supports three filter modes:
 | `USE_WORLD_COORDS`            | Eliminates client-side transform matrix application; simpler Three.js code          |
 | Snippet extensibility         | `Viewport.svelte` accepts `Snippet` props for pluggable UI without subclassing      |
 | AGE + relational hybrid       | Attributes/blobs in SQL for fast retrieval; topology in graph for Cypher traversals |
+| JSONB attributes on ifc_entity| Single flexible column for IFC attributes; GIN index for filter/query performance   |
 | SCD Type 2 + tagged graph     | Avoids duplicating 100k+ unchanged elements per revision; enables full time-travel  |
 | Spatial structure first-class | Enforces IFC 4.3 constraint: one physical element per single spatial container      |
 

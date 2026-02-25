@@ -18,7 +18,7 @@ from src.services.ifc.ingestion import (
     _close_product_rows,
     _insert_product_rows,
 )
-from src.services.ifc.geometry import IfcProductRecord
+from src.services.ifc.geometry import IfcEntityRecord
 
 
 class TestRelationshipExtraction:
@@ -68,32 +68,18 @@ class TestDiffEngine:
     def test_diff_products_all_added(self):
         """Test diff when all products are new."""
         new_records = [
-            IfcProductRecord(
-                global_id="0000000000000000000001",
+            IfcEntityRecord(
+                ifc_global_id="0000000000000000000001",
                 ifc_class="IfcWall",
-                name="Wall-1",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
+                attributes={"Name": "Wall-1"},
+                geometry=None,
                 content_hash="hash1",
             ),
-            IfcProductRecord(
-                global_id="0000000000000000000002",
+            IfcEntityRecord(
+                ifc_global_id="0000000000000000000002",
                 ifc_class="IfcSlab",
-                name="Slab-1",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
+                attributes={"Name": "Slab-1"},
+                geometry=None,
                 content_hash="hash2",
             ),
         ]
@@ -109,23 +95,16 @@ class TestDiffEngine:
         assert len(deleted_gids) == 0
         assert len(unchanged_gids) == 0
         
-        assert added[0].global_id in ["0000000000000000000001", "0000000000000000000002"]
+        assert added[0].ifc_global_id in ["0000000000000000000001", "0000000000000000000002"]
     
     def test_diff_products_all_unchanged(self):
         """Test diff when all products are unchanged."""
         new_records = [
-            IfcProductRecord(
-                global_id="0000000000000000000001",
+            IfcEntityRecord(
+                ifc_global_id="0000000000000000000001",
                 ifc_class="IfcWall",
-                name="Wall-1",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
+                attributes={"Name": "Wall-1"},
+                geometry=None,
                 content_hash="hash1",
             ),
         ]
@@ -145,19 +124,12 @@ class TestDiffEngine:
     def test_diff_products_modified(self):
         """Test diff when products are modified."""
         new_records = [
-            IfcProductRecord(
-                global_id="0000000000000000000001",
+            IfcEntityRecord(
+                ifc_global_id="0000000000000000000001",
                 ifc_class="IfcWall",
-                name="Wall-1-Updated",  # Name changed
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
-                content_hash="hash1_new",  # Different hash
+                attributes={"Name": "Wall-1-Updated"},
+                geometry=None,
+                content_hash="hash1_new",
             ),
         ]
         
@@ -171,7 +143,7 @@ class TestDiffEngine:
         assert len(modified) == 1
         assert len(deleted_gids) == 0
         assert len(unchanged_gids) == 0
-        assert modified[0].global_id == "0000000000000000000001"
+        assert modified[0].ifc_global_id == "0000000000000000000001"
     
     def test_diff_products_deleted(self):
         """Test diff when products are deleted."""
@@ -196,51 +168,9 @@ class TestDiffEngine:
     def test_diff_products_mixed(self):
         """Test diff with mixed changes."""
         new_records = [
-            # Unchanged
-            IfcProductRecord(
-                global_id="0000000000000000000001",
-                ifc_class="IfcWall",
-                name="Wall-1",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
-                content_hash="hash1",
-            ),
-            # Modified
-            IfcProductRecord(
-                global_id="0000000000000000000002",
-                ifc_class="IfcSlab",
-                name="Slab-1-Updated",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
-                content_hash="hash2_new",
-            ),
-            # Added
-            IfcProductRecord(
-                global_id="0000000000000000000004",
-                ifc_class="IfcDoor",
-                name="Door-1",
-                description=None,
-                object_type=None,
-                tag=None,
-                contained_in=None,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
-                content_hash="hash4",
-            ),
+            IfcEntityRecord(ifc_global_id="0000000000000000000001", ifc_class="IfcWall", attributes={"Name": "Wall-1"}, geometry=None, content_hash="hash1"),
+            IfcEntityRecord(ifc_global_id="0000000000000000000002", ifc_class="IfcSlab", attributes={"Name": "Slab-1-Updated"}, geometry=None, content_hash="hash2_new"),
+            IfcEntityRecord(ifc_global_id="0000000000000000000004", ifc_class="IfcDoor", attributes={"Name": "Door-1"}, geometry=None, content_hash="hash4"),
         ]
         
         current_hashes = {
@@ -258,8 +188,8 @@ class TestDiffEngine:
         assert len(deleted_gids) == 1
         assert len(unchanged_gids) == 1
         
-        assert added[0].global_id == "0000000000000000000004"
-        assert modified[0].global_id == "0000000000000000000002"
+        assert added[0].ifc_global_id == "0000000000000000000004"
+        assert modified[0].ifc_global_id == "0000000000000000000002"
         assert "0000000000000000000003" in deleted_gids
         assert "0000000000000000000001" in unchanged_gids
 
@@ -280,12 +210,12 @@ class TestDatabaseOperations:
             
             # Verify revision was created
             with conn.cursor() as cur:
-                cur.execute("SELECT id, branch_id, label, ifc_filename FROM revisions WHERE id = %s", (rev_id,))
+                cur.execute("SELECT revision_id, branch_id, commit_message, ifc_filename FROM revision WHERE revision_id = %s", (rev_id,))
                 row = cur.fetchone()
             
             assert row is not None
             assert row[0] == rev_id
-            assert row[1] == branch_id
+            assert str(row[1]) == str(branch_id)
             assert row[2] == "Test revision"
             assert row[3] == "test.ifc"
         finally:
@@ -318,20 +248,13 @@ class TestDatabaseOperations:
                 rev_id = _create_revision(cur, branch_id, "test.ifc", None)
                 conn.commit()
             
-            # Insert products
+            # Insert entities (rev_id from _create_revision is revision_id UUID)
             records = [
-                IfcProductRecord(
-                    global_id="0000000000000000000001",
+                IfcEntityRecord(
+                    ifc_global_id="0000000000000000000001",
                     ifc_class="IfcWall",
-                    name="Wall-1",
-                    description=None,
-                    object_type=None,
-                    tag=None,
-                    contained_in=None,
-                    vertices=None,
-                    normals=None,
-                    faces=None,
-                    matrix=None,
+                    attributes={"Name": "Wall-1"},
+                    geometry=None,
                     content_hash="hash1",
                 ),
             ]
@@ -342,7 +265,7 @@ class TestDatabaseOperations:
             
             # Verify products were inserted
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM ifc_products WHERE valid_from_rev = %s", (rev_id,))
+                cur.execute("SELECT COUNT(*) FROM ifc_entity WHERE created_in_revision_id = %s", (rev_id,))
                 count = cur.fetchone()[0]
             
             assert count == 1
@@ -362,18 +285,11 @@ class TestDatabaseOperations:
                 conn.commit()
             
             records = [
-                IfcProductRecord(
-                    global_id="0000000000000000000001",
+                IfcEntityRecord(
+                    ifc_global_id="0000000000000000000001",
                     ifc_class="IfcWall",
-                    name="Wall-1",
-                    description=None,
-                    object_type=None,
-                    tag=None,
-                    contained_in=None,
-                    vertices=None,
-                    normals=None,
-                    faces=None,
-                    matrix=None,
+                    attributes={"Name": "Wall-1"},
+                    geometry=None,
                     content_hash="hash1",
                 ),
             ]
@@ -394,13 +310,13 @@ class TestDatabaseOperations:
             # Verify product was closed
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT valid_to_rev FROM ifc_products WHERE global_id = %s AND branch_id = %s",
+                    "SELECT obsoleted_in_revision_id FROM ifc_entity WHERE ifc_global_id = %s AND branch_id = %s",
                     ("0000000000000000000001", branch_id)
                 )
                 row = cur.fetchone()
             
             assert row is not None
-            assert row[0] == rev_id_2
+            assert str(row[0]) == str(rev_id_2)
         finally:
             put_conn(conn)
 
@@ -414,7 +330,7 @@ class TestFullIngestion:
         result = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Initial import")
         
         assert isinstance(result, IngestionResult)
-        assert result.revision_id >= 1
+        assert result.revision_id is not None and isinstance(result.revision_id, str)
         assert result.branch_id == branch_id
         assert result.total_products > 0
         assert result.added == result.total_products  # All products are added
@@ -432,7 +348,7 @@ class TestFullIngestion:
         # Second import (same file)
         result2 = ingest_ifc(str(test_ifc_file), branch_id=branch_id, label="Import 2")
         
-        assert result2.revision_id > result1.revision_id
+        assert result2.revision_id != result1.revision_id
         assert result2.total_products == result1.total_products
         assert result2.added == 0
         assert result2.modified == 0
@@ -450,14 +366,14 @@ class TestFullIngestion:
         try:
             # Check revision was created
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM revisions WHERE branch_id = %s", (branch_id,))
+                cur.execute("SELECT COUNT(*) FROM revision WHERE branch_id = %s", (branch_id,))
                 rev_count = cur.fetchone()[0]
             assert rev_count == 1
             
             # Check products were inserted
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM ifc_products WHERE branch_id = %s AND valid_to_rev IS NULL",
+                    "SELECT COUNT(*) FROM ifc_entity WHERE branch_id = %s AND obsoleted_in_revision_id IS NULL",
                     (branch_id,),
                 )
                 product_count = cur.fetchone()[0]
@@ -466,12 +382,12 @@ class TestFullIngestion:
             # Check products have valid data
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT global_id, ifc_class, content_hash FROM ifc_products WHERE branch_id = %s LIMIT 1",
+                    "SELECT ifc_global_id, ifc_class, content_hash FROM ifc_entity WHERE branch_id = %s LIMIT 1",
                     (branch_id,),
                 )
                 row = cur.fetchone()
             assert row is not None
-            assert len(row[0]) == 22  # global_id
+            assert len(row[0]) == 22  # ifc_global_id
             assert row[1].startswith("Ifc")  # ifc_class
             assert len(row[2]) == 64  # content_hash (SHA-256)
         finally:
@@ -493,7 +409,7 @@ class TestFullIngestion:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT label FROM revisions WHERE id = %s", (result.revision_id,))
+                cur.execute("SELECT commit_message FROM revision WHERE revision_id = %s", (result.revision_id,))
                 row = cur.fetchone()
             
             assert row is not None
@@ -523,7 +439,7 @@ class TestEdgeCases:
             
             # Verify no products were inserted
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM ifc_products")
+                cur.execute("SELECT COUNT(*) FROM ifc_entity")
                 count = cur.fetchone()[0]
             assert count == 0
         finally:
