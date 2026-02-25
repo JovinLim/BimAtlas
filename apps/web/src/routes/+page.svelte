@@ -668,29 +668,33 @@
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let streamEnded = false;
+      let startTotal = 0;
+      let productEventsWithMesh = 0;
 
       if (!reader) {
         throw new Error("No response body");
       }
 
-      while (true) {
+      while (!streamEnded) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        if (done && !buffer.trim()) break;
+        if (value) buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
         buffer = lines.pop() ?? "";
 
         for (const chunk of lines) {
-          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          const dataMatch = chunk.match(/^data:\s*(.+)$/s);
           if (!dataMatch) continue;
           try {
-            const data = JSON.parse(dataMatch[1]);
+            const data = JSON.parse(dataMatch[1].trim());
             if (data.type === "error") {
               console.error("Stream error:", data.message);
               return;
             }
             if (data.type === "start") {
-              loadingGeometryTotal = data.total ?? 0;
+              startTotal = data.total ?? 0;
+              loadingGeometryTotal = startTotal;
               continue;
             }
             if (data.type === "product") {
@@ -710,6 +714,7 @@
                     product.mesh as RawMeshData,
                   );
                   mgr.addElement(product.globalId, geometry);
+                  productEventsWithMesh += 1;
                 } catch (err) {
                   console.warn(
                     `Failed to load geometry for ${product.globalId}:`,
@@ -721,19 +726,21 @@
               continue;
             }
             if (data.type === "end") {
+              streamEnded = true;
               break;
             }
           } catch (e) {
             console.warn("Parse stream chunk:", e);
           }
         }
+        if (done || streamEnded) break;
       }
 
       if (buffer.trim()) {
-        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        const dataMatch = buffer.match(/^data:\s*(.+)$/s);
         if (dataMatch) {
           try {
-            const data = JSON.parse(dataMatch[1]);
+            const data = JSON.parse(dataMatch[1].trim());
             if (data.type === "product") {
               const product = data.product;
               metaList.push({
@@ -750,11 +757,21 @@
                     product.mesh as RawMeshData,
                   );
                   mgr.addElement(product.globalId, geometry);
+                  productEventsWithMesh += 1;
                 } catch (_) {}
               }
             }
           } catch (_) {}
         }
+      }
+
+      if (import.meta.env.DEV && (startTotal > 0 || metaList.length > 0)) {
+        console.debug("[geometry] stream done:", {
+          startTotal,
+          productMetaCount: metaList.length,
+          productEventsWithMesh,
+          sceneElementCount: mgr.elementCount,
+        });
       }
 
       searchState.setProducts(metaList);
