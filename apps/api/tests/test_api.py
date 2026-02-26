@@ -6,6 +6,7 @@ Tests the main.py API endpoints using FastAPI's test client.
 import io
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from fastapi import status
@@ -14,15 +15,15 @@ from src import db
 
 
 @pytest.fixture
-def api_branch(client) -> int:
+def api_branch(client) -> str:
     """Create a test project+branch via the API and return the branch_id.
 
     Uses the DB helpers (pool is already initialised by the ``client`` fixture
     chain) so every API test that needs to upload gets a fresh branch.
     """
     project = db.create_project("API Test Project")
-    branches = db.fetch_branches(project["id"])
-    return branches[0]["id"]
+    branches = db.fetch_branches(project["project_id"])
+    return str(branches[0]["branch_id"])
 
 
 class TestHealthEndpoint:
@@ -52,6 +53,7 @@ class TestUploadIfcEndpoint:
 
         data = response.json()
         assert "revision_id" in data
+        assert "revision_seq" in data
         assert "branch_id" in data
         assert "total_products" in data
         assert "added" in data
@@ -105,8 +107,8 @@ class TestUploadIfcEndpoint:
         assert response2.status_code == status.HTTP_200_OK
         data2 = response2.json()
 
-        # Second import should detect no changes
-        assert data2["revision_id"] > data1["revision_id"]
+        # Second import should detect no changes (revision_seq increases; revision_id is UUID)
+        assert data2["revision_seq"] > data1["revision_seq"]
         assert data2["total_products"] == data1["total_products"]
         assert data2["added"] == 0
         assert data2["unchanged"] == data1["total_products"]
@@ -190,8 +192,9 @@ END-ISO-10303-21;
         data = response.json()
 
         # Verify types
-        assert isinstance(data["revision_id"], int)
-        assert isinstance(data["branch_id"], int)
+        assert isinstance(data["revision_id"], str)
+        assert isinstance(data["revision_seq"], int)
+        assert isinstance(data["branch_id"], str)
         assert isinstance(data["total_products"], int)
         assert isinstance(data["added"], int)
         assert isinstance(data["modified"], int)
@@ -199,9 +202,13 @@ END-ISO-10303-21;
         assert isinstance(data["unchanged"], int)
         assert isinstance(data["edges_created"], int)
 
-        # Verify value ranges
-        assert data["revision_id"] > 0
+        # Basic UUID sanity (will raise if malformed)
+        UUID(data["revision_id"])
+        UUID(data["branch_id"])
+
+        # Verify value ranges / consistency
         assert data["branch_id"] == api_branch
+        assert data["revision_seq"] > 0
         assert data["total_products"] >= 0
         assert data["added"] >= 0
         assert data["modified"] >= 0
@@ -320,9 +327,9 @@ class TestConcurrency:
         for response in responses:
             assert response.status_code == status.HTTP_200_OK
 
-        # Revision IDs should increment
-        revision_ids = [r.json()["revision_id"] for r in responses]
-        assert revision_ids[0] < revision_ids[1] < revision_ids[2]
+        # Revision sequence should increment (revision_id is UUID, not ordered)
+        revision_seqs = [r.json()["revision_seq"] for r in responses]
+        assert revision_seqs[0] < revision_seqs[1] < revision_seqs[2]
 
 
 class TestIntegration:
@@ -349,7 +356,7 @@ class TestIntegration:
             # Check revision
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT label, ifc_filename FROM revisions WHERE id = %s",
+                    "SELECT commit_message, ifc_filename FROM revision WHERE revision_id = %s",
                     (data["revision_id"],),
                 )
                 row = cur.fetchone()
@@ -358,10 +365,10 @@ class TestIntegration:
             assert row[0] == "Integration Test"
             assert test_ifc_file.name in row[1]
 
-            # Check products count matches
+            # Check entities count matches
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM ifc_products WHERE valid_from_rev = %s",
+                    "SELECT COUNT(*) FROM ifc_entity WHERE created_in_revision_id = %s",
                     (data["revision_id"],),
                 )
                 count = cur.fetchone()[0]
@@ -389,7 +396,7 @@ class TestIntegration:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM revisions WHERE branch_id = %s",
+                    "SELECT COUNT(*) FROM revision WHERE branch_id = %s",
                     (api_branch,),
                 )
                 count = cur.fetchone()[0]

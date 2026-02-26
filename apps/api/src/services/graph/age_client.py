@@ -59,15 +59,17 @@ def _escape_cypher_string(value: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _rev_filter(alias: str, rev: int, branch_id: int) -> str:
+def _rev_filter(alias: str, rev: int, branch_id: str) -> str:
     """Generate a Cypher WHERE clause for revision-scoped, branch-scoped visibility.
 
-    AGE uses ``-1`` instead of NULL for open-ended ``valid_to_rev``.
+    AGE uses ``-1`` instead of NULL for open-ended ``valid_to_rev``.  The *rev*
+    parameter is the integer ``revision_seq``; *branch_id* is stored as a UUID
+    string property on nodes and edges.
     """
     r = int(rev)
-    b = int(branch_id)
+    b = _escape_cypher_string(str(branch_id))
     return (
-        f"{alias}.branch_id = {b} "
+        f"{alias}.branch_id = '{b}' "
         f"AND {alias}.valid_from_rev <= {r} "
         f"AND ({alias}.valid_to_rev = -1 OR {alias}.valid_to_rev > {r})"
     )
@@ -232,7 +234,7 @@ def create_node(
     global_id: str,
     name: str | None,
     rev_id: int,
-    branch_id: int,
+    branch_id: str,
 ) -> None:
     """Create a revision-tagged, branch-scoped graph node labeled by its IFC class.
 
@@ -243,12 +245,12 @@ def create_node(
     gid = _validate_id(global_id)
     safe_name = _escape_cypher_string(name)
     r = int(rev_id)
-    b = int(branch_id)
+    b = _escape_cypher_string(str(branch_id))
     cypher = (
         f"CREATE (n:{ifc_class} {{"
-        f"global_id: '{gid}', "
+        f"ifc_global_id: '{gid}', "
         f"name: '{safe_name}', "
-        f"branch_id: {b}, "
+        f"branch_id: '{b}', "
         f"valid_from_rev: {r}, "
         f"valid_to_rev: -1"
         f"}}) RETURN id(n)"
@@ -256,7 +258,7 @@ def create_node(
     _exec_cypher_write(cypher)
 
 
-def close_node(global_id: str, rev_id: int, branch_id: int) -> None:
+def close_node(global_id: str, rev_id: int, branch_id: str) -> None:
     """Close a graph node by setting ``valid_to_rev``.
 
     Matches the **current** version of the node on the specified branch
@@ -264,9 +266,9 @@ def close_node(global_id: str, rev_id: int, branch_id: int) -> None:
     """
     gid = _validate_id(global_id)
     r = int(rev_id)
-    b = int(branch_id)
+    b = _escape_cypher_string(str(branch_id))
     cypher = (
-        f"MATCH (n {{global_id: '{gid}', branch_id: {b}, valid_to_rev: -1}}) "
+        f"MATCH (n {{ifc_global_id: '{gid}', branch_id: '{b}', valid_to_rev: -1}}) "
         f"SET n.valid_to_rev = {r} "
         f"RETURN id(n)"
     )
@@ -278,7 +280,7 @@ def create_edge(
     to_gid: str,
     rel_type: str,
     rev_id: int,
-    branch_id: int,
+    branch_id: str,
 ) -> None:
     """Create a revision-tagged, branch-scoped edge between two **current** nodes.
 
@@ -288,17 +290,17 @@ def create_edge(
     f_gid = _validate_id(from_gid)
     t_gid = _validate_id(to_gid)
     r = int(rev_id)
-    b = int(branch_id)
+    b = _escape_cypher_string(str(branch_id))
     cypher = (
-        f"MATCH (a {{global_id: '{f_gid}', branch_id: {b}, valid_to_rev: -1}}), "
-        f"(b {{global_id: '{t_gid}', branch_id: {b}, valid_to_rev: -1}}) "
-        f"CREATE (a)-[r:{rel_type} {{branch_id: {b}, valid_from_rev: {r}, valid_to_rev: -1}}]->(b) "
+        f"MATCH (a {{ifc_global_id: '{f_gid}', branch_id: '{b}', valid_to_rev: -1}}), "
+        f"(b {{ifc_global_id: '{t_gid}', branch_id: '{b}', valid_to_rev: -1}}) "
+        f"CREATE (a)-[r:{rel_type} {{branch_id: '{b}', valid_from_rev: {r}, valid_to_rev: -1}}]->(b) "
         f"RETURN id(r)"
     )
     _exec_cypher_write(cypher)
 
 
-def close_edges_for_node(global_id: str, rev_id: int, branch_id: int) -> None:
+def close_edges_for_node(global_id: str, rev_id: int, branch_id: str) -> None:
     """Close all **current** edges (incoming and outgoing) for a node on a branch.
 
     Matches edges with ``valid_to_rev = -1`` and matching ``branch_id``
@@ -306,17 +308,17 @@ def close_edges_for_node(global_id: str, rev_id: int, branch_id: int) -> None:
     """
     gid = _validate_id(global_id)
     r = int(rev_id)
-    b = int(branch_id)
+    b = _escape_cypher_string(str(branch_id))
     # Close outgoing edges
     cypher_out = (
-        f"MATCH ({{global_id: '{gid}', branch_id: {b}}})-[r {{branch_id: {b}, valid_to_rev: -1}}]->() "
+        f"MATCH ({{ifc_global_id: '{gid}', branch_id: '{b}'}})-[r {{branch_id: '{b}', valid_to_rev: -1}}]->() "
         f"SET r.valid_to_rev = {r} "
         f"RETURN id(r)"
     )
     _exec_cypher_write(cypher_out)
     # Close incoming edges
     cypher_in = (
-        f"MATCH ({{global_id: '{gid}', branch_id: {b}}})<-[r {{branch_id: {b}, valid_to_rev: -1}}]-() "
+        f"MATCH ({{ifc_global_id: '{gid}', branch_id: '{b}'}})<-[r {{branch_id: '{b}', valid_to_rev: -1}}]-() "
         f"SET r.valid_to_rev = {r} "
         f"RETURN id(r)"
     )
@@ -328,14 +330,14 @@ def close_edges_for_node(global_id: str, rev_id: int, branch_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def delete_branch_graph_data(branch_id: int) -> None:
+def delete_branch_graph_data(branch_id: str) -> None:
     """Delete all graph nodes and edges for the given branch.
 
     Used when deleting a branch or a project (called per branch). Uses
     DETACH DELETE so edges are removed with their nodes.
     """
-    b = int(branch_id)
-    cypher = f"MATCH (n {{branch_id: {b}}}) DETACH DELETE n RETURN true"
+    b = _escape_cypher_string(str(branch_id))
+    cypher = f"MATCH (n {{branch_id: '{b}'}}) DETACH DELETE n RETURN true"
     _exec_cypher_write(cypher)
 
 
@@ -344,7 +346,7 @@ def delete_branch_graph_data(branch_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_relations(global_id: str, rev: int, branch_id: int) -> list[dict]:
+def get_relations(global_id: str, rev: int, branch_id: str) -> list[dict]:
     """Return outgoing **and** incoming relations of *global_id* at *rev* on *branch_id*.
 
     Each dict has keys: ``global_id``, ``ifc_class``, ``name``,
@@ -379,7 +381,7 @@ def get_relations(global_id: str, rev: int, branch_id: int) -> list[dict]:
 
 
 def get_product_ids_by_relation(
-    rel_type: str, rev: int, branch_id: int,
+    rel_type: str, rev: int, branch_id: str,
 ) -> list[str]:
     """Return global_ids of all products participating in edges of *rel_type*."""
     label = _validate_label(rel_type)
@@ -392,7 +394,7 @@ def get_product_ids_by_relation(
     return [row[0] for row in _exec_cypher(cypher, cols)]
 
 
-def get_spatial_tree_roots(rev: int, branch_id: int) -> list[dict]:
+def get_spatial_tree_roots(rev: int, branch_id: str) -> list[dict]:
     """Return ``IfcProject`` root nodes visible at *rev* on *branch_id*."""
     cypher = cypher_tpl.SPATIAL_ROOTS.format(p_filter=_rev_filter("p", rev, branch_id))
     cols = ["gid", "lbl", "name"]
@@ -402,7 +404,7 @@ def get_spatial_tree_roots(rev: int, branch_id: int) -> list[dict]:
     ]
 
 
-def get_spatial_children(global_id: str, rev: int, branch_id: int) -> list[dict]:
+def get_spatial_children(global_id: str, rev: int, branch_id: str) -> list[dict]:
     """Return direct spatial children (via ``IfcRelAggregates``) of *global_id*."""
     gid = _validate_id(global_id)
     cypher = cypher_tpl.SPATIAL_CHILDREN.format(
@@ -418,7 +420,7 @@ def get_spatial_children(global_id: str, rev: int, branch_id: int) -> list[dict]
     ]
 
 
-def get_contained_elements(spatial_global_id: str, rev: int, branch_id: int) -> list[dict]:
+def get_contained_elements(spatial_global_id: str, rev: int, branch_id: str) -> list[dict]:
     """Return elements contained in a spatial structure node at *rev* on *branch_id*."""
     gid = _validate_id(spatial_global_id)
     cypher = cypher_tpl.CONTAINED_ELEMENTS.format(
@@ -439,7 +441,7 @@ def get_contained_elements(spatial_global_id: str, rev: int, branch_id: int) -> 
 # ---------------------------------------------------------------------------
 
 
-def build_spatial_tree(rev: int, branch_id: int) -> list[dict]:
+def build_spatial_tree(rev: int, branch_id: str) -> list[dict]:
     """Build the full spatial decomposition tree at *rev* on *branch_id*.
 
     Returns a list of root nodes (``IfcProject``), each with recursive
@@ -449,7 +451,7 @@ def build_spatial_tree(rev: int, branch_id: int) -> list[dict]:
     return [_build_subtree(node, rev, branch_id) for node in roots]
 
 
-def _build_subtree(node: dict, rev: int, branch_id: int) -> dict:
+def _build_subtree(node: dict, rev: int, branch_id: str) -> dict:
     """Recursively expand a spatial node into a tree dict."""
     children_data = get_spatial_children(node["global_id"], rev, branch_id)
     contained = get_contained_elements(node["global_id"], rev, branch_id)

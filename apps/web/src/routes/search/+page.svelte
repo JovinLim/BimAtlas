@@ -26,8 +26,8 @@
   } from "$lib/api/client";
 
   // ---- Branch context (received from main window) ----
-  let branchId = $state<number | null>(null);
-  let projectId = $state<number | null>(null);
+  let branchId = $state<string | null>(null);
+  let projectId = $state<string | null>(null);
 
   // ---- Filter editor state ----
   let filterSetEditorOpen = $state(false);
@@ -90,27 +90,27 @@
   let searchQuery = $state("");
   let searchScope = $state<SearchScope>("project");
   let browserFilterSets = $state<FilterSet[]>([]);
-  let selectedSetIds = $state<Set<number>>(new Set());
+  let selectedSetIds = $state<Set<string>>(new Set());
   let combinationLogic = $state<"AND" | "OR">("OR");
   let appliedFilterSets = $state<FilterSet[]>([]);
-  let collapsedAppliedIds = $state<Set<number>>(new Set());
-  let appliedNameDrafts = $state<Record<number, string>>({});
-  const appliedNameInputs: Record<number, HTMLInputElement | null> = {};
+  let collapsedAppliedIds = $state<Set<string>>(new Set());
+  let appliedNameDrafts = $state<Record<string, string>>({});
+  const appliedNameInputs: Record<string, HTMLInputElement | null> = {};
   let editingAppliedFilterKey = $state<string | null>(null);
   let editingAppliedFilterDraft = $state<SearchFilter | null>(null);
 
-  function toggleAppliedItem(id: number) {
+  function toggleAppliedItem(id: string) {
     const next = new Set(collapsedAppliedIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     collapsedAppliedIds = next;
   }
 
-  let lastAppliedSetIds = new Set<number>();
+  let lastAppliedSetIds = new Set<string>();
   $effect(() => {
     const sets = appliedFilterSets;
     if (sets.length === 0) {
-      lastAppliedSetIds = new Set();
+      lastAppliedSetIds = new Set<string>();
       return;
     }
     const newIds = new Set(sets.map((fs) => fs.id));
@@ -192,7 +192,7 @@
     }
   }
 
-  function toggleSetSelection(id: number) {
+  function toggleSetSelection(id: string) {
     const next = new Set(selectedSetIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -210,7 +210,7 @@
   }
 
   async function updateFilterSet(
-    id: number,
+    id: string,
     name: string,
     logic: "AND" | "OR",
     nextFilters: SearchFilter[],
@@ -260,7 +260,7 @@
     }
   }
 
-  async function handleDeleteFilterSet(id: number) {
+  async function handleDeleteFilterSet(id: string) {
     try {
       await client.mutation(DELETE_FILTER_SET_MUTATION, { id }).toPromise();
       const next = new Set(selectedSetIds);
@@ -287,7 +287,7 @@
     return appliedNameDrafts[fs.id] ?? fs.name;
   }
 
-  function setAppliedName(id: number, value: string) {
+  function setAppliedName(id: string, value: string) {
     appliedNameDrafts = { ...appliedNameDrafts, [id]: value };
   }
 
@@ -408,7 +408,7 @@
 
   async function handleApplySelected() {
     if (!branchId) return;
-    const mergedIds = new Set<number>([
+    const mergedIds = new Set<string>([
       ...appliedFilterSets.map((fs) => fs.id),
       ...selectedSetIds,
     ]);
@@ -436,7 +436,7 @@
     }
   }
 
-  async function handleUnapplyFilterSet(filterSetId: number) {
+  async function handleUnapplyFilterSet(filterSetId: string) {
     if (!branchId) return;
     const remainingIds = appliedFilterSets
       .filter((fs) => fs.id !== filterSetId)
@@ -498,14 +498,8 @@
     // Restore branch/project from URL so filter sets load after refresh
     const urlBranch = $page.url.searchParams.get("branchId");
     const urlProject = $page.url.searchParams.get("projectId");
-    if (urlBranch != null) {
-      const bid = parseInt(urlBranch, 10);
-      if (!Number.isNaN(bid)) branchId = bid;
-    }
-    if (urlProject != null) {
-      const pid = parseInt(urlProject, 10);
-      if (!Number.isNaN(pid)) projectId = pid;
-    }
+    if (urlBranch != null && urlBranch !== "") branchId = urlBranch;
+    if (urlProject != null && urlProject !== "") projectId = urlProject;
     // Fallback: recover branch/project from persisted app settings
     if (branchId == null) {
       const settings = loadSettings();

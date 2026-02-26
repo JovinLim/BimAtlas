@@ -2,9 +2,13 @@
 
 Provides a threaded connection pool, a cursor context-manager that handles
 commit/rollback, and revision-scoped query functions for the SCD Type 2
-``ifc_products`` table, the ``revisions`` table, the ``projects`` /
-``branches`` tables, and the ``filter_sets`` / ``branch_applied_filter_sets``
+``ifc_entity`` table, the ``revision`` table, the ``project`` /
+``branch`` tables, and the ``filter_sets`` / ``branch_applied_filter_sets``
 tables.
+
+Temporal queries use ``revision_seq`` (a monotonic SERIAL on ``revision``)
+for SCD Type 2 range comparisons, joined via the UUID FK columns
+``created_in_revision_id`` / ``obsoleted_in_revision_id`` on ``ifc_entity``.
 """
 
 from __future__ import annotations
@@ -104,15 +108,18 @@ def create_project(name: str, description: str | None = None) -> dict:
     """Create a new project with a default 'main' branch. Returns the project dict."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "INSERT INTO projects (name, description) VALUES (%s, %s) RETURNING id, name, description, created_at",
+            "INSERT INTO project (name, description) "
+            "VALUES (%s, %s) "
+            "RETURNING project_id, name, description, created_at",
             (name, description),
         )
         project = dict(cur.fetchone())
 
-        # Auto-create the default "main" branch
         cur.execute(
-            "INSERT INTO branches (project_id, name) VALUES (%s, 'main') RETURNING id, project_id, name, created_at",
-            (project["id"],),
+            "INSERT INTO branch (project_id, name) "
+            "VALUES (%s, 'main') "
+            "RETURNING branch_id, project_id, name, is_active, created_at",
+            (project["project_id"],),
         )
     return project
 
@@ -121,16 +128,18 @@ def fetch_projects() -> list[dict]:
     """Return all projects ordered by created_at descending."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, name, description, created_at FROM projects ORDER BY created_at DESC"
+            "SELECT project_id, name, description, created_at "
+            "FROM project ORDER BY created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
 
 
-def fetch_project(project_id: int) -> dict | None:
+def fetch_project(project_id: str) -> dict | None:
     """Return a single project by id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, name, description, created_at FROM projects WHERE id = %s",
+            "SELECT project_id, name, description, created_at "
+            "FROM project WHERE project_id = %s",
             (project_id,),
         )
         row = cur.fetchone()
@@ -142,42 +151,47 @@ def fetch_project(project_id: int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def create_branch(project_id: int, name: str) -> dict:
+def create_branch(project_id: str, name: str) -> dict:
     """Create a new branch within a project. Returns the branch dict."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "INSERT INTO branches (project_id, name) VALUES (%s, %s) RETURNING id, project_id, name, created_at",
+            "INSERT INTO branch (project_id, name) "
+            "VALUES (%s, %s) "
+            "RETURNING branch_id, project_id, name, is_active, created_at",
             (project_id, name),
         )
         return dict(cur.fetchone())
 
 
-def fetch_branches(project_id: int) -> list[dict]:
+def fetch_branches(project_id: str) -> list[dict]:
     """Return all branches for a project, ordered by created_at."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, project_id, name, created_at FROM branches WHERE project_id = %s ORDER BY created_at ASC",
+            "SELECT branch_id, project_id, name, is_active, created_at "
+            "FROM branch WHERE project_id = %s ORDER BY created_at ASC",
             (project_id,),
         )
         return [dict(r) for r in cur.fetchall()]
 
 
-def fetch_branch(branch_id: int) -> dict | None:
+def fetch_branch(branch_id: str) -> dict | None:
     """Return a single branch by id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, project_id, name, created_at FROM branches WHERE id = %s",
+            "SELECT branch_id, project_id, name, is_active, created_at "
+            "FROM branch WHERE branch_id = %s",
             (branch_id,),
         )
         row = cur.fetchone()
         return dict(row) if row else None
 
 
-def fetch_branch_by_name(project_id: int, name: str) -> dict | None:
+def fetch_branch_by_name(project_id: str, name: str) -> dict | None:
     """Return a branch by project_id and name."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, project_id, name, created_at FROM branches WHERE project_id = %s AND name = %s",
+            "SELECT branch_id, project_id, name, is_active, created_at "
+            "FROM branch WHERE project_id = %s AND name = %s",
             (project_id, name),
         )
         row = cur.fetchone()
@@ -189,53 +203,71 @@ def fetch_branch_by_name(project_id: int, name: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def get_latest_revision_id(branch_id: int) -> int | None:
-    """Return the most recent revision id for a branch, or ``None`` if none exist."""
+def get_latest_revision_seq(branch_id: str) -> int | None:
+    """Return the highest ``revision_seq`` for a branch, or ``None`` if none exist."""
     with get_cursor() as cur:
-        cur.execute("SELECT MAX(id) FROM revisions WHERE branch_id = %s", (branch_id,))
+        cur.execute(
+            "SELECT MAX(revision_seq) FROM revision WHERE branch_id = %s",
+            (branch_id,),
+        )
         row = cur.fetchone()
         return row[0] if row else None
 
 
-def fetch_revisions(branch_id: int) -> list[dict]:
-    """Return all revisions for a branch, ordered by id ascending."""
+def fetch_revisions(branch_id: str) -> list[dict]:
+    """Return all revisions for a branch, ordered by revision_seq ascending."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT id, branch_id, label, ifc_filename, created_at "
-            "FROM revisions WHERE branch_id = %s ORDER BY id ASC",
+            "SELECT revision_id, branch_id, revision_seq, parent_revision_id, "
+            "ifc_filename, commit_message, author_id, created_at "
+            "FROM revision WHERE branch_id = %s ORDER BY revision_seq ASC",
             (branch_id,),
         )
         return [dict(r) for r in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
-# Product queries -- branch + revision scoped (SCD Type 2)
+# Entity queries -- branch + revision scoped (SCD Type 2)
 # ---------------------------------------------------------------------------
+# Temporal visibility is determined by joining ifc_entity with revision to
+# compare revision_seq values.  _ENTITY_FROM provides the base FROM clause
+# with the necessary JOINs; _REV_FILTER provides the WHERE fragment.
 
-_PRODUCT_COLS = (
-    "global_id, ifc_class, name, description, object_type, tag, "
-    "contained_in, vertices, normals, faces, matrix"
+_ENTITY_COLS = (
+    "e.ifc_global_id, e.ifc_class, e.attributes, e.geometry"
 )
 
-_REV_FILTER = "valid_from_rev <= %s AND (valid_to_rev IS NULL OR valid_to_rev > %s)"
+_ENTITY_FROM = (
+    "ifc_entity e "
+    "JOIN revision r_cr ON e.created_in_revision_id = r_cr.revision_id "
+    "LEFT JOIN revision r_ob ON e.obsoleted_in_revision_id = r_ob.revision_id"
+)
+
+_REV_FILTER = (
+    "r_cr.revision_seq <= %s "
+    "AND (e.obsoleted_in_revision_id IS NULL OR r_ob.revision_seq > %s)"
+)
 
 
-def fetch_product_at_revision(global_id: str, rev: int, branch_id: int) -> dict | None:
-    """Fetch a single product visible at *rev* on *branch_id*."""
+def fetch_entity_at_revision(
+    ifc_global_id: str, rev: int, branch_id: str,
+) -> dict | None:
+    """Fetch a single entity visible at *rev* on *branch_id*."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_PRODUCT_COLS} FROM ifc_products "
-            f"WHERE global_id = %s AND branch_id = %s AND {_REV_FILTER} LIMIT 1",
-            (global_id, branch_id, rev, rev),
+            f"SELECT {_ENTITY_COLS} FROM {_ENTITY_FROM} "
+            f"WHERE e.ifc_global_id = %s AND e.branch_id = %s AND {_REV_FILTER} "
+            f"LIMIT 1",
+            (ifc_global_id, branch_id, rev, rev),
         )
         row = cur.fetchone()
         return dict(row) if row else None
 
 
 def _resolve_relation_gids(
-    relation_types: list[str], rev: int, branch_id: int,
+    relation_types: list[str], rev: int, branch_id: str,
 ) -> list[str]:
-    """Query the AGE graph for product global_ids connected via *relation_types*."""
+    """Query the AGE graph for entity global_ids connected via *relation_types*."""
     from .services.graph.age_client import get_product_ids_by_relation
 
     all_gids: set[str] = set()
@@ -244,9 +276,9 @@ def _resolve_relation_gids(
     return list(all_gids)
 
 
-def fetch_products_at_revision(
+def fetch_entities_at_revision(
     rev: int,
-    branch_id: int,
+    branch_id: str,
     ifc_class: str | None = None,
     ifc_classes: list[str] | None = None,
     contained_in: str | None = None,
@@ -257,53 +289,58 @@ def fetch_products_at_revision(
     global_id: str | None = None,
     relation_types: list[str] | None = None,
 ) -> list[dict]:
-    """List products visible at *rev* on *branch_id*, optionally filtered."""
-    clauses: list[str] = ["branch_id = %s", _REV_FILTER]
+    """List entities visible at *rev* on *branch_id*, optionally filtered."""
+    clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
     if ifc_classes is not None and len(ifc_classes) > 0:
-        clauses.append("ifc_class = ANY(%s)")
+        clauses.append("e.ifc_class = ANY(%s)")
         params.append(ifc_classes)
     elif ifc_class is not None:
-        clauses.append("ifc_class = %s")
+        clauses.append("e.ifc_class = %s")
         params.append(ifc_class)
     if contained_in is not None:
-        clauses.append("contained_in = %s")
+        clauses.append("e.attributes->>'ContainedIn' = %s")
         params.append(contained_in)
     if name is not None:
-        clauses.append("name ILIKE %s")
+        clauses.append("e.attributes->>'Name' ILIKE %s")
         params.append(f"%{name}%")
     if object_type is not None:
-        clauses.append("object_type ILIKE %s")
+        clauses.append("e.attributes->>'ObjectType' ILIKE %s")
         params.append(f"%{object_type}%")
     if tag is not None:
-        clauses.append("tag ILIKE %s")
+        clauses.append("e.attributes->>'Tag' ILIKE %s")
         params.append(f"%{tag}%")
     if description is not None:
-        clauses.append("description ILIKE %s")
+        clauses.append("e.attributes->>'Description' ILIKE %s")
         params.append(f"%{description}%")
     if global_id is not None:
-        clauses.append("global_id ILIKE %s")
+        clauses.append("e.ifc_global_id ILIKE %s")
         params.append(f"%{global_id}%")
     if relation_types:
         gids = _resolve_relation_gids(relation_types, rev, branch_id)
         if gids:
-            clauses.append("global_id = ANY(%s)")
+            clauses.append("e.ifc_global_id = ANY(%s)")
             params.append(gids)
         else:
             return []
 
     where = " AND ".join(clauses)
     with get_cursor(dict_cursor=True) as cur:
-        cur.execute(f"SELECT {_PRODUCT_COLS} FROM ifc_products WHERE {where}", params)
+        cur.execute(
+            f"SELECT {_ENTITY_COLS} FROM {_ENTITY_FROM} WHERE {where}",
+            params,
+        )
         return [dict(r) for r in cur.fetchall()]
 
 
-def fetch_spatial_container(contained_in_gid: str | None, rev: int, branch_id: int) -> dict | None:
+def fetch_spatial_container(
+    contained_in_gid: str | None, rev: int, branch_id: str,
+) -> dict | None:
     """Fetch the spatial container for an element (by contained_in GlobalId)."""
     if not contained_in_gid:
         return None
-    return fetch_product_at_revision(contained_in_gid, rev, branch_id)
+    return fetch_entity_at_revision(contained_in_gid, rev, branch_id)
 
 
 # ---------------------------------------------------------------------------
@@ -311,26 +348,31 @@ def fetch_spatial_container(contained_in_gid: str | None, rev: int, branch_id: i
 # ---------------------------------------------------------------------------
 
 
-def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
-    """Compare visible products between *from_rev* and *to_rev* on a branch.
+def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: str) -> dict:
+    """Compare visible entities between *from_rev* and *to_rev* on a branch.
 
     Returns ``{"added": [...], "modified": [...], "deleted": [...]}`` where
-    each element is a dict with ``global_id``, ``ifc_class``, ``name``.
+    each element is a dict with ``ifc_global_id``, ``ifc_class``, ``name``.
     """
     with get_cursor(dict_cursor=True) as cur:
         # Added: visible at to_rev but not at from_rev
         cur.execute(
-            "SELECT t.global_id, t.ifc_class, t.name "
-            "FROM ifc_products t "
+            "SELECT t.ifc_global_id, t.ifc_class, "
+            "t.attributes->>'Name' AS name "
+            "FROM ifc_entity t "
+            "JOIN revision t_cr ON t.created_in_revision_id = t_cr.revision_id "
+            "LEFT JOIN revision t_ob ON t.obsoleted_in_revision_id = t_ob.revision_id "
             "WHERE t.branch_id = %s "
-            "  AND t.valid_from_rev <= %s "
-            "  AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s) "
+            "  AND t_cr.revision_seq <= %s "
+            "  AND (t.obsoleted_in_revision_id IS NULL OR t_ob.revision_seq > %s) "
             "  AND NOT EXISTS ("
-            "      SELECT 1 FROM ifc_products f "
+            "      SELECT 1 FROM ifc_entity f "
+            "      JOIN revision f_cr ON f.created_in_revision_id = f_cr.revision_id "
+            "      LEFT JOIN revision f_ob ON f.obsoleted_in_revision_id = f_ob.revision_id "
             "      WHERE f.branch_id = %s "
-            "        AND f.global_id = t.global_id "
-            "        AND f.valid_from_rev <= %s "
-            "        AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s)"
+            "        AND f.ifc_global_id = t.ifc_global_id "
+            "        AND f_cr.revision_seq <= %s "
+            "        AND (f.obsoleted_in_revision_id IS NULL OR f_ob.revision_seq > %s)"
             "  )",
             (branch_id, to_rev, to_rev, branch_id, from_rev, from_rev),
         )
@@ -338,17 +380,22 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
 
         # Deleted: visible at from_rev but not at to_rev
         cur.execute(
-            "SELECT f.global_id, f.ifc_class, f.name "
-            "FROM ifc_products f "
+            "SELECT f.ifc_global_id, f.ifc_class, "
+            "f.attributes->>'Name' AS name "
+            "FROM ifc_entity f "
+            "JOIN revision f_cr ON f.created_in_revision_id = f_cr.revision_id "
+            "LEFT JOIN revision f_ob ON f.obsoleted_in_revision_id = f_ob.revision_id "
             "WHERE f.branch_id = %s "
-            "  AND f.valid_from_rev <= %s "
-            "  AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s) "
+            "  AND f_cr.revision_seq <= %s "
+            "  AND (f.obsoleted_in_revision_id IS NULL OR f_ob.revision_seq > %s) "
             "  AND NOT EXISTS ("
-            "      SELECT 1 FROM ifc_products t "
+            "      SELECT 1 FROM ifc_entity t "
+            "      JOIN revision t_cr ON t.created_in_revision_id = t_cr.revision_id "
+            "      LEFT JOIN revision t_ob ON t.obsoleted_in_revision_id = t_ob.revision_id "
             "      WHERE t.branch_id = %s "
-            "        AND t.global_id = f.global_id "
-            "        AND t.valid_from_rev <= %s "
-            "        AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s)"
+            "        AND t.ifc_global_id = f.ifc_global_id "
+            "        AND t_cr.revision_seq <= %s "
+            "        AND (t.obsoleted_in_revision_id IS NULL OR t_ob.revision_seq > %s)"
             "  )",
             (branch_id, from_rev, from_rev, branch_id, to_rev, to_rev),
         )
@@ -356,14 +403,20 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
 
         # Modified: visible at both but with different content_hash
         cur.execute(
-            "SELECT t.global_id, t.ifc_class, t.name "
-            "FROM ifc_products t "
-            "JOIN ifc_products f ON t.global_id = f.global_id "
-            "WHERE t.branch_id = %s AND f.branch_id = %s "
-            "  AND t.valid_from_rev <= %s "
-            "  AND (t.valid_to_rev IS NULL OR t.valid_to_rev > %s) "
-            "  AND f.valid_from_rev <= %s "
-            "  AND (f.valid_to_rev IS NULL OR f.valid_to_rev > %s) "
+            "SELECT t.ifc_global_id, t.ifc_class, "
+            "t.attributes->>'Name' AS name "
+            "FROM ifc_entity t "
+            "JOIN revision t_cr ON t.created_in_revision_id = t_cr.revision_id "
+            "LEFT JOIN revision t_ob ON t.obsoleted_in_revision_id = t_ob.revision_id "
+            "JOIN ifc_entity f "
+            "  ON t.ifc_global_id = f.ifc_global_id AND f.branch_id = %s "
+            "JOIN revision f_cr ON f.created_in_revision_id = f_cr.revision_id "
+            "LEFT JOIN revision f_ob ON f.obsoleted_in_revision_id = f_ob.revision_id "
+            "WHERE t.branch_id = %s "
+            "  AND t_cr.revision_seq <= %s "
+            "  AND (t.obsoleted_in_revision_id IS NULL OR t_ob.revision_seq > %s) "
+            "  AND f_cr.revision_seq <= %s "
+            "  AND (f.obsoleted_in_revision_id IS NULL OR f_ob.revision_seq > %s) "
             "  AND t.content_hash != f.content_hash",
             (branch_id, branch_id, to_rev, to_rev, from_rev, from_rev),
         )
@@ -376,48 +429,26 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: int) -> dict:
 # Filter set CRUD
 # ---------------------------------------------------------------------------
 
-_FILTER_SET_COLS = "id, branch_id, name, logic, filters, created_at, updated_at"
+_FILTER_SET_COLS = (
+    "filter_set_id, branch_id, name, logic, filters, created_at, updated_at"
+)
 
 
 def create_filter_set(
-    branch_id: int, name: str, logic: str, filters_json: list[dict],
+    branch_id: str, name: str, logic: str, filters_json: list[dict],
 ) -> dict:
     """Create a new filter set on a branch. Returns the new row."""
-    # #region agent log
-    _log_path = "/home/jovin/projects/BimAtlas/.cursor/debug-69dfaf.log"
-    import time as _time
-    _ts = int(_time.time() * 1000)
-    try:
-        with open(_log_path, "a") as _f:
-            _f.write(
-                '{"sessionId":"69dfaf","id":"log_create_fs_entry","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set entry","data":{"branch_id":%s,"name":"%s"},"hypothesisId":"A"}\n'
-                % (_ts, branch_id, name.replace('"', '\\"'))
-            )
-    except Exception:
-        pass
-    # #endregion
-    try:
-        with get_cursor(dict_cursor=True) as cur:
-            cur.execute(
-                f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
-                f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
-                (branch_id, name, logic, json.dumps(filters_json)),
-            )
-            return dict(cur.fetchone())
-    except Exception as e:  # #region agent log
-        try:
-            with open(_log_path, "a") as _f:
-                _f.write(
-                    '{"sessionId":"69dfaf","id":"log_create_fs_err","timestamp":%d,"location":"db.py:create_filter_set","message":"create_filter_set exception","data":{"error":"%s"},"hypothesisId":"A"}\n'
-                    % (int(_time.time() * 1000), str(e).replace('"', '\\"').replace("\n", " "))
-                )
-        except Exception:
-            pass
-        raise  # #endregion
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
+            f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
+            (branch_id, name, logic, json.dumps(filters_json)),
+        )
+        return dict(cur.fetchone())
 
 
 def update_filter_set(
-    filter_set_id: int,
+    filter_set_id: str,
     name: str | None = None,
     logic: str | None = None,
     filters_json: list[dict] | None = None,
@@ -437,7 +468,7 @@ def update_filter_set(
     params.append(filter_set_id)
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"UPDATE filter_sets SET {', '.join(sets)} WHERE id = %s "
+            f"UPDATE filter_sets SET {', '.join(sets)} WHERE filter_set_id = %s "
             f"RETURNING {_FILTER_SET_COLS}",
             params,
         )
@@ -445,10 +476,12 @@ def update_filter_set(
         return dict(row) if row else None
 
 
-def delete_filter_set(filter_set_id: int) -> bool:
+def delete_filter_set(filter_set_id: str) -> bool:
     """Delete a filter set by id. Returns True if a row was deleted."""
     with get_cursor() as cur:
-        cur.execute("DELETE FROM filter_sets WHERE id = %s", (filter_set_id,))
+        cur.execute(
+            "DELETE FROM filter_sets WHERE filter_set_id = %s", (filter_set_id,),
+        )
         return cur.rowcount > 0
 
 
@@ -457,69 +490,77 @@ def delete_filter_set(filter_set_id: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def delete_project(project_id: int) -> bool:
+def delete_project(project_id: str) -> bool:
     """Delete a project and all its branches, revisions, and graph data.
 
     Fetches branch IDs for graph cleanup, deletes AGE graph data per branch,
-    then deletes the project (CASCADE removes branches, revisions, ifc_products,
+    then deletes the project (CASCADE removes branches, revisions, ifc_entity,
     filter_sets). Returns True if a row was deleted.
     """
     from .services.graph.age_client import delete_branch_graph_data
 
     with get_cursor(dict_cursor=True) as cur:
-        cur.execute("SELECT id FROM branches WHERE project_id = %s", (project_id,))
-        branch_ids = [r["id"] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT branch_id FROM branch WHERE project_id = %s", (project_id,),
+        )
+        branch_ids = [r["branch_id"] for r in cur.fetchall()]
     for bid in branch_ids:
         delete_branch_graph_data(bid)
     with get_cursor() as cur:
-        cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+        cur.execute("DELETE FROM project WHERE project_id = %s", (project_id,))
         return cur.rowcount > 0
 
 
-def delete_branch(branch_id: int) -> bool:
+def delete_branch(branch_id: str) -> bool:
     """Delete a branch and all its revisions and graph data.
 
     Deletes AGE graph data for the branch, then deletes the branch (CASCADE
-    removes revisions, ifc_products, filter_sets). Returns True if a row was
+    removes revisions, ifc_entity, filter_sets). Returns True if a row was
     deleted.
     """
     from .services.graph.age_client import delete_branch_graph_data
 
     delete_branch_graph_data(branch_id)
     with get_cursor() as cur:
-        cur.execute("DELETE FROM branches WHERE id = %s", (branch_id,))
+        cur.execute("DELETE FROM branch WHERE branch_id = %s", (branch_id,))
         return cur.rowcount > 0
 
 
-def delete_revision(revision_id: int) -> bool:
-    """Delete a revision and clean up ifc_products that reference it.
+def delete_revision(revision_id: str) -> bool:
+    """Delete a revision and clean up ifc_entity rows that reference it.
 
-    Removes ifc_products rows where valid_from_rev = revision_id, sets
-    valid_to_rev = NULL where valid_to_rev = revision_id, then deletes the
+    Removes ifc_entity rows where created_in_revision_id = revision_id, sets
+    obsoleted_in_revision_id = NULL where it matched, then deletes the
     revision. Returns True if a row was deleted.
     """
     with get_cursor() as cur:
-        cur.execute("DELETE FROM ifc_products WHERE valid_from_rev = %s", (revision_id,))
         cur.execute(
-            "UPDATE ifc_products SET valid_to_rev = NULL WHERE valid_to_rev = %s",
+            "DELETE FROM ifc_entity WHERE created_in_revision_id = %s",
             (revision_id,),
         )
-        cur.execute("DELETE FROM revisions WHERE id = %s", (revision_id,))
+        cur.execute(
+            "UPDATE ifc_entity SET obsoleted_in_revision_id = NULL "
+            "WHERE obsoleted_in_revision_id = %s",
+            (revision_id,),
+        )
+        cur.execute(
+            "DELETE FROM revision WHERE revision_id = %s", (revision_id,),
+        )
         return cur.rowcount > 0
 
 
-def fetch_filter_set(filter_set_id: int) -> dict | None:
+def fetch_filter_set(filter_set_id: str) -> dict | None:
     """Fetch a single filter set by id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_FILTER_SET_COLS} FROM filter_sets WHERE id = %s",
+            f"SELECT {_FILTER_SET_COLS} FROM filter_sets WHERE filter_set_id = %s",
             (filter_set_id,),
         )
         row = cur.fetchone()
         return dict(row) if row else None
 
 
-def fetch_filter_sets_for_branch(branch_id: int) -> list[dict]:
+def fetch_filter_sets_for_branch(branch_id: str) -> list[dict]:
     """Return all filter sets for a branch, newest first."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
@@ -532,8 +573,8 @@ def fetch_filter_sets_for_branch(branch_id: int) -> list[dict]:
 
 def search_filter_sets(
     query: str,
-    branch_id: int | None = None,
-    project_id: int | None = None,
+    branch_id: str | None = None,
+    project_id: str | None = None,
 ) -> list[dict]:
     """Search filter sets by name with optional scope narrowing.
 
@@ -552,13 +593,13 @@ def search_filter_sets(
         params.append(project_id)
 
     needs_join = project_id is not None and branch_id is None
-    join = "JOIN branches b ON fs.branch_id = b.id" if needs_join else ""
+    join = "JOIN branch b ON fs.branch_id = b.branch_id" if needs_join else ""
     where = " AND ".join(clauses)
 
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT fs.id, fs.branch_id, fs.name, fs.logic, fs.filters, "
-            f"fs.created_at, fs.updated_at "
+            f"SELECT fs.filter_set_id, fs.branch_id, fs.name, fs.logic, "
+            f"fs.filters, fs.created_at, fs.updated_at "
             f"FROM filter_sets fs {join} WHERE {where} ORDER BY fs.updated_at DESC",
             params,
         )
@@ -571,7 +612,7 @@ def search_filter_sets(
 
 
 def apply_filter_sets(
-    branch_id: int, filter_set_ids: list[int], combination_logic: str,
+    branch_id: str, filter_set_ids: list[str], combination_logic: str,
 ) -> None:
     """Replace the applied filter sets for a branch."""
     with get_cursor() as cur:
@@ -587,18 +628,18 @@ def apply_filter_sets(
             )
 
 
-def fetch_applied_filter_sets(branch_id: int) -> dict:
+def fetch_applied_filter_sets(branch_id: str) -> dict:
     """Return the currently applied filter sets for a branch.
 
     Returns ``{"filter_sets": [...], "combination_logic": "AND"|"OR"}``.
     """
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT ba.combination_logic, ba.filter_set_id, "
-            f"fs.id, fs.branch_id, fs.name, fs.logic, fs.filters, "
-            f"fs.created_at, fs.updated_at "
+            "SELECT ba.combination_logic, "
+            "fs.filter_set_id, fs.branch_id, fs.name, fs.logic, fs.filters, "
+            "fs.created_at, fs.updated_at "
             "FROM branch_applied_filter_sets ba "
-            "JOIN filter_sets fs ON ba.filter_set_id = fs.id "
+            "JOIN filter_sets fs ON ba.filter_set_id = fs.filter_set_id "
             "WHERE ba.branch_id = %s ORDER BY ba.applied_at ASC",
             (branch_id,),
         )
@@ -610,7 +651,7 @@ def fetch_applied_filter_sets(branch_id: int) -> dict:
     combination_logic = rows[0]["combination_logic"]
     filter_sets = [
         {
-            "id": r["id"],
+            "filter_set_id": r["filter_set_id"],
             "branch_id": r["branch_id"],
             "name": r["name"],
             "logic": r["logic"],
@@ -624,59 +665,68 @@ def fetch_applied_filter_sets(branch_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Product filtering with structured filter sets
+# Entity filtering with structured filter sets
 # ---------------------------------------------------------------------------
 
 
 def _build_filter_clause(
-    f: dict, params: list, rev: int = 0, branch_id: int = 0,
+    f: dict, params: list, rev: int = 0, branch_id: str = "",
 ) -> str | None:
-    """Convert a single filter dict into a SQL clause, appending bind params."""
+    """Convert a single filter dict into a SQL clause, appending bind params.
+
+    Attribute filters target JSONB keys in ``ifc_entity.attributes`` via the
+    ``->>`` operator, except ``globalId`` which maps to the ``ifc_global_id``
+    column directly.  Class filters target ``ifc_class``.
+    """
     mode = f.get("mode")
     if mode == "class":
         ifc_class = f.get("ifcClass") or f.get("ifc_class")
         if ifc_class:
             params.append(ifc_class)
-            return "ifc_class = %s"
+            return "e.ifc_class = %s"
     elif mode == "attribute":
         attr = f.get("attribute")
         value = f.get("value")
-        col_map = {
-            "globalId": "global_id",
-            "name": "name",
-            "objectType": "object_type",
-            "tag": "tag",
-            "description": "description",
-        }
-        col = col_map.get(attr, attr) if attr else None
-        if col and value:
+        if not attr or not value:
+            return None
+        if attr == "globalId":
             params.append(f"%{value}%")
-            return f"{col} ILIKE %s"
+            return "e.ifc_global_id ILIKE %s"
+        jsonb_key_map = {
+            "name": "Name",
+            "objectType": "ObjectType",
+            "tag": "Tag",
+            "description": "Description",
+        }
+        jsonb_key = jsonb_key_map.get(attr)
+        if jsonb_key:
+            params.append(f"%{value}%")
+            return f"e.attributes->>'{jsonb_key}' ILIKE %s"
     elif mode == "relation":
         relation = f.get("relation")
         if relation and rev and branch_id:
             gids = _resolve_relation_gids([relation], rev, branch_id)
             if gids:
                 params.append(gids)
-                return "global_id = ANY(%s)"
+                return "e.ifc_global_id = ANY(%s)"
             return "FALSE"
     return None
 
 
-def fetch_products_with_filter_sets(
+def fetch_entities_with_filter_sets(
     rev: int,
-    branch_id: int,
+    branch_id: str,
     filter_sets_data: list[dict],
     combination_logic: str = "AND",
 ) -> list[dict]:
-    """Query products matching multiple filter sets with configurable logic.
+    """Query entities matching multiple filter sets with configurable logic.
 
     Each entry in *filter_sets_data* has keys ``logic`` (``"AND"``/``"OR"``)
     and ``filters`` (list of filter dicts).  Conditions within a set are
     joined by the set's ``logic``; the resulting groups are joined by
     *combination_logic*.
     """
-    base_clauses: list[str] = ["branch_id = %s", _REV_FILTER]
+    base_clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
     group_sqls: list[str] = []
@@ -697,5 +747,8 @@ def fetch_products_with_filter_sets(
 
     where = " AND ".join(base_clauses)
     with get_cursor(dict_cursor=True) as cur:
-        cur.execute(f"SELECT {_PRODUCT_COLS} FROM ifc_products WHERE {where}", params)
+        cur.execute(
+            f"SELECT {_ENTITY_COLS} FROM {_ENTITY_FROM} WHERE {where}",
+            params,
+        )
         return [dict(r) for r in cur.fetchall()]

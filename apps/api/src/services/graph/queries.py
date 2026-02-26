@@ -16,15 +16,15 @@ Literal Cypher braces are escaped as ``{{`` and ``}}``.
 # ---------------------------------------------------------------------------
 
 NEIGHBORS_OUT = (
-    "MATCH (n {{global_id: '{global_id}'}})-[r]->(m) "
+    "MATCH (n {{ifc_global_id: '{global_id}'}})-[r]->(m) "
     "WHERE {n_filter} AND {r_filter} AND {m_filter} "
-    "RETURN m.global_id AS gid, label(m) AS lbl, m.name AS name, type(r) AS rel"
+    "RETURN m.ifc_global_id AS gid, label(m) AS lbl, m.name AS name, type(r) AS rel"
 )
 
 NEIGHBORS_IN = (
-    "MATCH (n {{global_id: '{global_id}'}})<-[r]-(m) "
+    "MATCH (n {{ifc_global_id: '{global_id}'}})<-[r]-(m) "
     "WHERE {n_filter} AND {r_filter} AND {m_filter} "
-    "RETURN m.global_id AS gid, label(m) AS lbl, m.name AS name, type(r) AS rel"
+    "RETURN m.ifc_global_id AS gid, label(m) AS lbl, m.name AS name, type(r) AS rel"
 )
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ NEIGHBORS_IN = (
 PRODUCTS_BY_RELATION = (
     "MATCH (n)-[r:{rel_type}]-(m) "
     "WHERE {r_filter} AND {n_filter} "
-    "RETURN DISTINCT n.global_id AS gid"
+    "RETURN DISTINCT n.ifc_global_id AS gid"
 )
 
 # ---------------------------------------------------------------------------
@@ -45,22 +45,22 @@ PRODUCTS_BY_RELATION = (
 SPATIAL_ROOTS = (
     "MATCH (p:IfcProject) "
     "WHERE {p_filter} "
-    "RETURN p.global_id AS gid, label(p) AS lbl, p.name AS name"
+    "RETURN p.ifc_global_id AS gid, label(p) AS lbl, p.name AS name"
 )
 
 # Direct children of a spatial node via IfcRelAggregates.
 SPATIAL_CHILDREN = (
-    "MATCH (parent {{global_id: '{global_id}'}})"
+    "MATCH (parent {{ifc_global_id: '{global_id}'}})"
     "-[r:IfcRelAggregates]->(child) "
     "WHERE {parent_filter} AND {r_filter} AND {child_filter} "
-    "RETURN child.global_id AS gid, label(child) AS lbl, child.name AS name"
+    "RETURN child.ifc_global_id AS gid, label(child) AS lbl, child.name AS name"
 )
 
 # Elements contained in a spatial structure via IfcRelContainedInSpatialStructure.
 # Edge direction: element -> spatial container (as per the ingestion model).
 CONTAINED_ELEMENTS = (
-    "MATCH (spatial {{global_id: '{global_id}'}})"
+    "MATCH (spatial {{ifc_global_id: '{global_id}'}})"
     "<-[r:IfcRelContainedInSpatialStructure]-(elem) "
     "WHERE {spatial_filter} AND {r_filter} AND {elem_filter} "
-    "RETURN elem.global_id AS gid, label(elem) AS lbl, elem.name AS name"
+    "RETURN elem.ifc_global_id AS gid, label(elem) AS lbl, elem.name AS name"
 )

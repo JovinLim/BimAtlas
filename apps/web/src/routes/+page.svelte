@@ -82,15 +82,15 @@
 
   // ---- Project / Branch state ----
   interface ProjectData {
-    id: number;
+    id: string;
     name: string;
     description: string | null;
     createdAt: string;
     branches: BranchData[];
   }
   interface BranchData {
-    id: number;
-    projectId: number;
+    id: string;
+    projectId: string;
     name: string;
     createdAt: string;
   }
@@ -163,7 +163,7 @@
 
   // Load 3D geometry when revision changes and sceneManager is ready
   let lastFetchedRev: number | null = $state(null);
-  let lastFetchedBranchId: number | null = $state(null);
+  let lastFetchedBranchId: string | null = $state(null);
   $effect(() => {
     const rev = revisionState.activeRevision;
     const branchId = projectState.activeBranchId;
@@ -172,9 +172,6 @@
 
     // Only fetch if revision or branchId changed
     if (rev === lastFetchedRev && branchId === lastFetchedBranchId) return;
-
-    // Check loading state without tracking it
-    if (untrack(() => graphStore.loading)) return;
 
     lastFetchedRev = rev;
     lastFetchedBranchId = branchId;
@@ -346,7 +343,7 @@
     } satisfies SearchMessage);
   }
 
-  async function autoLoadAppliedFilterSets(branchId: number): Promise<boolean> {
+  async function autoLoadAppliedFilterSets(branchId: string): Promise<boolean> {
     try {
       const result = await client
         .query(APPLIED_FILTER_SETS_QUERY, { branchId })
@@ -370,7 +367,7 @@
   async function loadGeometryForActiveBranch(
     mgr: SceneManager,
     revision: number,
-    branchId: number,
+    branchId: string,
   ) {
     const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
     if (!hasAppliedSets) {
@@ -380,7 +377,7 @@
     await ensureTotalProductCount(branchId, revision);
   }
 
-  async function ensureTotalProductCount(branchId: number, revision: number) {
+  async function ensureTotalProductCount(branchId: string, revision: number) {
     const key = `${branchId}:${revision}`;
     if (totalCountKey === key) return;
     try {
@@ -521,7 +518,7 @@
     }
   }
 
-  function selectProject(projectId: number) {
+  function selectProject(projectId: string) {
     projectState.activeProjectId = projectId;
     const proj = projects.find((p) => p.id === projectId);
     const mainBranch = proj?.branches.find((b) => b.name === "main");
@@ -535,7 +532,7 @@
     }
   }
 
-  function selectBranch(branchId: number) {
+  function selectBranch(branchId: string) {
     projectState.activeBranchId = branchId;
     revisionState.activeRevision = null;
     sceneManager?.clearAll();
@@ -597,7 +594,7 @@
     }
   }
 
-  async function fetchLatestRevision(branchId: number) {
+  async function fetchLatestRevision(branchId: string) {
     try {
       const result = await client
         .query(REVISIONS_QUERY, { branchId })
@@ -605,7 +602,9 @@
 
       const revisions = result.data?.revisions || [];
       if (revisions.length > 0) {
-        const latest = Math.max(...revisions.map((r: any) => r.id));
+        const latest = Math.max(
+          ...revisions.map((r: { revisionSeq: number }) => r.revisionSeq),
+        );
         revisionState.activeRevision = latest;
       }
     } catch (err) {
@@ -615,7 +614,7 @@
 
   /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
   function streamQueryParams(
-    branchId: number,
+    branchId: string,
     revision: number,
     filterVars: Record<string, unknown>,
   ): URLSearchParams {
@@ -648,7 +647,7 @@
   async function loadGeometry(
     mgr: SceneManager,
     revision: number,
-    branchId: number,
+    branchId: string,
     filterVars: Record<string, unknown> = {},
   ) {
     if (loadingGeometry) return;
@@ -671,29 +670,33 @@
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let streamEnded = false;
+      let startTotal = 0;
+      let productEventsWithMesh = 0;
 
       if (!reader) {
         throw new Error("No response body");
       }
 
-      while (true) {
+      while (!streamEnded) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        if (done && !buffer.trim()) break;
+        if (value) buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
         buffer = lines.pop() ?? "";
 
         for (const chunk of lines) {
-          const dataMatch = chunk.match(/^data:\s*(.+)$/m);
+          const dataMatch = chunk.match(/^data:\s*(.+)$/s);
           if (!dataMatch) continue;
           try {
-            const data = JSON.parse(dataMatch[1]);
+            const data = JSON.parse(dataMatch[1].trim());
             if (data.type === "error") {
               console.error("Stream error:", data.message);
               return;
             }
             if (data.type === "start") {
-              loadingGeometryTotal = data.total ?? 0;
+              startTotal = data.total ?? 0;
+              loadingGeometryTotal = startTotal;
               continue;
             }
             if (data.type === "product") {
@@ -707,12 +710,19 @@
                 objectType: product.objectType ?? null,
                 tag: product.tag ?? null,
               });
+              console.log("[geometry load] product received:", product);
               if (product.mesh?.vertices && product.mesh?.faces) {
+                console.log(
+                  "[geometry load] adding geometry for:",
+                  product.globalId,
+                  product.mesh,
+                );
                 try {
                   const geometry = createBufferGeometry(
                     product.mesh as RawMeshData,
                   );
                   mgr.addElement(product.globalId, geometry);
+                  productEventsWithMesh += 1;
                 } catch (err) {
                   console.warn(
                     `Failed to load geometry for ${product.globalId}:`,
@@ -724,19 +734,21 @@
               continue;
             }
             if (data.type === "end") {
+              streamEnded = true;
               break;
             }
           } catch (e) {
             console.warn("Parse stream chunk:", e);
           }
         }
+        if (done || streamEnded) break;
       }
 
       if (buffer.trim()) {
-        const dataMatch = buffer.match(/^data:\s*(.+)$/m);
+        const dataMatch = buffer.match(/^data:\s*(.+)$/s);
         if (dataMatch) {
           try {
-            const data = JSON.parse(dataMatch[1]);
+            const data = JSON.parse(dataMatch[1].trim());
             if (data.type === "product") {
               const product = data.product;
               metaList.push({
@@ -753,6 +765,7 @@
                     product.mesh as RawMeshData,
                   );
                   mgr.addElement(product.globalId, geometry);
+                  productEventsWithMesh += 1;
                 } catch (_) {}
               }
             }
@@ -760,7 +773,22 @@
         }
       }
 
+      if (import.meta.env.DEV && (startTotal > 0 || metaList.length > 0)) {
+        console.debug("[geometry] stream done:", {
+          startTotal,
+          productMetaCount: metaList.length,
+          productEventsWithMesh,
+          sceneElementCount: mgr.elementCount,
+        });
+      }
+
       searchState.setProducts(metaList);
+
+      console.log(
+        "[geometry load] geometries received:",
+        metaList.length,
+        metaList,
+      );
 
       if (Object.keys(filterVars).length === 0) {
         searchState.totalProductCount = metaList.length;
@@ -803,7 +831,7 @@
       }
 
       const result = await res.json();
-      revisionState.activeRevision = result.revision_id;
+      revisionState.activeRevision = result.revision_seq;
     } catch (err) {
       importError = err instanceof Error ? err.message : "Import failed";
     } finally {
@@ -840,7 +868,7 @@
             class="selector"
             value={projectState.activeProjectId}
             onchange={(e) =>
-              selectProject(Number((e.target as HTMLSelectElement).value))}
+              selectProject((e.target as HTMLSelectElement).value)}
           >
             {#each projects as p}
               <option value={p.id}>{p.name}</option>
@@ -858,7 +886,7 @@
             class="selector"
             value={projectState.activeBranchId}
             onchange={(e) =>
-              selectBranch(Number((e.target as HTMLSelectElement).value))}
+              selectBranch((e.target as HTMLSelectElement).value)}
           >
             {#each activeProject.branches as b}
               <option value={b.id}>{b.name}</option>
@@ -1111,8 +1139,13 @@
             Fit View
           </button>
           <!-- View Options section -->
-          <section class="sidebar-section" aria-labelledby="view-options-heading">
-            <h2 id="view-options-heading" class="sidebar-section-heading">View Options</h2>
+          <section
+            class="sidebar-section"
+            aria-labelledby="view-options-heading"
+          >
+            <h2 id="view-options-heading" class="sidebar-section-heading">
+              View Options
+            </h2>
             <DepthWidget bind:value={selection.subgraphDepth} />
           </section>
         </Sidebar>
@@ -1706,7 +1739,9 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
-    transition: background 0.15s, border-color 0.15s;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
   }
 
   .project-item:hover {

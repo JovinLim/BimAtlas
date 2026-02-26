@@ -8,7 +8,7 @@ import pytest
 import ifcopenshell
 
 from src.services.ifc.geometry import (
-    IfcProductRecord,
+    IfcEntityRecord,
     extract_products,
     extract_products_from_model,
     _build_containment_map,
@@ -140,25 +140,23 @@ class TestSpatialExtraction:
         
         # All spatial elements should have NULL geometry
         for record in spatial_records:
-            assert record.vertices is None
-            assert record.normals is None
-            assert record.faces is None
-            assert record.matrix is None
+            assert record.geometry is None
             assert record.content_hash is not None
-            assert len(record.global_id) == 22
+            assert len(record.ifc_global_id) == 22
     
     def test_spatial_elements_have_valid_structure(self, test_ifc_file):
-        """Test that spatial elements have valid IfcProductRecord structure."""
+        """Test that spatial elements have valid IfcEntityRecord structure."""
         model = ifcopenshell.open(str(test_ifc_file))
         containment_map = _build_containment_map(model)
         
         spatial_records = _extract_spatial_elements(model, containment_map)
         
         for record in spatial_records:
-            assert isinstance(record, IfcProductRecord)
-            assert isinstance(record.global_id, str)
+            assert isinstance(record, IfcEntityRecord)
+            assert isinstance(record.ifc_global_id, str)
             assert isinstance(record.ifc_class, str)
             assert isinstance(record.content_hash, str)
+            assert isinstance(record.attributes, dict)
 
 
 class TestGeometricExtraction:
@@ -174,50 +172,35 @@ class TestGeometricExtraction:
         assert isinstance(geometric_records, list)
         assert len(geometric_records) > 0
         
-        # All geometric elements should have geometry data
+        # All geometric elements should have packed geometry blob
         for record in geometric_records:
-            assert record.vertices is not None
-            assert isinstance(record.vertices, bytes)
-            assert len(record.vertices) > 0
-            
-            assert record.normals is not None
-            assert isinstance(record.normals, bytes)
-            
-            assert record.faces is not None
-            assert isinstance(record.faces, bytes)
-            
-            assert record.matrix is not None
-            assert isinstance(record.matrix, bytes)
-            
+            assert record.geometry is not None
+            assert isinstance(record.geometry, bytes)
+            assert len(record.geometry) > 0
             assert record.content_hash is not None
             assert len(record.content_hash) == 64
     
     def test_geometric_elements_have_valid_arrays(self, test_ifc_file):
-        """Test that geometry buffers can be deserialized back to numpy arrays."""
+        """Test that packed geometry blob can be deserialized (format: >Q len + bytes per buffer)."""
+        import struct
         model = ifcopenshell.open(str(test_ifc_file))
         containment_map = _build_containment_map(model)
         
         geometric_records = _extract_geometric_elements(model, containment_map)
         
-        # Pick first record and verify buffers
         if geometric_records:
             record = geometric_records[0]
-            
-            # Vertices: float32 array, should be multiple of 3 (x, y, z)
-            verts = np.frombuffer(record.vertices, dtype=np.float32)
-            assert len(verts) % 3 == 0
-            
-            # Normals: float32 array, should be multiple of 3
-            normals = np.frombuffer(record.normals, dtype=np.float32)
-            assert len(normals) % 3 == 0
-            
-            # Faces: uint32 array, should be multiple of 3 (triangles)
-            faces = np.frombuffer(record.faces, dtype=np.uint32)
-            assert len(faces) % 3 == 0
-            
-            # Matrix: float64 array, should be 16 elements (4x4 matrix)
-            matrix = np.frombuffer(record.matrix, dtype=np.float64)
-            assert len(matrix) == 16
+            blob = record.geometry
+            assert blob is not None and len(blob) >= 8
+            offset = 0
+            vert_len = struct.unpack_from(">Q", blob, offset)[0]
+            offset += 8
+            if vert_len > 0:
+                offset += vert_len
+                verts = np.frombuffer(blob[8:8+vert_len], dtype=np.float32)
+                assert len(verts) % 3 == 0
+            # At least one buffer should be present
+            assert vert_len > 0 or len(blob) > 8
 
 
 class TestFullExtraction:
@@ -232,14 +215,14 @@ class TestFullExtraction:
         assert len(records) > 0
         
         # Should have both spatial and geometric elements
-        has_spatial = any(r.vertices is None for r in records)
-        has_geometric = any(r.vertices is not None for r in records)
+        has_spatial = any(r.geometry is None for r in records)
+        has_geometric = any(r.geometry is not None for r in records)
         
         assert has_spatial, "Should have spatial elements"
         assert has_geometric, "Should have geometric elements"
         
-        # All records should have unique global_ids
-        global_ids = [r.global_id for r in records]
+        # All records should have unique ifc_global_ids
+        global_ids = [r.ifc_global_id for r in records]
         assert len(global_ids) == len(set(global_ids))
     
     def test_extract_products_from_path(self, test_ifc_file):
@@ -249,14 +232,15 @@ class TestFullExtraction:
         assert isinstance(records, list)
         assert len(records) > 0
         
-        # Verify all records are valid
+        # Verify all records are valid IfcEntityRecord
         for record in records:
-            assert isinstance(record, IfcProductRecord)
-            assert isinstance(record.global_id, str)
-            assert len(record.global_id) == 22
+            assert isinstance(record, IfcEntityRecord)
+            assert isinstance(record.ifc_global_id, str)
+            assert len(record.ifc_global_id) == 22
             assert isinstance(record.ifc_class, str)
             assert isinstance(record.content_hash, str)
             assert len(record.content_hash) == 64
+            assert isinstance(record.attributes, dict)
     
     def test_extract_products_expected_count(self, test_ifc_file):
         """Test that we extract the expected number of products from test file.

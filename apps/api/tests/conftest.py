@@ -81,93 +81,136 @@ TEST_DB_CONFIG = {
 
 
 # ---------------------------------------------------------------------------
-# Database Schema Setup SQL
+# Database Schema Setup SQL (matches infra/init-age.sql target schema)
 # ---------------------------------------------------------------------------
 
 SCHEMA_SQL = """
--- Drop existing tables if they exist
+-- Drop existing tables (reverse dependency order)
+DROP TABLE IF EXISTS merge_conflict_log CASCADE;
+DROP TABLE IF EXISTS merge_request CASCADE;
+DROP TABLE IF EXISTS validation_rule CASCADE;
 DROP TABLE IF EXISTS branch_applied_filter_sets CASCADE;
 DROP TABLE IF EXISTS filter_sets CASCADE;
-DROP TABLE IF EXISTS ifc_products CASCADE;
-DROP TABLE IF EXISTS revisions CASCADE;
-DROP TABLE IF EXISTS branches CASCADE;
-DROP TABLE IF EXISTS projects CASCADE;
+DROP TABLE IF EXISTS ifc_entity CASCADE;
+DROP TABLE IF EXISTS revision CASCADE;
+DROP TABLE IF EXISTS branch CASCADE;
+DROP TABLE IF EXISTS project CASCADE;
+DROP TABLE IF EXISTS ifc_schema CASCADE;
+DROP TYPE IF EXISTS resolution_status CASCADE;
+DROP TYPE IF EXISTS conflict_type CASCADE;
+DROP TYPE IF EXISTS merge_status CASCADE;
+DROP TYPE IF EXISTS rule_severity CASCADE;
+DROP TYPE IF EXISTS logic_operator CASCADE;
 
--- Create projects table
-CREATE TABLE IF NOT EXISTS projects (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TYPE logic_operator AS ENUM ('AND', 'OR');
+CREATE TYPE rule_severity AS ENUM ('Error', 'Warning', 'Info');
+CREATE TYPE merge_status AS ENUM ('Draft', 'Previewing', 'Conflict', 'Ready', 'Merged', 'Closed');
+CREATE TYPE conflict_type AS ENUM ('Attribute_Mismatch', 'Geometry_Mismatch', 'Topology_Mismatch', 'Deleted_vs_Modified');
+CREATE TYPE resolution_status AS ENUM ('Unresolved', 'Source_Wins', 'Target_Wins', 'Manual_Merge');
+
+CREATE TABLE IF NOT EXISTS ifc_schema (
+    schema_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    version_name VARCHAR NOT NULL UNIQUE
 );
 
--- Create branches table
-CREATE TABLE IF NOT EXISTS branches (
-    id SERIAL PRIMARY KEY,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    name TEXT NOT NULL DEFAULT 'main',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE IF NOT EXISTS project (
+    project_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name              VARCHAR NOT NULL,
+    description       TEXT,
+    default_schema_id UUID REFERENCES ifc_schema(schema_id),
+    created_at        TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS branch (
+    branch_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id  UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    name        VARCHAR NOT NULL DEFAULT 'main',
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ DEFAULT now(),
     UNIQUE (project_id, name)
 );
+CREATE INDEX IF NOT EXISTS idx_branch_project ON branch(project_id);
 
--- Create revisions table (scoped to branch)
-CREATE TABLE IF NOT EXISTS revisions (
-    id SERIAL PRIMARY KEY,
-    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
-    label TEXT,
-    ifc_filename TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS revision (
+    revision_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    branch_id          UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    revision_seq       SERIAL NOT NULL,
+    parent_revision_id UUID REFERENCES revision(revision_id),
+    ifc_filename       TEXT,
+    author_id          VARCHAR,
+    commit_message     TEXT,
+    created_at         TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_revision_branch ON revision(branch_id);
+CREATE INDEX IF NOT EXISTS idx_revision_seq ON revision(branch_id, revision_seq);
 
--- Create ifc_products table (SCD Type 2, scoped to branch)
-CREATE TABLE IF NOT EXISTS ifc_products (
-    id SERIAL PRIMARY KEY,
-    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
-    global_id TEXT NOT NULL,
-    ifc_class TEXT NOT NULL,
-    name TEXT,
-    description TEXT,
-    object_type TEXT,
-    tag TEXT,
-    contained_in TEXT,
-    vertices BYTEA,
-    normals BYTEA,
-    faces BYTEA,
-    matrix BYTEA,
-    content_hash TEXT NOT NULL,
-    valid_from_rev INTEGER NOT NULL REFERENCES revisions(id),
-    valid_to_rev INTEGER,
-    CONSTRAINT ifc_products_validity CHECK (valid_to_rev IS NULL OR valid_to_rev > valid_from_rev)
+CREATE TABLE IF NOT EXISTS ifc_entity (
+    entity_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    branch_id                UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    ifc_global_id            VARCHAR NOT NULL,
+    ifc_class                VARCHAR NOT NULL,
+    attributes               JSONB NOT NULL DEFAULT '{}',
+    geometry                 BYTEA,
+    content_hash             TEXT NOT NULL,
+    created_in_revision_id   UUID NOT NULL REFERENCES revision(revision_id),
+    obsoleted_in_revision_id UUID REFERENCES revision(revision_id),
+    UNIQUE (branch_id, ifc_global_id, created_in_revision_id)
 );
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_current ON ifc_entity(branch_id, ifc_global_id) WHERE obsoleted_in_revision_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_class ON ifc_entity(branch_id, ifc_class) WHERE obsoleted_in_revision_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_attributes ON ifc_entity USING GIN (attributes);
 
--- Create filter_sets table
 CREATE TABLE IF NOT EXISTS filter_sets (
-    id SERIAL PRIMARY KEY,
-    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    logic TEXT NOT NULL DEFAULT 'AND' CHECK (logic IN ('AND', 'OR')),
-    filters JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    filter_set_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    branch_id     UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    name          VARCHAR NOT NULL,
+    logic         logic_operator NOT NULL DEFAULT 'AND',
+    filters       JSONB NOT NULL DEFAULT '[]',
+    created_at    TIMESTAMPTZ DEFAULT now(),
+    updated_at    TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_filter_sets_branch ON filter_sets(branch_id);
 
--- Applied filter sets per branch
 CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
-    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
-    filter_set_id INTEGER NOT NULL REFERENCES filter_sets(id) ON DELETE CASCADE,
-    combination_logic TEXT NOT NULL DEFAULT 'AND' CHECK (combination_logic IN ('AND', 'OR')),
-    applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    branch_id         UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    filter_set_id     UUID NOT NULL REFERENCES filter_sets(filter_set_id) ON DELETE CASCADE,
+    combination_logic logic_operator NOT NULL DEFAULT 'AND',
+    applied_at        TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (branch_id, filter_set_id)
 );
 
--- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_branches_project ON branches(project_id);
-CREATE INDEX IF NOT EXISTS idx_revisions_branch ON revisions(branch_id);
-CREATE INDEX IF NOT EXISTS idx_ifc_products_global_id ON ifc_products(branch_id, global_id);
-CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_from ON ifc_products(valid_from_rev);
-CREATE INDEX IF NOT EXISTS idx_ifc_products_valid_to ON ifc_products(valid_to_rev);
-CREATE INDEX IF NOT EXISTS idx_ifc_products_current ON ifc_products(branch_id, global_id) WHERE valid_to_rev IS NULL;
-CREATE INDEX IF NOT EXISTS idx_filter_sets_branch ON filter_sets(branch_id);
+CREATE TABLE IF NOT EXISTS merge_request (
+    merge_request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id       UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    source_branch_id UUID NOT NULL REFERENCES branch(branch_id),
+    target_branch_id UUID NOT NULL REFERENCES branch(branch_id),
+    status           merge_status NOT NULL DEFAULT 'Draft',
+    created_by       VARCHAR,
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS merge_conflict_log (
+    log_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merge_request_id  UUID NOT NULL REFERENCES merge_request(merge_request_id) ON DELETE CASCADE,
+    ifc_global_id     VARCHAR NOT NULL,
+    source_entity_id  UUID REFERENCES ifc_entity(entity_id),
+    target_entity_id  UUID REFERENCES ifc_entity(entity_id),
+    conflict_type     conflict_type NOT NULL,
+    resolution_status resolution_status NOT NULL DEFAULT 'Unresolved',
+    resolved_entity_id UUID REFERENCES ifc_entity(entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS validation_rule (
+    rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             VARCHAR NOT NULL,
+    description      TEXT,
+    schema_id        UUID REFERENCES ifc_schema(schema_id),
+    project_id       UUID REFERENCES project(project_id),
+    target_ifc_class VARCHAR NOT NULL,
+    rule_schema      JSONB NOT NULL,
+    severity         rule_severity NOT NULL DEFAULT 'Error',
+    is_active        BOOLEAN NOT NULL DEFAULT TRUE
+);
 """
 
 GRAPH_SETUP_SQL = """
@@ -206,9 +249,16 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
     Cleanup can be controlled with pytest options:
     - Use --no-teardown to skip cleanup (leaves data for inspection)
     - Use --keep-graph to keep graph data only
+    
+    Skips all tests that depend on it if PostgreSQL is not running.
     """
-    # Connect to the test database
-    conn = psycopg2.connect(**TEST_DB_CONFIG)
+    try:
+        conn = psycopg2.connect(**TEST_DB_CONFIG)
+    except psycopg2.OperationalError as e:
+        pytest.skip(
+            f"PostgreSQL not available at {TEST_DB_CONFIG['host']}:{TEST_DB_CONFIG['port']}. "
+            f"Start the test database (e.g. docker-compose up -d) and re-run. Error: {e}"
+        )
     conn.autocommit = True
     
     # Get command-line options
@@ -250,9 +300,13 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     else:
                         print("  ⚠️  Keeping test graph (--keep-graph flag)")
                     
-                    # Truncate tables to leave database clean
+                    # Truncate tables to leave database clean (order: FKs first)
                     try:
-                        cur.execute("TRUNCATE TABLE branch_applied_filter_sets, filter_sets, ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
+                        cur.execute(
+                            "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
+                            "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
+                            "branch, project, ifc_schema CASCADE;"
+                        )
                         print("  ✅ Truncated test tables")
                     except Exception as e:
                         print(f"  ⚠️  Could not truncate tables: {e}")
@@ -278,7 +332,11 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
     
     with conn.cursor() as cur:
         # Truncate tables (order matters due to FK constraints)
-        cur.execute("TRUNCATE TABLE branch_applied_filter_sets, filter_sets, ifc_products, revisions, branches, projects RESTART IDENTITY CASCADE;")
+        cur.execute(
+            "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
+            "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
+            "branch, project, ifc_schema CASCADE;"
+        )
         
         # Clear graph
         try:
@@ -332,15 +390,15 @@ def age_graph(clean_db, monkeypatch):
 
 
 @pytest.fixture(scope="function")
-def test_branch(db_pool) -> int:
-    """Create a test project with a 'main' branch and return the branch_id.
+def test_branch(db_pool) -> str:
+    """Create a test project with a 'main' branch and return the branch_id (UUID string).
     
     Most tests need a branch_id to work with. This fixture creates a project
-    named 'Test Project' with a default 'main' branch and returns the branch id.
+    named 'Test Project' with a default 'main' branch and returns the branch_id.
     """
     project = db.create_project("Test Project", "Test project for unit tests")
-    branches = db.fetch_branches(project["id"])
-    return branches[0]["id"]
+    branches = db.fetch_branches(project["project_id"])
+    return str(branches[0]["branch_id"])
 
 
 # ---------------------------------------------------------------------------

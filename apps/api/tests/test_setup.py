@@ -27,7 +27,7 @@ class TestBasicSetup:
     def test_clean_db_fixture(self, clean_db):
         """Verify clean_db fixture works."""
         with clean_db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM revisions")
+            cur.execute("SELECT COUNT(*) FROM revision")
             count = cur.fetchone()[0]
         
         # Should start with empty tables

@@ -12,7 +12,10 @@ during versioned ingestion.
 from __future__ import annotations
 
 import hashlib
+import json
+import struct
 from dataclasses import dataclass
+from typing import Any
 
 import ifcopenshell
 import ifcopenshell.geom
@@ -21,50 +24,57 @@ import numpy as np
 
 
 @dataclass
-class IfcProductRecord:
-    """Maps 1:1 to an ifc_products row, using IFC 4.3 attribute names."""
+class IfcEntityRecord:
+    """Maps 1:1 to an ifc_entity row, using IFC 4.3 attribute names."""
 
-    global_id: str  # IfcRoot.GlobalId (stable across revisions)
+    ifc_global_id: str  # IfcRoot.GlobalId (stable across revisions)
     ifc_class: str  # e.g. "IfcWall", "IfcBuildingStorey"
-    name: str | None  # IfcRoot.Name
-    description: str | None  # IfcRoot.Description
-    object_type: str | None  # IfcObject.ObjectType
-    tag: str | None  # IfcElement.Tag
-    contained_in: str | None  # GlobalId of containing IfcSpatialStructureElement
-    vertices: bytes | None  # Float32Array as bytes (NULL for spatial elements)
-    normals: bytes | None  # Float32Array as bytes
-    faces: bytes | None  # Uint32Array as bytes
-    matrix: bytes | None  # 4x4 Float64Array as bytes
-    content_hash: str  # SHA-256 of (ifc_class, name, desc, object_type, tag,
-    #   contained_in, vertices, normals, faces, matrix)
+    attributes: dict[str, Any]  # Flattened EXPRESS attributes / metadata
+    geometry: bytes | None  # Packed geometry blob (may be NULL for spatial elements)
+    content_hash: str  # SHA-256 of (ifc_class, attributes, geometry)
     # Used for SCD2 change detection during versioned ingestion
 
 
 def _compute_content_hash(
     ifc_class: str,
-    name: str | None,
-    description: str | None,
-    object_type: str | None,
-    tag: str | None,
-    contained_in: str | None,
+    attributes: dict[str, Any],
+    geometry: bytes | None,
+) -> str:
+    """Compute a SHA-256 content hash over mutable fields for change detection."""
+    h = hashlib.sha256()
+    h.update(ifc_class.encode("utf-8"))
+    attrs_json = json.dumps(attributes or {}, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    h.update(attrs_json)
+    h.update(geometry or b"")
+    return h.hexdigest()
+
+
+def _pack_geometry(
     vertices: bytes | None,
     normals: bytes | None,
     faces: bytes | None,
     matrix: bytes | None,
-) -> str:
-    """Compute a SHA-256 content hash over all mutable fields for change detection."""
-    h = hashlib.sha256()
-    h.update(ifc_class.encode("utf-8"))
-    h.update((name or "").encode("utf-8"))
-    h.update((description or "").encode("utf-8"))
-    h.update((object_type or "").encode("utf-8"))
-    h.update((tag or "").encode("utf-8"))
-    h.update((contained_in or "").encode("utf-8"))
-    h.update(vertices or b"")
-    h.update(normals or b"")
-    h.update(faces or b"")
-    h.update(matrix or b"")
-    return h.hexdigest()
+) -> bytes | None:
+    """Pack separate geometry buffers into a single BYTEA blob.
+
+    Format: four big-endian uint64 lengths (vertices, normals, faces, matrix)
+    followed by the raw buffers in order. A length of 0 means the buffer is
+    absent. Matches _unpack_geometry in schema/queries.py.
+    """
+    if not any((vertices, normals, faces, matrix)):
+        return None
+
+    lengths = [
+        len(vertices) if vertices else 0,
+        len(normals) if normals else 0,
+        len(faces) if faces else 0,
+        len(matrix) if matrix else 0,
+    ]
+    header = b"".join(struct.pack(">Q", n) for n in lengths)
+    buffers = [b for b in (vertices, normals, faces, matrix) if b]
+    return header + b"".join(buffers)
 
 
 def _build_containment_map(model: ifcopenshell.file) -> dict[str, str]:
@@ -88,14 +98,14 @@ def _build_containment_map(model: ifcopenshell.file) -> dict[str, str]:
 def _extract_spatial_elements(
     model: ifcopenshell.file,
     containment_map: dict[str, str],
-) -> list[IfcProductRecord]:
+) -> list[IfcEntityRecord]:
     """Extract spatial structure elements (no geometry).
 
     Parses IfcSpatialStructureElement subtypes: IfcProject, IfcSite,
     IfcBuilding, IfcBuildingStorey, IfcSpace. These are stored as rows
     with NULL geometry columns.
     """
-    records: list[IfcProductRecord] = []
+    records: list[IfcEntityRecord] = []
     spatial_types = (
         "IfcProject",
         "IfcSite",
@@ -119,32 +129,28 @@ def _extract_spatial_elements(
             tag = getattr(element, "Tag", None)
             contained_in = containment_map.get(gid)
 
+            attributes: dict[str, Any] = {
+                "Name": name,
+                "Description": description,
+                "ObjectType": object_type,
+                "Tag": tag,
+            }
+            if contained_in is not None:
+                attributes["ContainedIn"] = contained_in
+
+            geometry_blob = None
             content_hash = _compute_content_hash(
                 ifc_class=ifc_class,
-                name=name,
-                description=description,
-                object_type=object_type,
-                tag=tag,
-                contained_in=contained_in,
-                vertices=None,
-                normals=None,
-                faces=None,
-                matrix=None,
+                attributes=attributes,
+                geometry=geometry_blob,
             )
 
             records.append(
-                IfcProductRecord(
-                    global_id=gid,
+                IfcEntityRecord(
+                    ifc_global_id=gid,
                     ifc_class=ifc_class,
-                    name=name,
-                    description=description,
-                    object_type=object_type,
-                    tag=tag,
-                    contained_in=contained_in,
-                    vertices=None,
-                    normals=None,
-                    faces=None,
-                    matrix=None,
+                    attributes=attributes,
+                    geometry=geometry_blob,
                     content_hash=content_hash,
                 )
             )
@@ -154,7 +160,7 @@ def _extract_spatial_elements(
 def _extract_geometric_elements(
     model: ifcopenshell.file,
     containment_map: dict[str, str],
-) -> list[IfcProductRecord]:
+) -> list[IfcEntityRecord]:
     """Extract all IfcProduct entities that have geometry.
 
     Uses ``ifcopenshell.geom.iterator`` to triangulate meshes in world
@@ -165,7 +171,7 @@ def _extract_geometric_elements(
     settings.set(settings.USE_WORLD_COORDS, True)
 
     iterator = ifcopenshell.geom.iterator(settings, model)
-    records: list[IfcProductRecord] = []
+    records: list[IfcEntityRecord] = []
 
     if not iterator.initialize():
         return records
@@ -182,6 +188,15 @@ def _extract_geometric_elements(
         tag = getattr(element, "Tag", None)
         contained_in = containment_map.get(gid)
 
+        attributes: dict[str, Any] = {
+            "Name": name,
+            "Description": description,
+            "ObjectType": object_type,
+            "Tag": tag,
+        }
+        if contained_in is not None:
+            attributes["ContainedIn"] = contained_in
+
         # Triangulated mesh buffers
         verts = np.array(shape.geometry.verts, dtype=np.float32)
         faces = np.array(shape.geometry.faces, dtype=np.uint32)
@@ -195,32 +210,25 @@ def _extract_geometric_elements(
         faces_bytes = faces.tobytes()
         matrix_bytes = matrix.tobytes()
 
-        content_hash = _compute_content_hash(
-            ifc_class=ifc_class,
-            name=name,
-            description=description,
-            object_type=object_type,
-            tag=tag,
-            contained_in=contained_in,
+        geometry_blob = _pack_geometry(
             vertices=verts_bytes,
             normals=normals_bytes,
             faces=faces_bytes,
             matrix=matrix_bytes,
         )
 
+        content_hash = _compute_content_hash(
+            ifc_class=ifc_class,
+            attributes=attributes,
+            geometry=geometry_blob,
+        )
+
         records.append(
-            IfcProductRecord(
-                global_id=gid,
+            IfcEntityRecord(
+                ifc_global_id=gid,
                 ifc_class=ifc_class,
-                name=name,
-                description=description,
-                object_type=object_type,
-                tag=tag,
-                contained_in=contained_in,
-                vertices=verts_bytes,
-                normals=normals_bytes,
-                faces=faces_bytes,
-                matrix=matrix_bytes,
+                attributes=attributes,
+                geometry=geometry_blob,
                 content_hash=content_hash,
             )
         )
@@ -231,7 +239,7 @@ def _extract_geometric_elements(
     return records
 
 
-def extract_products_from_model(model: ifcopenshell.file) -> list[IfcProductRecord]:
+def extract_products_from_model(model: ifcopenshell.file) -> list[IfcEntityRecord]:
     """Extract all products from an already-opened IFC model.
 
     Implements the two-phase extraction described in the plan:
@@ -266,12 +274,12 @@ def extract_products_from_model(model: ifcopenshell.file) -> list[IfcProductReco
 
     # Merge: spatial elements first, then geometric elements (skip duplicates
     # where a spatial element also has geometry -- the geometric version wins)
-    records: list[IfcProductRecord] = []
-    geometric_gids = {r.global_id for r in geometric_records}
+    records: list[IfcEntityRecord] = []
+    geometric_gids = {r.ifc_global_id for r in geometric_records}
 
     # Add spatial-only records (those without geometry from the iterator)
     for rec in spatial_records:
-        if rec.global_id not in geometric_gids:
+        if rec.ifc_global_id not in geometric_gids:
             records.append(rec)
 
     # Add all geometric records
@@ -280,7 +288,7 @@ def extract_products_from_model(model: ifcopenshell.file) -> list[IfcProductReco
     return records
 
 
-def extract_products(ifc_path: str) -> list[IfcProductRecord]:
+def extract_products(ifc_path: str) -> list[IfcEntityRecord]:
     """Parse an IFC file and extract all products as DB-ready records.
 
     Convenience wrapper around :func:`extract_products_from_model` that opens
@@ -290,7 +298,7 @@ def extract_products(ifc_path: str) -> list[IfcProductRecord]:
         ifc_path: Filesystem path to the IFC file.
 
     Returns:
-        A list of ``IfcProductRecord`` instances ready for database insertion.
+        A list of ``IfcEntityRecord`` instances ready for database insertion.
         Spatial elements come first, followed by geometric elements.
     """
     model = ifcopenshell.open(ifc_path)

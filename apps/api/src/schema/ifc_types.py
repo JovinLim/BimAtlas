@@ -109,8 +109,9 @@ class ChangeType(Enum):
 
 @strawberry.type
 class Revision:
-    id: int
-    branch_id: int
+    id: str
+    branch_id: str
+    revision_seq: int  # monotonic sequence for ordering and querying at revision
     label: Optional[str]
     ifc_filename: str
     created_at: str  # ISO 8601
@@ -140,8 +141,8 @@ class RevisionDiff:
 class Branch:
     """A branch within a project. Each branch has an independent revision history."""
 
-    id: int
-    project_id: int
+    id: str
+    project_id: str
     name: str
     created_at: str  # ISO 8601
 
@@ -150,7 +151,7 @@ class Branch:
 class Project:
     """A top-level project container. Each project has one or more branches."""
 
-    id: int
+    id: str
     name: str
     description: Optional[str]
     created_at: str  # ISO 8601
@@ -175,8 +176,8 @@ class FilterSetFilter:
 class FilterSet:
     """A named, persisted collection of filters scoped to a branch."""
 
-    id: int
-    branch_id: int
+    id: str
+    branch_id: str
     name: str
     logic: str  # "AND" | "OR"
     filters: list[FilterSetFilter]
