@@ -602,7 +602,9 @@
 
       const revisions = result.data?.revisions || [];
       if (revisions.length > 0) {
-        const latest = Math.max(...revisions.map((r: { revisionSeq: number }) => r.revisionSeq));
+        const latest = Math.max(
+          ...revisions.map((r: { revisionSeq: number }) => r.revisionSeq),
+        );
         revisionState.activeRevision = latest;
       }
     } catch (err) {
@@ -708,7 +710,13 @@
                 objectType: product.objectType ?? null,
                 tag: product.tag ?? null,
               });
+              console.log("[geometry load] product received:", product);
               if (product.mesh?.vertices && product.mesh?.faces) {
+                console.log(
+                  "[geometry load] adding geometry for:",
+                  product.globalId,
+                  product.mesh,
+                );
                 try {
                   const geometry = createBufferGeometry(
                     product.mesh as RawMeshData,
@@ -775,6 +783,12 @@
       }
 
       searchState.setProducts(metaList);
+
+      console.log(
+        "[geometry load] geometries received:",
+        metaList.length,
+        metaList,
+      );
 
       if (Object.keys(filterVars).length === 0) {
         searchState.totalProductCount = metaList.length;
@@ -1125,8 +1139,13 @@
             Fit View
           </button>
           <!-- View Options section -->
-          <section class="sidebar-section" aria-labelledby="view-options-heading">
-            <h2 id="view-options-heading" class="sidebar-section-heading">View Options</h2>
+          <section
+            class="sidebar-section"
+            aria-labelledby="view-options-heading"
+          >
+            <h2 id="view-options-heading" class="sidebar-section-heading">
+              View Options
+            </h2>
             <DepthWidget bind:value={selection.subgraphDepth} />
           </section>
         </Sidebar>
@@ -1720,7 +1739,9 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
-    transition: background 0.15s, border-color 0.15s;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
   }
 
   .project-item:hover {

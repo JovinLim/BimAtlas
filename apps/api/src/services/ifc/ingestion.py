@@ -325,7 +325,7 @@ def _create_graph_nodes(records: list[IfcEntityRecord], rev_seq: int, branch_id:
         except Exception as exc:
             logger.warning(
                 "Failed to create graph node %s (%s): %s",
-                record.global_id,
+                record.ifc_global_id,
                 record.ifc_class,
                 exc,
             )
