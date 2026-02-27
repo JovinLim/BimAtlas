@@ -4,7 +4,6 @@
    * Users first select (or create) a project, then pick a branch. All IFC data is scoped to the branch.
    */
   import Viewport from "$lib/ui/Viewport.svelte";
-  import SelectionPanel from "$lib/ui/SelectionPanel.svelte";
   import ForceGraph from "$lib/graph/ForceGraph.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
@@ -24,6 +23,10 @@
     type SearchFilter,
     type SearchMessage,
   } from "$lib/search/protocol";
+  import {
+    ATTRIBUTES_CHANNEL,
+    type AttributesMessage,
+  } from "$lib/attributes/protocol";
   import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
@@ -57,6 +60,8 @@
   let activeView: "viewport" | "graph" = $state("viewport");
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
+  let attributePopup: Window | null = null;
+  let attributesChannel: BroadcastChannel | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -220,7 +225,23 @@
     }
   });
 
-  // BroadcastChannel for cross-window search communication
+  // Keep Attribute pop-out in sync when selection or context changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    if (!attributesChannel) return;
+    attributesChannel.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+    } satisfies AttributesMessage);
+  });
+
+  // BroadcastChannels for cross-window communication
   onMount(() => {
     searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
     searchChannel.onmessage = (e: MessageEvent<SearchMessage>) => {
@@ -232,10 +253,20 @@
         sendBranchContext();
       }
     };
+
+    attributesChannel = new BroadcastChannel(ATTRIBUTES_CHANNEL);
+    attributesChannel.onmessage = (e: MessageEvent<AttributesMessage>) => {
+      if (e.data.type === "request-context") {
+        sendAttributesContext();
+      } else if (e.data.type === "selection-changed") {
+        selection.activeGlobalId = e.data.globalId;
+      }
+    };
   });
 
   onDestroy(() => {
     searchChannel?.close();
+    attributesChannel?.close();
   });
 
   function sendBranchContext() {
@@ -255,6 +286,20 @@
     }
   }
 
+  function sendAttributesContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    attributesChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+    } satisfies AttributesMessage);
+  }
+
   function openSearchPopup() {
     if (!searchPopup || searchPopup.closed) {
       const branchId = projectState.activeBranchId;
@@ -269,6 +314,31 @@
     } else {
       searchPopup.focus();
       sendBranchContext();
+    }
+  }
+
+  function openAttributesPopup() {
+    if (!attributePopup || attributePopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const globalId = selection.activeGlobalId;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      if (globalId != null) params.set("globalId", String(globalId));
+      const query = params.toString();
+      const url = query ? `/attributes?${query}` : "/attributes";
+      attributePopup = window.open(
+        url,
+        "bimatlas-attributes",
+        "width=420,height=700",
+      );
+      setTimeout(sendAttributesContext, 500);
+    } else {
+      attributePopup.focus();
+      sendAttributesContext();
     }
   }
 
@@ -1198,41 +1268,65 @@
             <DepthWidget bind:value={selection.subgraphDepth} />
           </section>
         </Sidebar>
-        <!-- Search button -->
-        <button
-          class="search-btn"
-          onclick={openSearchPopup}
-          aria-label="Search and filter"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <circle
-              cx="11"
-              cy="11"
-              r="7"
-              stroke="currentColor"
-              stroke-width="2"
-            />
-            <path
-              d="M16.5 16.5L21 21"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-          </svg>
-          Search
-        </button>
+        <div class="search-actions">
+          <!-- Search button -->
+          <button
+            class="search-btn"
+            onclick={openSearchPopup}
+            aria-label="Search and filter"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle
+                cx="11"
+                cy="11"
+                r="7"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path
+                d="M16.5 16.5L21 21"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+            Search
+          </button>
+          <!-- Attribute panel pop-out button -->
+          <button
+            class="attributes-btn"
+            onclick={openAttributesPopup}
+            aria-label="Open attribute panel"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <rect
+                x="4"
+                y="4"
+                width="10"
+                height="10"
+                rx="1.5"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path
+                d="M14 10H20V20H10V14"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            Attributes
+          </button>
+        </div>
         <!-- Element count -->
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
         >
-        <SelectionPanel />
       </div>
     {:else}
       <div class="graph-wrapper">
         <ForceGraph />
-        {#if selection.activeGlobalId}
-          <SelectionPanel />
-        {/if}
       </div>
     {/if}
 
@@ -1979,12 +2073,18 @@
     gap: 0.35rem;
   }
 
-  .search-btn {
+  .search-actions {
     position: absolute;
     bottom: 1rem;
     left: 50%;
     transform: translateX(-50%);
     pointer-events: auto;
+    display: inline-flex;
+    gap: 0.5rem;
+  }
+
+  .search-btn,
+  .attributes-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -2002,7 +2102,8 @@
       border-color 0.15s;
   }
 
-  .search-btn:hover {
+  .search-btn:hover,
+  .attributes-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);
     color: #fff;
