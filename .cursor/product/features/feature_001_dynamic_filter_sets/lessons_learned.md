@@ -6,5 +6,5 @@
 
 ## Resolved Pitfalls
 
-- None recorded yet for this feature.
+- When introducing a new Attribute panel pop-out, Svelte 5 runes required moving panel props to `$props()` and avoiding `export let`, and reusing old CSS inside the wrapper caused a flood of unused-selector warnings; we fixed this by centralizing the data-fetch into a dedicated content component and accepting leftover CSS warnings as non-blocking. Future UI refactors should prefer moving shared styles with the content component to avoid duplicated or orphaned selectors.
 
