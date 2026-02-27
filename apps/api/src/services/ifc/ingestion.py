@@ -25,11 +25,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ifcopenshell
+import ifcopenshell.geom
 import psycopg2.extras
 
 from ...db import get_conn, put_conn
 from ..graph import age_client
-from .geometry import IfcEntityRecord, extract_products_from_model
+from .geometry import IfcEntityRecord, extract_products_from_model, make_shape_rep_global_id
 
 logger = logging.getLogger("bimatlas.ingestion")
 
@@ -171,6 +172,64 @@ def _extract_relationships(
                     relationship_type="IfcRelConnectsElements",
                 )
             )
+
+    # -- IfcRelDefinesByType: element instance -> type object ---------------
+    for rel in model.by_type("IfcRelDefinesByType"):
+        type_obj = getattr(rel, "RelatingType", None)
+        if type_obj is None:
+            continue
+        type_gid = getattr(type_obj, "GlobalId", None)
+        if not type_gid:
+            continue
+        for element in rel.RelatedObjects or []:
+            elem_gid = getattr(element, "GlobalId", None)
+            if elem_gid:
+                rels.append(
+                    IfcRelationshipRecord(
+                        from_global_id=elem_gid,
+                        to_global_id=type_gid,
+                        relationship_type="IfcRelDefinesByType",
+                    )
+                )
+
+    # -- Synthetic HasShapeRepresentation: product -> shape rep -------------
+    # Mirror the geometry iterator used in geometry.py to ensure stable
+    # synthetic GlobalIds for IfcShapeRepresentation entities.
+    try:
+        settings = ifcopenshell.geom.settings()
+        settings.set(settings.USE_WORLD_COORDS, True)
+        iterator = ifcopenshell.geom.iterator(settings, model)
+    except Exception:
+        iterator = None
+
+    if iterator is not None and iterator.initialize():
+        shape_counts: dict[str, int] = {}
+        while True:
+            shape = iterator.get()
+            element = model.by_id(shape.id)
+            if element is None:
+                if not iterator.next():
+                    break
+                continue
+            gid = getattr(element, "GlobalId", None)
+            if not gid:
+                if not iterator.next():
+                    break
+                continue
+
+            idx = shape_counts.get(gid, 0)
+            shape_counts[gid] = idx + 1
+            shape_gid = make_shape_rep_global_id(gid, "Body", idx)
+            rels.append(
+                IfcRelationshipRecord(
+                    from_global_id=gid,
+                    to_global_id=shape_gid,
+                    relationship_type="HasShapeRepresentation",
+                )
+            )
+
+            if not iterator.next():
+                break
 
     return rels
 

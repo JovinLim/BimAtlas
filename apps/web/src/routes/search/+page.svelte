@@ -24,6 +24,8 @@
     DELETE_FILTER_SET_MUTATION,
     APPLY_FILTER_SETS_MUTATION,
   } from "$lib/api/client";
+  import { IFC_PRODUCT_TREE_QUERY } from "$lib/api/client";
+  import { setProductTreeFromApi } from "$lib/ifc/schema";
 
   // ---- Branch context (received from main window) ----
   let branchId = $state<string | null>(null);
@@ -131,6 +133,7 @@
   let initialLoadDone = $state(false);
   let branchContextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let branchContextRetryInterval: ReturnType<typeof setInterval> | null = null;
+  let productTreeKey = $state<string | null>(null);
 
   $effect(() => {
     if (!initialLoadDone) return;
@@ -164,6 +167,22 @@
       console.error("Failed to load filter sets:", err);
     } finally {
       loadingBrowser = false;
+    }
+  }
+
+  async function ensureProductTreeForBranch(branchId: string) {
+    const key = branchId;
+    if (productTreeKey === key) return;
+    try {
+      const result = await client
+        .query(IFC_PRODUCT_TREE_QUERY, { branchId, revision: null })
+        .toPromise();
+      setProductTreeFromApi(result.data?.ifcProductTree ?? null);
+      productTreeKey = key;
+    } catch (err) {
+      console.warn("Failed to load IFC product tree in search popup:", err);
+      setProductTreeFromApi(null);
+      productTreeKey = key;
     }
   }
 
@@ -508,6 +527,7 @@
         projectId = settings.activeProjectId;
     }
     if (branchId != null) {
+      void ensureProductTreeForBranch(branchId);
       loadFilterSets();
       loadApplied();
     }
@@ -533,6 +553,7 @@
             `${$page.url.pathname}?${params.toString()}`,
           );
         }
+        void ensureProductTreeForBranch(branchId);
         loadFilterSets();
         loadApplied();
       }

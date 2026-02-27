@@ -60,23 +60,54 @@ docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -c 
 "
 echo "✅ Graph reset (metadata and data cleared)"
 
-# Truncate Relational Tables
+# Truncate Relational Tables (matches conftest.py schema)
+# Order respects FK constraints; CASCADE handles dependent tables
 echo "🧹 Truncating relational tables and resetting IDs..."
-docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -c "
-    TRUNCATE TABLE ifc_products, revisions RESTART IDENTITY CASCADE;
-" > /dev/null
-echo "✅ Tables truncated & IDs reset"
+SCHEMA_EXISTS=$(docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -tAc \
+    "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='revision';" 2>/dev/null || echo "")
 
-# Verify cleanup
+if [ "$SCHEMA_EXISTS" = "1" ]; then
+    # Truncate only tables that exist (schema may vary across migrations)
+    docker exec "$DB_CONTAINER" psql -U "$POSTGRES_SUPERUSER" -d "$TEST_DB_NAME" -c "
+        DO \$\$
+        DECLARE
+            tbl_list text;
+        BEGIN
+            SELECT string_agg(quote_ident(tablename), ', ')
+            INTO tbl_list
+            FROM pg_tables
+            WHERE schemaname = 'public'
+            AND tablename IN (
+                'merge_conflict_log', 'validation_rule', 'merge_request',
+                'ifc_entity', 'branch_applied_filter_sets', 'filter_sets',
+                'revision', 'branch', 'project_schema', 'project', 'ifc_schema'
+            );
+            IF tbl_list IS NOT NULL AND tbl_list != '' THEN
+                EXECUTE 'TRUNCATE TABLE ' || tbl_list || ' RESTART IDENTITY CASCADE';
+            END IF;
+        END \$\$;
+    " > /dev/null
+    echo "✅ Tables truncated & IDs reset"
+else
+    echo "⚠️  Relational schema not initialized (revision table missing)"
+    echo "   Run tests once to create schema, or run ./setup_test_db.sh"
+    echo "   Skipping table truncation."
+fi
+
+# Verify cleanup (only if schema exists)
 echo "🔍 Verifying cleanup..."
-REVISION_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -tAc "SELECT COUNT(*) FROM revisions;")
-PRODUCT_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -tAc "SELECT COUNT(*) FROM ifc_products;")
-
-echo "  Revisions: $REVISION_COUNT (should be 0)"
-echo "  Products: $PRODUCT_COUNT (should be 0)"
+if [ "$SCHEMA_EXISTS" = "1" ]; then
+    REVISION_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -tAc "SELECT COUNT(*) FROM revision;" 2>/dev/null || echo "?")
+    ENTITY_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$TEST_DB_USER" -d "$TEST_DB_NAME" -tAc "SELECT COUNT(*) FROM ifc_entity;" 2>/dev/null || echo "?")
+    echo "  Revisions: $REVISION_COUNT (should be 0)"
+    echo "  Entities: $ENTITY_COUNT (should be 0)"
+else
+    REVISION_COUNT="0"
+    ENTITY_COUNT="0"
+fi
 echo ""
 
-if [ "$REVISION_COUNT" = "0" ] && [ "$PRODUCT_COUNT" = "0" ]; then
+if [ "$REVISION_COUNT" = "0" ] && [ "$ENTITY_COUNT" = "0" ]; then
     echo "=================================="
     echo "✅ Cleanup Complete!"
     echo "=================================="

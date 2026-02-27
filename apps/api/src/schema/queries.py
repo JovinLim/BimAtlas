@@ -35,19 +35,23 @@ from ..db import (
     fetch_branches,
     fetch_filter_set,
     fetch_filter_sets_for_branch,
+    fetch_distinct_ifc_classes_at_revision,
     fetch_entity_at_revision,
     fetch_entities_at_revision,
     fetch_project,
     fetch_projects,
     fetch_revision_diff,
     fetch_revisions,
+    fetch_shape_representations_for_product,
+    fetch_shape_reps_for_products,
     fetch_spatial_container,
     get_latest_revision_seq,
     search_filter_sets,
     update_filter_set as db_update_filter_set,
 )
-from ..services.graph.age_client import build_spatial_tree, get_relations
+from ..services.graph.age_client import build_spatial_tree, get_element_relations, get_relations
 from .ifc_enums import IfcRelationshipType
+from . import ifc_schema_loader
 from .ifc_types import (
     AppliedFilterSets,
     Branch,
@@ -57,7 +61,10 @@ from .ifc_types import (
     FilterSetFilter,
     IfcMeshRepresentation,
     IfcProduct,
+    IfcProductClassNode,
     IfcRelatedProduct,
+    IfcRelationEdge,
+    IfcShapeRepresentation,
     IfcSpatialContainerRef,
     IfcSpatialNode,
     Project,
@@ -103,21 +110,66 @@ def _unpack_geometry(
     return out[0], out[1], out[2], out[3]
 
 
-def row_to_stream_product(row: dict) -> dict[str, Any]:
-    """Convert an entity row to a JSON-serializable dict (camelCase, base64 mesh) for SSE stream."""
+def _build_stream_mesh_from_shape_rows(shape_rows: list[dict]) -> dict[str, Any] | None:
+    """Select a mesh from shape rep rows, preferring the 'Body' representation."""
+    candidates: list[tuple[str | None, bytes | None, bytes | None, bytes | None]] = []
+    for row in shape_rows:
+        attrs = row.get("attributes") or {}
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+        rep_id = attrs.get("RepresentationIdentifier")
+        vertices, normals, faces, _matrix = _unpack_geometry(row.get("geometry"))
+        if vertices is None or faces is None:
+            continue
+        candidates.append((rep_id, vertices, normals, faces))
+
+    if not candidates:
+        return None
+
+    # Prefer Body; otherwise take the first available mesh.
+    chosen = None
+    for rep_id, vertices, normals, faces in candidates:
+        if (rep_id or "").lower() == "body":
+            chosen = (vertices, normals, faces)
+            break
+    if chosen is None:
+        _, vertices, normals, faces = candidates[0]
+        chosen = (vertices, normals, faces)
+
+    vertices, normals, faces = chosen
+    return {
+        "vertices": base64.b64encode(vertices).decode("utf-8"),
+        "normals": base64.b64encode(normals).decode("utf-8") if normals is not None else None,
+        "faces": base64.b64encode(faces).decode("utf-8"),
+    }
+
+
+def row_to_stream_product(
+    row: dict,
+    rev: int,
+    branch_id: str,
+    shape_rows: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Convert an entity row + optional shape reps into a streamable product dict."""
     attrs = row.get("attributes") or {}
     if isinstance(attrs, str):
         attrs = json.loads(attrs)
 
-    vertices, normals, faces, _matrix = _unpack_geometry(row.get("geometry"))
-
     mesh = None
-    if vertices is not None and faces is not None:
-        mesh = {
-            "vertices": base64.b64encode(vertices).decode("utf-8"),
-            "normals": base64.b64encode(normals).decode("utf-8") if normals is not None else None,
-            "faces": base64.b64encode(faces).decode("utf-8"),
-        }
+    if shape_rows:
+        mesh = _build_stream_mesh_from_shape_rows(shape_rows)
+
+    # Fallback for legacy rows where geometry still lives on the product.
+    if mesh is None:
+        vertices, normals, faces, _matrix = _unpack_geometry(row.get("geometry"))
+        if vertices is not None and faces is not None:
+            mesh = {
+                "vertices": base64.b64encode(vertices).decode("utf-8"),
+                "normals": base64.b64encode(normals).decode("utf-8")
+                if normals is not None
+                else None,
+                "faces": base64.b64encode(faces).decode("utf-8"),
+            }
 
     return {
         "globalId": row["ifc_global_id"],
@@ -146,15 +198,58 @@ def _row_to_product(row: dict, rev: int, branch_id: str) -> IfcProduct:
     if isinstance(attrs, str):
         attrs = json.loads(attrs)
 
-    # --- Mesh (only if geometry data exists) --------------------------------
-    vertices, normals, faces, _matrix = _unpack_geometry(row.get("geometry"))
     mesh: IfcMeshRepresentation | None = None
-    if vertices is not None and faces is not None:
-        mesh = IfcMeshRepresentation(
-            vertices=vertices,
-            normals=normals,
-            faces=faces,
-        )
+    representations: list[IfcShapeRepresentation] = []
+
+    # --- Shape representations + mesh (prefer Body) -------------------------
+    shape_rows = fetch_shape_representations_for_product(row["ifc_global_id"], rev, branch_id)
+    if shape_rows:
+        for srow in shape_rows:
+            s_attrs = srow.get("attributes") or {}
+            if isinstance(s_attrs, str):
+                s_attrs = json.loads(s_attrs)
+            rep_id = s_attrs.get("RepresentationIdentifier")
+            rep_type = s_attrs.get("RepresentationType")
+            s_vertices, s_normals, s_faces, _s_matrix = _unpack_geometry(srow.get("geometry"))
+            shape_mesh: IfcMeshRepresentation | None = None
+            if s_vertices is not None and s_faces is not None:
+                shape_mesh = IfcMeshRepresentation(
+                    vertices=s_vertices,
+                    normals=s_normals,
+                    faces=s_faces,
+                )
+            representations.append(
+                IfcShapeRepresentation(
+                    global_id=srow["ifc_global_id"],
+                    representation_identifier=rep_id,
+                    representation_type=rep_type,
+                    mesh=shape_mesh,
+                )
+            )
+
+        # Choose a Body representation with mesh as the primary product mesh.
+        for rep in representations:
+            if rep.mesh is None:
+                continue
+            ident = (rep.representation_identifier or "").lower()
+            if ident == "body":
+                mesh = rep.mesh
+                break
+        if mesh is None:
+            for rep in representations:
+                if rep.mesh is not None:
+                    mesh = rep.mesh
+                    break
+
+    # Fallback for legacy rows where geometry still lives on the product.
+    if mesh is None:
+        vertices, normals, faces, _matrix = _unpack_geometry(row.get("geometry"))
+        if vertices is not None and faces is not None:
+            mesh = IfcMeshRepresentation(
+                vertices=vertices,
+                normals=normals,
+                faces=faces,
+            )
 
     # --- Spatial container reference ----------------------------------------
     contained_in_ref: IfcSpatialContainerRef | None = None
@@ -203,6 +298,10 @@ def _row_to_product(row: dict, rev: int, branch_id: str) -> IfcProduct:
         contained_in=contained_in_ref,
         mesh=mesh,
         relations=relations,
+        predefined_type=attrs.get("PredefinedType"),
+        representations=representations,
+        property_sets=attrs.get("PropertySets"),
+        attributes=attrs,
     )
 
 
@@ -371,6 +470,37 @@ class Query:
         return [_row_to_product(r, rev, branch_id) for r in rows]
 
     @strawberry.field
+    async def ifc_product_tree(
+        self,
+        branch_id: str,
+        revision: Optional[int] = None,
+    ) -> Optional[IfcProductClassNode]:
+        """IFC product class hierarchy rooted at IfcProduct, pruned to classes present in the DB."""
+        rev = _resolve_revision(branch_id, revision)
+        present_classes = set(fetch_distinct_ifc_classes_at_revision(rev, branch_id))
+        if not present_classes:
+            return None
+
+        root_name = "IfcProduct"
+        if ifc_schema_loader.get_entity(root_name) is None:
+            return None
+
+        def build_node(name: str) -> Optional[IfcProductClassNode]:
+            children_nodes: list[IfcProductClassNode] = []
+            for child in ifc_schema_loader.get_children(name):
+                subtree = build_node(child)
+                if subtree is not None:
+                    children_nodes.append(subtree)
+
+            if name not in present_classes and not children_nodes:
+                return None
+
+            return IfcProductClassNode(ifc_class=name, children=children_nodes)
+
+        root = build_node(root_name)
+        return root
+
+    @strawberry.field
     async def spatial_tree(self, branch_id: str, revision: Optional[int] = None) -> list[IfcSpatialNode]:
         """Spatial decomposition tree at a specific revision on a branch."""
         rev = _resolve_revision(branch_id, revision)
@@ -379,6 +509,47 @@ class Query:
         except Exception:
             return []
         return [_dict_to_spatial_node(d) for d in tree_data]
+
+    @strawberry.field
+    async def element_relations(
+        self,
+        branch_id: str,
+        revision: Optional[int] = None,
+        relation_types: Optional[list[IfcRelationshipType]] = None,
+    ) -> list[IfcRelationEdge]:
+        """Non-spatial element relations (voIds, fills, connects, type-defines, shape reps)."""
+        rev = _resolve_revision(branch_id, revision)
+        if relation_types:
+            rel_labels = [rt.value for rt in relation_types]
+        else:
+            rel_labels = [
+                IfcRelationshipType.REL_VOIDS_ELEMENT.value,
+                IfcRelationshipType.REL_FILLS_ELEMENT.value,
+                IfcRelationshipType.REL_CONNECTS_ELEMENTS.value,
+                IfcRelationshipType.REL_DEFINES_BY_TYPE.value,
+                IfcRelationshipType.HAS_SHAPE_REPRESENTATION.value,
+            ]
+
+        raw_edges = get_element_relations(rel_labels, rev, branch_id)
+        edges: list[IfcRelationEdge] = []
+        for e in raw_edges:
+            try:
+                rel_type = IfcRelationshipType(e["relationship"])
+            except ValueError:
+                # Skip edges we don't have enum coverage for
+                continue
+            edges.append(
+                IfcRelationEdge(
+                    source_id=e["source_id"],
+                    source_ifc_class=e["source_class"],
+                    source_name=e.get("source_name"),
+                    target_id=e["target_id"],
+                    target_ifc_class=e["target_class"],
+                    target_name=e.get("target_name"),
+                    relationship=rel_type,
+                )
+            )
+        return edges
 
     @strawberry.field
     async def revisions(self, branch_id: str) -> list[Revision]:

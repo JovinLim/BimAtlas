@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from uuid import uuid4
 
 import psycopg2
 import psycopg2.extras
@@ -264,6 +265,56 @@ def fetch_entity_at_revision(
         return dict(row) if row else None
 
 
+def fetch_shape_representations_for_product(
+    product_global_id: str,
+    rev: int,
+    branch_id: str,
+) -> list[dict]:
+    """Fetch IfcShapeRepresentation entities for a single product at *rev* on *branch_id*."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_ENTITY_COLS} FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s "
+            f"AND e.ifc_class = %s "
+            f"AND e.attributes->>'OfProduct' = %s "
+            f"AND {_REV_FILTER}",
+            (branch_id, "IfcShapeRepresentation", product_global_id, rev, rev),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_shape_reps_for_products(
+    product_global_ids: list[str],
+    rev: int,
+    branch_id: str,
+) -> dict[str, list[dict]]:
+    """Batch-fetch shape reps for many products, grouped by owning product GlobalId."""
+    if not product_global_ids:
+        return {}
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_ENTITY_COLS} FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s "
+            f"AND e.ifc_class = %s "
+            f"AND e.attributes->>'OfProduct' = ANY(%s) "
+            f"AND {_REV_FILTER}",
+            (branch_id, "IfcShapeRepresentation", product_global_ids, rev, rev),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        attrs = row.get("attributes") or {}
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+        owner = attrs.get("OfProduct")
+        if not owner:
+            continue
+        grouped.setdefault(owner, []).append(row)
+    return grouped
+
+
 def _resolve_relation_gids(
     relation_types: list[str], rev: int, branch_id: str,
 ) -> list[str]:
@@ -332,6 +383,18 @@ def fetch_entities_at_revision(
             params,
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_distinct_ifc_classes_at_revision(rev: int, branch_id: str) -> list[str]:
+    """Return distinct ``ifc_class`` values visible at *rev* on *branch_id*."""
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT e.ifc_class FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s AND {_REV_FILTER}",
+            (branch_id, rev, rev),
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
 
 
 def fetch_spatial_container(
@@ -752,3 +815,238 @@ def fetch_entities_with_filter_sets(
             params,
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Validation rules / IFC schema metadata
+# ---------------------------------------------------------------------------
+
+
+def fetch_validation_rules(schema_name: str) -> dict | None:
+    """Rebuild a schema-style JSON object from normalized validation_rule rows.
+
+    Returns a dict shaped like ``{"schema": <name>, "entities": {...}}`` so
+    existing loader/query code can continue to operate on the same interface.
+    """
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT schema_id FROM ifc_schema WHERE version_name = %s LIMIT 1",
+            (schema_name,),
+        )
+        schema_row = cur.fetchone()
+        if not schema_row:
+            return None
+        schema_id = schema_row["schema_id"]
+
+        cur.execute(
+            """
+            SELECT target_ifc_class, rule_schema
+            FROM validation_rule
+            WHERE schema_id = %s
+              AND project_id IS NULL
+              AND is_active = TRUE
+            """,
+            (schema_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    entities: dict[str, dict] = {}
+    for row in rows:
+        payload = row.get("rule_schema")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        if not isinstance(payload, dict):
+            continue
+
+        # Backward compatibility for legacy single-row payloads.
+        if isinstance(payload.get("entities"), dict):
+            return payload
+
+        rule_type = payload.get("ruleType")
+        entity_name = payload.get("entity") or row.get("target_ifc_class")
+        if not entity_name:
+            continue
+
+        entity = entities.setdefault(
+            entity_name,
+            {"abstract": False, "parent": None, "attributes": []},
+        )
+        if rule_type == "inheritance":
+            entity["parent"] = payload.get("parent")
+            entity["abstract"] = bool(payload.get("abstract", False))
+        elif rule_type == "required_attributes":
+            declared = payload.get("declaredAttributes") or []
+            if isinstance(declared, list):
+                entity["attributes"] = declared
+
+    if not entities:
+        return None
+    return {"schema": schema_name, "entities": entities}
+
+
+def validation_schema_exists(schema_name: str) -> bool:
+    """Return True if an IFC schema version already exists."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM ifc_schema WHERE version_name = %s LIMIT 1",
+            (schema_name,),
+        )
+        return cur.fetchone() is not None
+
+
+def insert_validation_rules(schema_name: str, rules: dict) -> None:
+    """Insert normalized validation rules per entity for a schema version.
+
+    This creates:
+      1) one row in ``ifc_schema`` for ``schema_name``
+      2) multiple rows in ``validation_rule`` (at least inheritance + required)
+         per entity.
+    """
+    entities = rules.get("entities")
+    if not isinstance(entities, dict) or not entities:
+        raise ValueError("Schema JSON must include a non-empty 'entities' object")
+
+    # Use a stable local UUID to avoid relying on DB default UUID generators.
+    schema_id = str(uuid4())
+
+    with get_cursor() as cur:
+        cur.execute(
+            "INSERT INTO ifc_schema (schema_id, version_name) VALUES (%s, %s)",
+            (schema_id, schema_name),
+        )
+
+        def lineage_for(entity_name: str) -> list[str]:
+            lineage: list[str] = []
+            seen: set[str] = set()
+            current: str | None = entity_name
+            while current:
+                if current in seen:
+                    break
+                seen.add(current)
+                lineage.append(current)
+                parent = (entities.get(current) or {}).get("parent")
+                current = parent if isinstance(parent, str) and parent else None
+            lineage.reverse()  # root -> leaf
+            return lineage
+
+        def effective_required_attrs(entity_name: str) -> list[dict]:
+            out: list[dict] = []
+            for cls in lineage_for(entity_name):
+                attrs = (entities.get(cls) or {}).get("attributes") or []
+                if not isinstance(attrs, list):
+                    continue
+                for attr in attrs:
+                    if not isinstance(attr, dict):
+                        continue
+                    if not bool(attr.get("required", False)):
+                        continue
+                    out.append(
+                        {
+                            "name": attr.get("name"),
+                            "type": attr.get("type"),
+                            "required": True,
+                            "definedOn": cls,
+                        }
+                    )
+            return out
+
+        for entity_name, raw_meta in entities.items():
+            meta = raw_meta if isinstance(raw_meta, dict) else {}
+            parent = meta.get("parent")
+            abstract = bool(meta.get("abstract", False))
+            declared_attrs = meta.get("attributes") or []
+            if not isinstance(declared_attrs, list):
+                declared_attrs = []
+
+            inheritance_rule = {
+                "schema": schema_name,
+                "ruleType": "inheritance",
+                "entity": entity_name,
+                "parent": parent if isinstance(parent, str) and parent else None,
+                "abstract": abstract,
+            }
+            cur.execute(
+                """
+                INSERT INTO validation_rule (
+                    name, description, schema_id, project_id, target_ifc_class,
+                    rule_schema, severity, is_active
+                )
+                VALUES (%s, %s, %s, NULL, %s, %s, 'Info', TRUE)
+                """,
+                (
+                    f"Inheritance: {entity_name}",
+                    f"Inheritance rule for {entity_name} in {schema_name}",
+                    schema_id,
+                    entity_name,
+                    json.dumps(inheritance_rule),
+                ),
+            )
+
+            required_rule = {
+                "schema": schema_name,
+                "ruleType": "required_attributes",
+                "entity": entity_name,
+                "lineage": lineage_for(entity_name),
+                "declaredAttributes": declared_attrs,
+                "effectiveRequiredAttributes": effective_required_attrs(entity_name),
+            }
+            cur.execute(
+                """
+                INSERT INTO validation_rule (
+                    name, description, schema_id, project_id, target_ifc_class,
+                    rule_schema, severity, is_active
+                )
+                VALUES (%s, %s, %s, NULL, %s, %s, 'Error', TRUE)
+                """,
+                (
+                    f"Required attributes: {entity_name}",
+                    f"Required-attributes rule for {entity_name} in {schema_name}",
+                    schema_id,
+                    entity_name,
+                    json.dumps(required_rule),
+                ),
+            )
+
+
+def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
+    """Delete an IFC schema and all attached validation_rule rows.
+
+    Returns a dict with deletion counts, or ``None`` if the schema does not
+    exist.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT schema_id FROM ifc_schema WHERE version_name = %s LIMIT 1",
+            (schema_name,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        schema_id = row[0]
+
+        # Delete validation_rule rows first (FK references ifc_schema).
+        # Use subquery to avoid type/format mismatch between Python and PG UUID.
+        cur.execute(
+            """
+            DELETE FROM validation_rule
+            WHERE schema_id = (SELECT schema_id FROM ifc_schema WHERE version_name = %s)
+            """,
+            (schema_name,),
+        )
+        deleted_rules = cur.rowcount
+
+        cur.execute(
+            "DELETE FROM ifc_schema WHERE version_name = %s",
+            (schema_name,),
+        )
+        deleted_schemas = cur.rowcount
+
+    return {
+        "schema": schema_name,
+        "schema_id": str(schema_id),
+        "deleted_validation_rules": deleted_rules,
+        "deleted_ifc_schemas": deleted_schemas,
+    }

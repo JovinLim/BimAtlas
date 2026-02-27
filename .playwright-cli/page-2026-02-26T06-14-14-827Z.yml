@@ -1,0 +1,47 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - button "BimAtlas – go to project selection" [ref=e6] [cursor=pointer]: BimAtlas
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - generic [ref=e30]: Project
+        - combobox "Project" [ref=e31] [cursor=pointer]:
+          - option "test" [selected]
+      - generic [ref=e32]: /
+      - generic [ref=e33]:
+        - generic [ref=e34]: Branch
+        - combobox "Branch" [ref=e35] [cursor=pointer]:
+          - option "main" [selected]
+          - option "archi"
+        - button "+" [ref=e36] [cursor=pointer]
+        - button "Delete branch main" [ref=e37] [cursor=pointer]:
+          - img [ref=e38]
+    - tablist [ref=e41]:
+      - tab "3D View" [selected] [ref=e42] [cursor=pointer]
+      - tab "Graph" [ref=e43] [cursor=pointer]
+  - generic [ref=e7]:
+    - generic [ref=e44]:
+      - generic:
+        - generic:
+          - paragraph: Rendering 53/74 objects
+    - generic:
+      - generic [ref=e47]:
+        - complementary [ref=e48]:
+          - generic [ref=e49]:
+            - button "Import IFC" [ref=e50] [cursor=pointer]:
+              - img [ref=e51]
+              - text: Import IFC
+            - button "Fit View" [ref=e54] [cursor=pointer]
+            - region "View Options" [ref=e55]:
+              - heading "View Options" [level=2] [ref=e56]
+              - generic [ref=e57]:
+                - generic [ref=e58]: Subgraph Depth
+                - generic [ref=e59]:
+                  - button "Decrease depth" [ref=e60] [cursor=pointer]: −
+                  - spinbutton "Depth value" [ref=e61]: "1"
+                  - button "Increase depth" [ref=e62] [cursor=pointer]: +
+        - button "Collapse sidebar" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+      - button "Search and filter" [ref=e66] [cursor=pointer]:
+        - img [ref=e67]
+        - text: Search
+      - generic: 0 elements

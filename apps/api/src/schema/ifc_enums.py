@@ -16,6 +16,7 @@ class IfcRelationshipType(Enum):
     REL_FILLS_ELEMENT = "IfcRelFillsElement"
     REL_ASSOCIATES_MATERIAL = "IfcRelAssociatesMaterial"
     REL_DEFINES_BY_TYPE = "IfcRelDefinesByType"
+    HAS_SHAPE_REPRESENTATION = "HasShapeRepresentation"
 
 
 @strawberry.enum

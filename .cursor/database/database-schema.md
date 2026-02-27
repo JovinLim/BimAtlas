@@ -69,7 +69,13 @@ is_active boolean
 Table project {
 project_id UUID [pk]
 name varchar
-default_schema_id UUID
+description text
+}
+
+Table project_schema {
+project_id UUID [pk]
+schema_id UUID [pk]
+Note: 'Junction table: a project can have multiple IFC schemas applied'
 }
 
 Table branch {
@@ -157,7 +163,8 @@ resolved_entity_id UUID [null]
 
 Ref: validation_rule.schema_id > ifc_schema.schema_id
 Ref: validation_rule.project_id > project.project_id
-Ref: project.default_schema_id > ifc_schema.schema_id
+Ref: project_schema.project_id > project.project_id
+Ref: project_schema.schema_id > ifc_schema.schema_id
 
 Ref: branch.project_id > project.project_id
 Ref: revision.branch_id > branch.branch_id

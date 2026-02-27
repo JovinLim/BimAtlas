@@ -160,11 +160,13 @@ class TestAppliedFilterSets:
 
     def test_apply_empty_clears(self, db_pool, test_branch):
         fs1 = db.create_filter_set(test_branch, "A", "AND", [])
-        db.apply_filter_sets(test_branch, [fs1["id"]], "AND")
+        # Apply once using the canonical filter_set_id, then clear again.
+        db.apply_filter_sets(test_branch, [str(fs1["filter_set_id"])], "AND")
         db.apply_filter_sets(test_branch, [], "AND")
 
         data = db.fetch_applied_filter_sets(test_branch)
-        assert data["filter_sets"] == []
+        # Avoid dumping the full filter_set payload on failure; just check sizes.
+        assert len(data["filter_sets"]) == 0
         assert data["combination_logic"] == "AND"
 
     def test_fetch_applied_empty_branch(self, db_pool, test_branch):

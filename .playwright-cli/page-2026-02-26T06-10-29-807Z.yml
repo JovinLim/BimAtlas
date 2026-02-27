@@ -1,0 +1,3 @@
+- main [ref=e3]:
+  - button "BimAtlas – go to project selection" [ref=e6] [cursor=pointer]: BimAtlas
+  - paragraph [ref=e11]: Loading projects...

@@ -13,17 +13,21 @@ from pathlib import Path
 from uuid import UUID
 
 import strawberry
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from strawberry.fastapi import GraphQLRouter
 
 from .db import (
     close_pool,
+    delete_ifc_schema_with_rules,
     fetch_branch,
     fetch_entities_at_revision,
+    fetch_shape_reps_for_products,
     get_latest_revision_seq,
     init_pool,
+    insert_validation_rules,
+    validation_schema_exists,
 )
 from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
 from .services.ifc.ingestion import ingest_ifc
@@ -114,8 +118,17 @@ def _stream_ifc_products_generator(
 
     yield f"data: {json.dumps({'type': 'start', 'total': len(rows)})}\n\n"
 
+    # Batch-fetch shape representations for all products to avoid N+1 queries.
+    product_gids = [row["ifc_global_id"] for row in rows]
+    shape_reps_by_product = fetch_shape_reps_for_products(product_gids, rev, branch_id)
+
     for i, row in enumerate(rows):
-        product = row_to_stream_product(dict(row))
+        product = row_to_stream_product(
+            dict(row),
+            rev=rev,
+            branch_id=branch_id,
+            shape_rows=shape_reps_by_product.get(row["ifc_global_id"]),
+        )
         yield f"data: {json.dumps({'type': 'product', 'product': product, 'current': i + 1, 'total': len(rows)})}\n\n"
 
     yield f"data: {json.dumps({'type': 'end'})}\n\n"
@@ -222,3 +235,69 @@ async def upload_ifc(
         "unchanged": result.unchanged,
         "edges_created": result.edges_created,
     }
+
+
+@app.post("/ifc-schema", status_code=201)
+async def upload_ifc_schema(
+    schema_json: dict = Body(
+        ...,
+        description=(
+            "IFC schema JSON matching the generator output shape, including a "
+            "top-level 'schema' name and 'entities' map."
+        ),
+    ),
+):
+    """Register a new IFC schema definition in ifc_schema/validation_rule.
+
+    The payload must include a top-level ``schema`` field (schema identifier,
+    e.g. ``\"IFC4X3_ADD2\"``) and an ``entities`` object describing classes,
+    inheritance, and attributes.
+
+    This endpoint enforces **one row per schema name**; attempting to upload a
+    duplicate schema name returns HTTP 409.
+    """
+    schema_name = schema_json.get("schema")
+    if not isinstance(schema_name, str) or not schema_name.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Schema JSON must include a non-empty top-level 'schema' string field.",
+        )
+
+    if validation_schema_exists(schema_name):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Schema '{schema_name}' already exists. Duplicate schema names are not allowed.",
+        )
+
+    # Basic shape check – entities map should be present and dict-like.
+    entities = schema_json.get("entities")
+    if not isinstance(entities, dict) or not entities:
+        raise HTTPException(
+            status_code=400,
+            detail="Schema JSON must include a non-empty 'entities' object.",
+        )
+
+    insert_validation_rules(schema_name, schema_json)
+    return {"schema": schema_name}
+
+
+@app.delete("/ifc-schema/{schema_name}")
+async def delete_ifc_schema(schema_name: str):
+    """Delete an IFC schema and all attached validation rules."""
+    try:
+        result = delete_ifc_schema_with_rules(schema_name)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Failed to delete schema '{schema_name}'. "
+                "It may still be referenced by projects."
+            ),
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Schema '{schema_name}' not found.",
+        )
+    return result

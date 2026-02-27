@@ -5,7 +5,7 @@
  *
  * All queries are scoped to a branch via `branchId`.
  */
-import { client, SPATIAL_TREE_QUERY } from '$lib/api/client';
+import { client, SPATIAL_TREE_QUERY, ELEMENT_RELATIONS_QUERY } from '$lib/api/client';
 
 // ---- Types ----
 
@@ -67,9 +67,29 @@ async function fetchGraph(branchId: string, revision?: number | null): Promise<v
 			return;
 		}
 
+		let base: GraphData = { nodes: [], links: [] };
 		if (result.data?.spatialTree) {
-			graphData = flattenSpatialTree(result.data.spatialTree);
+			base = flattenSpatialTree(result.data.spatialTree);
 		}
+
+		// Enrich with non-spatial element relations (voids, fills, connects, type-defines, shape reps)
+		let enriched: GraphData = base;
+		try {
+			const relResult = await client
+				.query(ELEMENT_RELATIONS_QUERY, { branchId, revision: revision ?? undefined })
+				.toPromise();
+			if (!relResult.error && relResult.data?.elementRelations) {
+				enriched = mergeElementRelations(
+					base,
+					relResult.data.elementRelations as ElementRelationEdge[]
+				);
+			}
+		} catch {
+			// Non-fatal: if relations query fails, fall back to spatial-only graph.
+			enriched = base;
+		}
+
+		graphData = enriched;
 	} catch (err) {
 		error = err instanceof Error ? err.message : 'Failed to fetch graph data';
 	} finally {
@@ -139,6 +159,51 @@ function flattenSpatialTree(tree: SpatialTreeNode[]): GraphData {
 	return { nodes, links };
 }
 
+/** Merge non-spatial element relations into an existing graph. */
+function mergeElementRelations(base: GraphData, relations: ElementRelationEdge[]): GraphData {
+	const nodes = [...base.nodes];
+	const links = [...base.links];
+
+	const nodeById = new Map<string, GraphNode>();
+	for (const n of nodes) {
+		nodeById.set(n.id, n);
+	}
+
+	const linkKeys = new Set<string>();
+	for (const l of links) {
+		linkKeys.add(`${l.source}|${l.target}|${l.relType}`);
+	}
+
+	function ensureNode(id: string, name: string | null, ifcClass: string): void {
+		if (nodeById.has(id)) return;
+		const node: GraphNode = {
+			id,
+			name: name ?? ifcClass,
+			ifcClass,
+			group: SPATIAL_CLASSES.has(ifcClass) ? 'spatial' : ifcClass
+		};
+		nodeById.set(id, node);
+		nodes.push(node);
+	}
+
+	for (const rel of relations ?? []) {
+		ensureNode(rel.sourceId, rel.sourceName, rel.sourceIfcClass);
+		ensureNode(rel.targetId, rel.targetName, rel.targetIfcClass);
+
+		const key = `${rel.sourceId}|${rel.targetId}|${rel.relationship}`;
+		if (linkKeys.has(key)) continue;
+		linkKeys.add(key);
+
+		links.push({
+			source: rel.sourceId,
+			target: rel.targetId,
+			relType: rel.relationship
+		});
+	}
+
+	return { nodes, links };
+}
+
 // ---- Internal Types (match GraphQL response shape) ----
 
 interface ContainedElement {
@@ -154,4 +219,14 @@ interface SpatialTreeNode {
 	name: string | null;
 	children?: SpatialTreeNode[];
 	containedElements?: ContainedElement[];
+}
+
+interface ElementRelationEdge {
+	sourceId: string;
+	sourceIfcClass: string;
+	sourceName: string | null;
+	targetId: string;
+	targetIfcClass: string;
+	targetName: string | null;
+	relationship: string;
 }

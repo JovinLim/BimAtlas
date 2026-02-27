@@ -25,11 +25,25 @@
 		tag: string | null;
 		containedIn: { globalId: string; ifcClass: string; name: string | null } | null;
 		relations: { globalId: string; ifcClass: string; name: string | null; relationship: string }[];
+		predefinedType: string | null;
+		attributes: Record<string, unknown> | null;
+		representations: {
+			globalId: string;
+			representationIdentifier: string | null;
+			representationType: string | null;
+		}[];
+		propertySets: Record<string, Record<string, unknown>> | null;
 	}
 
 	let product = $state<ProductData | null>(null);
 	let loading = $state(false);
 	let fetchError = $state<string | null>(null);
+
+	let typeRelation = $state<ProductData['relations'][number] | null>(null);
+
+	function objectEntries<T extends Record<string, unknown>>(obj: T | null | undefined): [string, unknown][] {
+		return obj ? Object.entries(obj) : [];
+	}
 
 	// Fetch product details when selection changes
 	$effect(() => {
@@ -68,6 +82,11 @@
 			.finally(() => {
 				loading = false;
 			});
+	});
+
+	$effect(() => {
+		typeRelation =
+			product?.relations.find((r) => r.relationship === 'IfcRelDefinesByType') ?? null;
 	});
 </script>
 
@@ -128,6 +147,14 @@
 					</button>
 				</div>
 			</div>
+			{#if product.predefinedType}
+				<div class="detail">
+					<span class="label">Predefined Type</span>
+					<div class="value-row">
+						<span class="value badge secondary">{product.predefinedType}</span>
+					</div>
+				</div>
+			{/if}
 			<div class="detail">
 				<span class="label">GlobalId</span>
 				<div class="value-row">
@@ -253,6 +280,52 @@
 					</div>
 				</div>
 			{/if}
+			{#if typeRelation}
+				<div class="detail">
+					<span class="label">Type Definition</span>
+					<div class="value-row">
+						<button
+							class="link-btn"
+							onclick={() => (selection.activeGlobalId = typeRelation!.globalId)}
+						>
+							{typeRelation.name ?? typeRelation.ifcClass}
+						</button>
+					</div>
+				</div>
+			{/if}
+			{#if product.representations?.length}
+				<div class="relations-section">
+					<span class="label">Representations ({product.representations.length})</span>
+					<ul class="relation-list">
+						{#each product.representations as rep}
+							<li>
+								<button
+									class="link-btn"
+									onclick={() => (selection.activeGlobalId = rep.globalId)}
+								>
+									{rep.representationIdentifier ?? rep.representationType ?? 'Shape Representation'}
+								</button>
+								{#if rep.representationType}
+									<span class="rel-type">{rep.representationType}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+			{#if product.attributes}
+				<div class="relations-section">
+					<span class="label">Attributes</span>
+					<ul class="pset-props">
+						{#each objectEntries(product.attributes ?? {}) as [key, value]}
+							<li>
+								<span class="pset-key">{key}</span>
+								<span class="pset-value">{String(value)}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 			{#if product.relations.length > 0}
 				<div class="relations-section">
 					<span class="label">Relations ({product.relations.length})</span>
@@ -269,6 +342,26 @@
 							</li>
 						{/each}
 					</ul>
+				</div>
+			{/if}
+			{#if product.propertySets}
+				<div class="relations-section">
+					<span class="label">Property Sets</span>
+					<div class="pset-list">
+						{#each objectEntries(product.propertySets ?? {}) as [psetName, props]}
+							<details>
+								<summary>{psetName}</summary>
+								<ul class="pset-props">
+									{#each objectEntries(props as Record<string, unknown>) as [key, value]}
+										<li>
+											<span class="pset-key">{key}</span>
+											<span class="pset-value">{String(value)}</span>
+										</li>
+									{/each}
+								</ul>
+							</details>
+						{/each}
+					</div>
 				</div>
 			{/if}
 		{:else}
@@ -336,7 +429,8 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		overflow: hidden;
+		overflow-y: auto;
+		overflow-x: hidden;
 	}
 
 	h3 {
@@ -422,6 +516,11 @@
 		width: fit-content;
 	}
 
+	.badge.secondary {
+		background: rgba(100, 181, 246, 0.18);
+		color: #64b5f6;
+	}
+
 	.link-btn {
 		background: none;
 		border: none;
@@ -437,12 +536,9 @@
 	}
 
 	.relations-section {
-		flex: 1 1 0;
-		min-height: 0;
 		margin-top: 0.5rem;
 		padding-top: 0.5rem;
 		border-top: 1px solid rgba(255, 255, 255, 0.08);
-		overflow-y: auto;
 	}
 
 	.relation-list {
@@ -474,6 +570,45 @@
 		word-break: break-word;
 		flex-shrink: 0;
 		max-width: 55%;
+	}
+
+	.pset-list {
+		margin-top: 0.4rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.pset-list details {
+		background: rgba(255, 255, 255, 0.02);
+		border-radius: 0.25rem;
+		padding: 0.25rem 0.4rem;
+	}
+
+	.pset-list summary {
+		cursor: pointer;
+		color: #ccc;
+	}
+
+	.pset-props {
+		list-style: none;
+		padding: 0.25rem 0 0.35rem 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+
+	.pset-key {
+		font-size: 0.75rem;
+		color: #aaa;
+		margin-right: 0.4rem;
+	}
+
+	.pset-value {
+		font-size: 0.8rem;
+		color: #ddd;
+		word-break: break-all;
 	}
 
 	.panel-body .status-msg {
