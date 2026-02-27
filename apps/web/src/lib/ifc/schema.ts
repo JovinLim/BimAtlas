@@ -1,8 +1,3 @@
-/**
- * Static IFC 4.3 product type hierarchy for search filter dropdowns.
- * Covers the classes tracked by IfcProductCategory on the backend.
- */
-
 export interface IfcSchemaNode {
 	name: string;
 	children?: IfcSchemaNode[];
@@ -47,9 +42,34 @@ export const IFC_PRODUCT_TREE: IfcSchemaNode = {
 				{ name: 'IfcBuildingStorey' },
 				{ name: 'IfcSpace' }
 			]
-		}
+		},
+		// Additional entity types that are now first-class in the graph / DB.
+		{ name: 'IfcShapeRepresentation' }
 	]
 };
+
+// Current product tree used by helpers below. Defaults to the static
+// IFC_PRODUCT_TREE but can be overridden at runtime from the backend.
+let CURRENT_PRODUCT_TREE: IfcSchemaNode = IFC_PRODUCT_TREE;
+
+export interface IfcProductTreeApiNode {
+	ifcClass: string;
+	children?: IfcProductTreeApiNode[];
+}
+
+export function setProductTreeFromApi(root: IfcProductTreeApiNode | null | undefined): void {
+	if (!root) {
+		CURRENT_PRODUCT_TREE = IFC_PRODUCT_TREE;
+		return;
+	}
+	function convert(node: IfcProductTreeApiNode): IfcSchemaNode {
+		return {
+			name: node.ifcClass,
+			children: node.children?.map(convert)
+		};
+	}
+	CURRENT_PRODUCT_TREE = convert(root);
+}
 
 export interface FlatEntry {
 	name: string;
@@ -57,7 +77,7 @@ export interface FlatEntry {
 }
 
 /** Flatten the tree into a list with indent depth, suitable for <select> dropdowns. */
-export function flattenTree(node: IfcSchemaNode = IFC_PRODUCT_TREE, depth = 0): FlatEntry[] {
+export function flattenTree(node: IfcSchemaNode = CURRENT_PRODUCT_TREE, depth = 0): FlatEntry[] {
 	const result: FlatEntry[] = [{ name: node.name, depth }];
 	for (const child of node.children ?? []) {
 		result.push(...flattenTree(child, depth + 1));
@@ -83,7 +103,7 @@ export function getDescendantClasses(className: string): Set<string> {
 		return false;
 	}
 
-	collect(IFC_PRODUCT_TREE);
+	collect(CURRENT_PRODUCT_TREE);
 	if (result.size === 0) {
 		result.add(className);
 	}
@@ -97,7 +117,8 @@ export const IFC_RELATION_TYPES = [
 	'IfcRelVoidsElement',
 	'IfcRelFillsElement',
 	'IfcRelAssociatesMaterial',
-	'IfcRelDefinesByType'
+	'IfcRelDefinesByType',
+	'HasShapeRepresentation'
 ] as const;
 
 export type IfcRelationType = (typeof IFC_RELATION_TYPES)[number];

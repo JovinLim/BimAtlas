@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { flattenTree, IFC_RELATION_TYPES } from '$lib/ifc/schema';
+	import { flattenTree, IFC_RELATION_TYPES, type FlatEntry } from '$lib/ifc/schema';
 	import { FILTERABLE_ATTRIBUTES, type SearchFilter } from '$lib/search/protocol';
 
 	let {
@@ -13,7 +13,6 @@
 		onremove: () => void;
 	} = $props();
 
-	const flatEntries = flattenTree();
 	let classQuery = $state('');
 	let classDropdownOpen = $state(false);
 	let classHighlightIndex = $state(0);
@@ -61,17 +60,22 @@
 		};
 	});
 
-	const filteredClassEntries = $derived(
-		classQuery.trim() === ''
-			? flatEntries
-			: flatEntries.filter((e) =>
-					e.name.toLowerCase().includes(classQuery.toLowerCase()),
-				),
-	);
+	let filteredClassEntries = $state<FlatEntry[]>(flattenTree());
+
+	$effect(() => {
+		const entries = flattenTree();
+		filteredClassEntries =
+			classQuery.trim() === ''
+				? entries
+				: entries.filter((e) =>
+						e.name.toLowerCase().includes(classQuery.toLowerCase()),
+					);
+	});
 
 	const selectedClassLabel = $derived.by(() => {
 		if (!filter.ifcClass) return '';
-		const entry = flatEntries.find((e) => e.name === filter.ifcClass);
+		const entries = flattenTree();
+		const entry = entries.find((e) => e.name === filter.ifcClass);
 		// Show only the class name in the input (no indentation); indentation is for dropdown list only
 		return entry ? entry.name : filter.ifcClass.trim();
 	});

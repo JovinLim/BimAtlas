@@ -1,24 +1,163 @@
-{
-  "metadata": {
-    "feature_id": "feature_001_dynamic_filter_sets",
-    "plan_reference": ".cursor/plans/database_schema_rebuild_efb75060.plan.md#L17-L22",
-    "assigned_agent": "execution_agent_1",
-    "last_updated": "2026-02-25T00:00:00Z"
-  },
-  "state": {
-    "status": "in_progress",
-    "current_objective": "Implement plan todos update-age-client and update-graphql-types from database_schema_rebuild_efb75060.plan.md lines 17-22."
-  },
-  "execution_log": [
-    {
-      "step": "Update age_client.py graph properties for ifc_global_id, UUID branch_id, and revision_seq-based temporal filtering",
-      "status": "pending"
+[
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/database_schema_rebuild_efb75060.plan.md#L17-L22",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-25T00:00:00Z"
     },
-    {
-      "step": "Update ifc_types.py and queries.py for UUID IDs and JSONB attribute extraction in GraphQL resolvers",
-      "status": "pending"
-    }
-  ],
-  "handoff_notes": ""
-}
-
+    "state": {
+      "status": "in_progress",
+      "current_objective": "Implement plan todos update-age-client and update-graphql-types from database_schema_rebuild_efb75060.plan.md lines 17-22."
+    },
+    "execution_log": [
+      {
+        "step": "Update age_client.py graph properties for ifc_global_id, UUID branch_id, and revision_seq-based temporal filtering",
+        "status": "pending"
+      },
+      {
+        "step": "Update ifc_types.py and queries.py for UUID IDs and JSONB attribute extraction in GraphQL resolvers",
+        "status": "pending"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_representation_relations_fe90d486.plan.md#L34-L157",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-26T00:00:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Implement backend and frontend todos for IFC representation relations, starting with backend-shape-entities."
+    },
+    "execution_log": [
+      {
+        "step": "Implement backend ingestion of IfcShapeRepresentation entities with geometry and move geometry off IfcProduct rows",
+        "status": "complete"
+      },
+      {
+        "step": "Wire HasShapeRepresentation + IfcRelDefinesByType edges into graph, GraphQL schema, frontend graph, and selection panel; update tests",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_4.3_schema_+_db_tree_dc76bb2f.plan.md#L5-L7",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-27T00:05:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Created generator and produced full apps/api/schema/ifc_4_3_schema.json from the IFC4x3 inheritance listing."
+    },
+    "execution_log": [
+      {
+        "step": "Design and implement IFC4x3 schema generator script under apps/api/scripts/ using ifcopenshell schema metadata",
+        "status": "complete"
+      },
+      {
+        "step": "Run generator to create apps/api/schema/ifc_4_3_schema.json and verify shape (parent/abstract/attributes[required/type/order])",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_4.3_schema_+_db_tree_dc76bb2f.plan.md#L8-L10",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-27T00:12:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Implemented backend schema loader/resolution helpers for descendants and ordered full-attribute chains from ifc_4_3_schema.json."
+    },
+    "execution_log": [
+      {
+        "step": "Add schema loader module under apps/api/src/schema/ to load ifc_4_3_schema.json and provide descendants/full-attribute helpers",
+        "status": "complete"
+      },
+      {
+        "step": "Verify helpers for parent lookup, full attribute chains, and concrete descendants behave correctly against the generated schema JSON",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_4.3_schema_+_db_tree_dc76bb2f.plan.md#L11-L13",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-27T00:20:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Added DB distinct-class fetch and GraphQL ifcProductTree query rooted at IfcProduct using schema JSON inheritance."
+    },
+    "execution_log": [
+      {
+        "step": "Implement fetch_distinct_ifc_classes_at_revision in db.py and cover it with a unit test",
+        "status": "complete"
+      },
+      {
+        "step": "Add IfcProductClassNode GraphQL type and ifcProductTree field wired to the IFC4x3 schema loader, returning a pruned product class tree",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_4.3_schema_+_db_tree_dc76bb2f.plan.md#L14-L16",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-27T00:25:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Switched web schema/filter flow to request the product tree from the API and use it for flattening and descendant expansion, with a static fallback."
+    },
+    "execution_log": [
+      {
+        "step": "Expose IFC_PRODUCT_TREE_QUERY on the frontend and map the API tree into the shared schema helpers with a dynamic CURRENT_PRODUCT_TREE",
+        "status": "complete"
+      },
+      {
+        "step": "Ensure main view and search popup load the product tree for the active branch/revision and that SearchFilter uses the dynamic tree for dropdown and descendant expansion",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/ifc_4.3_schema_+_db_tree_dc76bb2f.plan.md#L17-L19",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-02-27T00:30:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Added/updated backend tests for the IFC4x3 schema loader and DB-backed product tree query, and ran the API test suite."
+    },
+    "execution_log": [
+      {
+        "step": "Add unit tests for ifc_schema_loader descendants and full attribute chains in test_ifc_schema_loader.py",
+        "status": "complete"
+      },
+      {
+        "step": "Extend GraphQL tests to verify ifcProductTree exists and reflects DB classes, and re-run ./run_tests.sh",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
+  }
+]

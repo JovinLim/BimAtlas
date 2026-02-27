@@ -37,6 +37,7 @@
     DELETE_PROJECT_MUTATION,
     DELETE_BRANCH_MUTATION,
     REVISIONS_QUERY,
+    IFC_PRODUCT_TREE_QUERY,
   } from "$lib/api/client";
   import {
     createBufferGeometry,
@@ -44,6 +45,7 @@
   } from "$lib/engine/BufferGeometryLoader";
   import { untrack, onMount, onDestroy } from "svelte";
   import { loadSettings, saveSettings } from "$lib/state/persistence";
+  import { setProductTreeFromApi } from "$lib/ifc/schema";
 
   const selection = getSelection();
   const revisionState = getRevisionState();
@@ -79,6 +81,7 @@
   let loadingGeometryCurrent = $state(0);
   let loadingGeometryTotal = $state(0);
   let totalCountKey = $state<string | null>(null);
+  let productTreeKey = $state<string | null>(null);
 
   // ---- Project / Branch state ----
   interface ProjectData {
@@ -191,8 +194,27 @@
     const depth = selection.subgraphDepth;
 
     if (selectedId) {
-      const subgraphIds = computeSubgraph(graphStore.data, selectedId, depth);
-      mgr.applySubgraphFilter(selectedId, subgraphIds);
+      // If the selected node is a synthetic IfcShapeRepresentation, map it back
+      // to its owning product so that geometry highlighting works correctly.
+      const graph = graphStore.data;
+      let effectiveSelectedId = selectedId;
+      for (const link of graph.links) {
+        const src =
+          typeof link.source === "object"
+            ? (link.source as { id: string }).id
+            : link.source;
+        const tgt =
+          typeof link.target === "object"
+            ? (link.target as { id: string }).id
+            : link.target;
+        if (link.relType === "HasShapeRepresentation" && tgt === selectedId) {
+          effectiveSelectedId = src;
+          break;
+        }
+      }
+
+      const subgraphIds = computeSubgraph(graph, effectiveSelectedId, depth);
+      mgr.applySubgraphFilter(effectiveSelectedId, subgraphIds);
     } else {
       mgr.applySubgraphFilter(null, null);
     }
@@ -369,6 +391,24 @@
     revision: number,
     branchId: string,
   ) {
+    async function ensureProductTree(branchId: string, revision: number) {
+      const key = `${branchId}:${revision}`;
+      if (productTreeKey === key) return;
+      try {
+        const result = await client
+          .query(IFC_PRODUCT_TREE_QUERY, { branchId, revision })
+          .toPromise();
+        setProductTreeFromApi(result.data?.ifcProductTree ?? null);
+        productTreeKey = key;
+      } catch (err) {
+        console.warn("Failed to load IFC product tree:", err);
+        setProductTreeFromApi(null);
+        productTreeKey = key;
+      }
+    }
+
+    await ensureProductTree(branchId, revision);
+
     const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
     if (!hasAppliedSets) {
       await loadGeometry(mgr, revision, branchId);
@@ -702,6 +742,11 @@
             if (data.type === "product") {
               const product = data.product;
               loadingGeometryCurrent = data.current ?? metaList.length + 1;
+              // Skip synthetic IfcShapeRepresentation entities; their geometry
+              // is already exposed via the owning product to avoid duplicates.
+              if (product.ifcClass === "IfcShapeRepresentation") {
+                continue;
+              }
               metaList.push({
                 globalId: product.globalId,
                 ifcClass: product.ifcClass,
@@ -751,22 +796,26 @@
             const data = JSON.parse(dataMatch[1].trim());
             if (data.type === "product") {
               const product = data.product;
-              metaList.push({
-                globalId: product.globalId,
-                ifcClass: product.ifcClass,
-                name: product.name ?? null,
-                description: product.description ?? null,
-                objectType: product.objectType ?? null,
-                tag: product.tag ?? null,
-              });
-              if (product.mesh?.vertices && product.mesh?.faces) {
-                try {
-                  const geometry = createBufferGeometry(
-                    product.mesh as RawMeshData,
-                  );
-                  mgr.addElement(product.globalId, geometry);
-                  productEventsWithMesh += 1;
-                } catch (_) {}
+              // Skip synthetic IfcShapeRepresentation entities for the final
+              // buffered event as well.
+              if (product.ifcClass !== "IfcShapeRepresentation") {
+                metaList.push({
+                  globalId: product.globalId,
+                  ifcClass: product.ifcClass,
+                  name: product.name ?? null,
+                  description: product.description ?? null,
+                  objectType: product.objectType ?? null,
+                  tag: product.tag ?? null,
+                });
+                if (product.mesh?.vertices && product.mesh?.faces) {
+                  try {
+                    const geometry = createBufferGeometry(
+                      product.mesh as RawMeshData,
+                    );
+                    mgr.addElement(product.globalId, geometry);
+                    productEventsWithMesh += 1;
+                  } catch (_) {}
+                }
               }
             }
           } catch (_) {}

@@ -94,6 +94,7 @@ DROP TABLE IF EXISTS filter_sets CASCADE;
 DROP TABLE IF EXISTS ifc_entity CASCADE;
 DROP TABLE IF EXISTS revision CASCADE;
 DROP TABLE IF EXISTS branch CASCADE;
+DROP TABLE IF EXISTS project_schema CASCADE;
 DROP TABLE IF EXISTS project CASCADE;
 DROP TABLE IF EXISTS ifc_schema CASCADE;
 DROP TYPE IF EXISTS resolution_status CASCADE;
@@ -114,11 +115,16 @@ CREATE TABLE IF NOT EXISTS ifc_schema (
 );
 
 CREATE TABLE IF NOT EXISTS project (
-    project_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name              VARCHAR NOT NULL,
-    description       TEXT,
-    default_schema_id UUID REFERENCES ifc_schema(schema_id),
-    created_at        TIMESTAMPTZ DEFAULT now()
+    project_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR NOT NULL,
+    description  TEXT,
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS project_schema (
+    project_id UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    schema_id  UUID NOT NULL REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
+    PRIMARY KEY (project_id, schema_id)
 );
 
 CREATE TABLE IF NOT EXISTS branch (
@@ -204,7 +210,7 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name             VARCHAR NOT NULL,
     description      TEXT,
-    schema_id        UUID REFERENCES ifc_schema(schema_id),
+    schema_id        UUID REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
     project_id       UUID REFERENCES project(project_id),
     target_ifc_class VARCHAR NOT NULL,
     rule_schema      JSONB NOT NULL,
@@ -305,7 +311,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                         cur.execute(
                             "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
                             "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
-                            "branch, project, ifc_schema CASCADE;"
+                            "branch, project_schema, project, ifc_schema CASCADE;"
                         )
                         print("  ✅ Truncated test tables")
                     except Exception as e:
@@ -335,8 +341,16 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
         cur.execute(
             "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
             "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
-            "branch, project, ifc_schema CASCADE;"
+            "branch, project_schema, project, ifc_schema CASCADE;"
         )
+        
+        # Clear schema loader cache (reads from validation_rule / ifc_schema)
+        try:
+            from src.schema import ifc_schema_loader as _loader
+            _loader._load_schema.cache_clear()
+            _loader._children_index.cache_clear()
+        except Exception:
+            pass
         
         # Clear graph
         try:
@@ -424,6 +438,21 @@ def test_ifc_file() -> Path:
             return ifc_path
     pytest.skip(f"Test IFC file not found. Tried: {[str(p) for p in candidates]}")
     return Path()  # unreachable; skip raises
+
+
+@pytest.fixture
+def ifc_schema_seeded(db_pool) -> None:
+    """Seed the IFC4x3 schema into the test DB so ifc_schema_loader and ifcProductTree work."""
+    import json as _json
+    schema_path = Path(__file__).resolve().parent.parent / "schema" / "ifc_4_3_schema.json"
+    if not schema_path.exists():
+        pytest.skip(f"Schema file not found: {schema_path}")
+    with open(schema_path, encoding="utf-8") as f:
+        schema_json = _json.load(f)
+    db.insert_validation_rules(
+        schema_json.get("schema", "IFC4X3_ADD2"),
+        schema_json,
+    )
 
 
 @pytest.fixture

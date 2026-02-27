@@ -40,8 +40,10 @@ class TestRelationshipExtraction:
             assert isinstance(rel.from_global_id, str)
             assert isinstance(rel.to_global_id, str)
             assert isinstance(rel.relationship_type, str)
+            # From endpoint is always a rooted IFC entity (22-char GlobalId).
             assert len(rel.from_global_id) == 22
-            assert len(rel.to_global_id) == 22
+            # To endpoint may be a rooted entity or a synthetic shape rep id.
+            assert len(rel.to_global_id) >= 22
     
     def test_extract_relationships_types(self, test_ifc_file):
         """Test that we extract expected relationship types."""
@@ -51,15 +53,12 @@ class TestRelationshipExtraction:
         relationships = _extract_relationships(model)
         
         rel_types = {r.relationship_type for r in relationships}
-        
-        # Should have common relationship types
-        expected_types = {
-            "IfcRelAggregates",
-            "IfcRelContainedInSpatialStructure"
-        }
-        
-        overlap = expected_types & rel_types
-        assert len(overlap) >= 1, f"Expected relationship types, found: {rel_types}"
+
+        # Should have core spatial relationships
+        assert "IfcRelAggregates" in rel_types or "IfcRelContainedInSpatialStructure" in rel_types
+
+        # Synthetic shape representation edges should always be present when geometry exists.
+        assert "HasShapeRepresentation" in rel_types
 
 
 class TestDiffEngine:
@@ -205,12 +204,12 @@ class TestDatabaseOperations:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, branch_id, "test.ifc", "Test revision")
+                rev_id, rev_seq = _create_revision(cur, branch_id, "test.ifc", "Test revision")  # type: ignore[misc]
                 conn.commit()
             
             # Verify revision was created
             with conn.cursor() as cur:
-                cur.execute("SELECT revision_id, branch_id, commit_message, ifc_filename FROM revision WHERE revision_id = %s", (rev_id,))
+                cur.execute("SELECT revision_id, branch_id, commit_message, ifc_filename, revision_seq FROM revision WHERE revision_id = %s", (rev_id,))
                 row = cur.fetchone()
             
             assert row is not None
@@ -218,6 +217,7 @@ class TestDatabaseOperations:
             assert str(row[1]) == str(branch_id)
             assert row[2] == "Test revision"
             assert row[3] == "test.ifc"
+            assert int(row[4]) == int(rev_seq)
         finally:
             put_conn(conn)
     
@@ -245,7 +245,7 @@ class TestDatabaseOperations:
         try:
             # Create revision first
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, branch_id, "test.ifc", None)
+                rev_id, _ = _create_revision(cur, branch_id, "test.ifc", None)  # type: ignore[misc]
                 conn.commit()
             
             # Insert entities (rev_id from _create_revision is revision_id UUID)
@@ -281,7 +281,7 @@ class TestDatabaseOperations:
         try:
             # Create first revision and insert product
             with conn.cursor() as cur:
-                rev_id_1 = _create_revision(cur, branch_id, "test_v1.ifc", None)
+                rev_id_1, _ = _create_revision(cur, branch_id, "test_v1.ifc", None)  # type: ignore[misc]
                 conn.commit()
             
             records = [
@@ -300,7 +300,7 @@ class TestDatabaseOperations:
             
             # Create second revision and close the product
             with conn.cursor() as cur:
-                rev_id_2 = _create_revision(cur, branch_id, "test_v2.ifc", None)
+                rev_id_2, _ = _create_revision(cur, branch_id, "test_v2.ifc", None)  # type: ignore[misc]
                 conn.commit()
             
             with conn.cursor() as cur:
@@ -387,7 +387,9 @@ class TestFullIngestion:
                 )
                 row = cur.fetchone()
             assert row is not None
-            assert len(row[0]) == 22  # ifc_global_id
+            # Rooted IFC entities have 22-char GlobalIds; synthetic entities (shape reps)
+            # use longer ids that still start with the owning product's GlobalId.
+            assert len(row[0]) >= 22  # ifc_global_id
             assert row[1].startswith("Ifc")  # ifc_class
             assert len(row[2]) == 64  # content_hash (SHA-256)
         finally:
@@ -429,7 +431,7 @@ class TestEdgeCases:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, branch_id, "empty.ifc", None)
+                rev_id, _ = _create_revision(cur, branch_id, "empty.ifc", None)  # type: ignore[misc]
                 conn.commit()
             
             # Should handle empty list gracefully
@@ -453,7 +455,7 @@ class TestEdgeCases:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                rev_id = _create_revision(cur, branch_id, "test.ifc", None)
+                rev_id, _ = _create_revision(cur, branch_id, "test.ifc", None)  # type: ignore[misc]
                 conn.commit()
             
             # Should handle empty list gracefully

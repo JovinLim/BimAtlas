@@ -436,6 +436,46 @@ def get_contained_elements(spatial_global_id: str, rev: int, branch_id: str) -> 
     ]
 
 
+def get_element_relations(
+    rel_types: list[str],
+    rev: int,
+    branch_id: str,
+) -> list[dict]:
+    """Return non-spatial element relations at *rev* on *branch_id*.
+
+    Each dict has keys:
+      - ``source_id``, ``source_class``, ``source_name``
+      - ``target_id``, ``target_class``, ``target_name``
+      - ``relationship`` (edge label)
+    """
+    if not rel_types:
+        return []
+
+    labels = [_validate_label(rt) for rt in rel_types]
+    rel_list = ", ".join(f"'{lbl}'" for lbl in labels)
+
+    cypher = cypher_tpl.ELEMENT_RELATIONS.format(
+        a_filter=_rev_filter("a", rev, branch_id),
+        r_filter=_rev_filter("r", rev, branch_id),
+        b_filter=_rev_filter("b", rev, branch_id),
+        rel_type_filter=f"type(r) IN [{rel_list}]",
+    )
+    cols = ["src", "src_lbl", "src_name", "dst", "dst_lbl", "dst_name", "rel"]
+    rows = _exec_cypher(cypher, cols)
+    return [
+        {
+            "source_id": r[0],
+            "source_class": r[1],
+            "source_name": r[2],
+            "target_id": r[3],
+            "target_class": r[4],
+            "target_name": r[5],
+            "relationship": r[6],
+        }
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Spatial tree builder (recursive)
 # ---------------------------------------------------------------------------

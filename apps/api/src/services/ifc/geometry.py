@@ -35,6 +35,22 @@ class IfcEntityRecord:
     # Used for SCD2 change detection during versioned ingestion
 
 
+def make_shape_rep_global_id(
+    product_global_id: str,
+    representation_identifier: str | None,
+    index: int,
+) -> str:
+    """Construct a synthetic GlobalId for an IfcShapeRepresentation entity.
+
+    IFC IfcShapeRepresentation has no native GlobalId, so we synthesise one
+    using the owning product's GlobalId, the representation identifier
+    (e.g. "Body"), and a stable index.
+    """
+    ident = representation_identifier or "Body"
+    safe_ident = "".join(ch if ch.isalnum() else "_" for ch in ident)
+    return f"{product_global_id}_Shape_{safe_ident}_{index}"
+
+
 def _compute_content_hash(
     ifc_class: str,
     attributes: dict[str, Any],
@@ -157,21 +173,95 @@ def _extract_spatial_elements(
     return records
 
 
+def _extract_type_objects(model: ifcopenshell.file) -> list[IfcEntityRecord]:
+    """Extract IFC type objects referenced by IfcRelDefinesByType.
+
+    Type objects (e.g. IfcWallType) are not IfcProduct instances, so they are
+    not covered by the geometry iterator. We still want them as first-class
+    rows and graph nodes so that instance elements can point at them via
+    IfcRelDefinesByType.
+    """
+    records: list[IfcEntityRecord] = []
+    seen_gids: set[str] = set()
+
+    # Walk all IfcRelDefinesByType relationships to discover used type objects.
+    for rel in model.by_type("IfcRelDefinesByType"):
+        type_obj = getattr(rel, "RelatingType", None)
+        if type_obj is None:
+            continue
+        gid = getattr(type_obj, "GlobalId", None)
+        if not gid or gid in seen_gids:
+            continue
+        seen_gids.add(gid)
+
+        ifc_class = type_obj.is_a()
+        name = getattr(type_obj, "Name", None)
+        description = getattr(type_obj, "Description", None)
+        object_type = getattr(type_obj, "ObjectType", None)
+        tag = getattr(type_obj, "Tag", None)
+
+        attributes: dict[str, Any] = {
+            "Name": name,
+            "Description": description,
+            "ObjectType": object_type,
+            "Tag": tag,
+        }
+
+        predefined_type = getattr(type_obj, "PredefinedType", None)
+        if predefined_type is not None:
+            attributes["PredefinedType"] = str(predefined_type)
+
+        try:
+            psets = ifcopenshell.util.element.get_psets(type_obj) or {}
+        except Exception:
+            psets = {}
+        if psets:
+            attributes["PropertySets"] = psets
+
+        geometry_blob = None
+        content_hash = _compute_content_hash(
+            ifc_class=ifc_class,
+            attributes=attributes,
+            geometry=geometry_blob,
+        )
+
+        records.append(
+            IfcEntityRecord(
+                ifc_global_id=gid,
+                ifc_class=ifc_class,
+                attributes=attributes,
+                geometry=geometry_blob,
+                content_hash=content_hash,
+            )
+        )
+
+    return records
+
+
 def _extract_geometric_elements(
     model: ifcopenshell.file,
     containment_map: dict[str, str],
 ) -> list[IfcEntityRecord]:
-    """Extract all IfcProduct entities that have geometry.
+    """Extract IfcProduct entities with geometry **and** their shape reps.
 
     Uses ``ifcopenshell.geom.iterator`` to triangulate meshes in world
     coordinates (``USE_WORLD_COORDS = True``), then serializes vertex, normal,
     face, and transformation matrix buffers to raw bytes.
+
+    For each geometric product we now emit:
+
+      - One ``IfcEntityRecord`` for the product itself (geometry = NULL) with
+        core attributes + containment + PredefinedType + PropertySets.
+      - One or more ``IfcEntityRecord`` rows for synthetic
+        ``IfcShapeRepresentation`` entities that carry the packed geometry.
     """
     settings = ifcopenshell.geom.settings()
     settings.set(settings.USE_WORLD_COORDS, True)
 
     iterator = ifcopenshell.geom.iterator(settings, model)
     records: list[IfcEntityRecord] = []
+    seen_products: set[str] = set()
+    shape_counts: dict[str, int] = {}
 
     if not iterator.initialize():
         return records
@@ -197,6 +287,19 @@ def _extract_geometric_elements(
         if contained_in is not None:
             attributes["ContainedIn"] = contained_in
 
+        # Additional IFC metadata on the product: PredefinedType + PropertySets
+        predefined_type = getattr(element, "PredefinedType", None)
+        if predefined_type is not None:
+            attributes["PredefinedType"] = str(predefined_type)
+
+        try:
+            # Nested dict: {PsetName: {PropName: value, ...}, ...}
+            psets = ifcopenshell.util.element.get_psets(element) or {}
+        except Exception:
+            psets = {}
+        if psets:
+            attributes["PropertySets"] = psets
+
         # Triangulated mesh buffers
         verts = np.array(shape.geometry.verts, dtype=np.float32)
         faces = np.array(shape.geometry.faces, dtype=np.uint32)
@@ -217,19 +320,45 @@ def _extract_geometric_elements(
             matrix=matrix_bytes,
         )
 
-        content_hash = _compute_content_hash(
-            ifc_class=ifc_class,
-            attributes=attributes,
-            geometry=geometry_blob,
-        )
-
-        records.append(
-            IfcEntityRecord(
-                ifc_global_id=gid,
+        # Product record: geometry lives on shape reps, not on the product.
+        if gid not in seen_products:
+            product_content_hash = _compute_content_hash(
                 ifc_class=ifc_class,
                 attributes=attributes,
+                geometry=None,
+            )
+            records.append(
+                IfcEntityRecord(
+                    ifc_global_id=gid,
+                    ifc_class=ifc_class,
+                    attributes=attributes,
+                    geometry=None,
+                    content_hash=product_content_hash,
+                )
+            )
+            seen_products.add(gid)
+
+        # Shape representation entity carrying the packed mesh
+        idx = shape_counts.get(gid, 0)
+        shape_counts[gid] = idx + 1
+        shape_gid = make_shape_rep_global_id(gid, "Body", idx)
+        shape_attributes: dict[str, Any] = {
+            "RepresentationIdentifier": "Body",
+            "RepresentationType": "Tessellation",
+            "OfProduct": gid,
+        }
+        shape_content_hash = _compute_content_hash(
+            ifc_class="IfcShapeRepresentation",
+            attributes=shape_attributes,
+            geometry=geometry_blob,
+        )
+        records.append(
+            IfcEntityRecord(
+                ifc_global_id=shape_gid,
+                ifc_class="IfcShapeRepresentation",
+                attributes=shape_attributes,
                 geometry=geometry_blob,
-                content_hash=content_hash,
+                content_hash=shape_content_hash,
             )
         )
 
@@ -269,21 +398,33 @@ def extract_products_from_model(model: ifcopenshell.file) -> list[IfcEntityRecor
     # Phase 1: Spatial structure elements (no geometry)
     spatial_records = _extract_spatial_elements(model, containment_map)
 
-    # Phase 2: Elements with geometry
+    # Phase 2: Elements with geometry (products + their shape reps)
     geometric_records = _extract_geometric_elements(model, containment_map)
 
+    # Phase 3: Type objects referenced by IfcRelDefinesByType
+    type_records = _extract_type_objects(model)
+
     # Merge: spatial elements first, then geometric elements (skip duplicates
-    # where a spatial element also has geometry -- the geometric version wins)
+    # where a spatial element also has geometry -- the geometric product
+    # version wins).  Shape representations use synthetic GlobalIds so they do
+    # not collide with product GlobalIds.
     records: list[IfcEntityRecord] = []
     geometric_gids = {r.ifc_global_id for r in geometric_records}
 
-    # Add spatial-only records (those without geometry from the iterator)
+    # Add spatial-only records (those without a corresponding product record)
     for rec in spatial_records:
         if rec.ifc_global_id not in geometric_gids:
             records.append(rec)
 
-    # Add all geometric records
+    # Add all geometric records (products + shape reps)
     records.extend(geometric_records)
+
+    # Add type objects, skipping any that somehow collide with existing ids
+    seen_ids = {r.ifc_global_id for r in records}
+    for rec in type_records:
+        if rec.ifc_global_id not in seen_ids:
+            records.append(rec)
+            seen_ids.add(rec.ifc_global_id)
 
     return records
 

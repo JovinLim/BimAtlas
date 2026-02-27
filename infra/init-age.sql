@@ -37,11 +37,17 @@ CREATE TABLE IF NOT EXISTS ifc_schema (
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS project (
-    project_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name              VARCHAR NOT NULL,
-    description       TEXT,
-    default_schema_id UUID REFERENCES ifc_schema(schema_id),
-    created_at        TIMESTAMPTZ DEFAULT now()
+    project_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR NOT NULL,
+    description  TEXT,
+    created_at   TIMESTAMPTZ DEFAULT now()
+);
+
+-- Junction: a project can have multiple IFC schemas applied
+CREATE TABLE IF NOT EXISTS project_schema (
+    project_id UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    schema_id  UUID NOT NULL REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
+    PRIMARY KEY (project_id, schema_id)
 );
 
 -- ============================================================================
@@ -176,7 +182,7 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name             VARCHAR NOT NULL,
     description      TEXT,
-    schema_id        UUID REFERENCES ifc_schema(schema_id),
+    schema_id        UUID REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
     project_id       UUID REFERENCES project(project_id),
     target_ifc_class VARCHAR NOT NULL,
     rule_schema      JSONB NOT NULL,

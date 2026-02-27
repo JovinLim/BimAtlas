@@ -64,3 +64,14 @@ CONTAINED_ELEMENTS = (
     "WHERE {spatial_filter} AND {r_filter} AND {elem_filter} "
     "RETURN elem.ifc_global_id AS gid, label(elem) AS lbl, elem.name AS name"
 )
+
+# ---------------------------------------------------------------------------
+# Element-level relations (non-spatial)
+# ---------------------------------------------------------------------------
+
+ELEMENT_RELATIONS = (
+    "MATCH (a)-[r]->(b) "
+    "WHERE {a_filter} AND {r_filter} AND {b_filter} AND {rel_type_filter} "
+    "RETURN a.ifc_global_id AS src, label(a) AS src_lbl, a.name AS src_name, "
+    "b.ifc_global_id AS dst, label(b) AS dst_lbl, b.name AS dst_name, type(r) AS rel"
+)

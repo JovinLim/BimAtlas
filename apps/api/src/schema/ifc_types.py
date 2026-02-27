@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Optional
 
 import strawberry
+from strawberry.scalars import JSON
 
 from .ifc_enums import IfcRelationshipType
 from .scalars import Base64Bytes
@@ -44,12 +45,39 @@ class IfcMeshRepresentation:
 
 
 @strawberry.type
+class IfcShapeRepresentation:
+    """Synthetic entity representing a single shape representation for a product.
+
+    Backed by rows in ``ifc_entity`` with ``ifc_class = 'IfcShapeRepresentation'``
+    and geometry stored on the shape rep rather than the product.
+    """
+
+    global_id: str
+    representation_identifier: Optional[str] = None
+    representation_type: Optional[str] = None
+    mesh: Optional[IfcMeshRepresentation] = None
+
+
+@strawberry.type
 class IfcRelatedProduct:
     """A related product reached via an IFC objectified relationship edge."""
 
     global_id: str
     ifc_class: str
     name: Optional[str] = None
+    relationship: IfcRelationshipType
+
+
+@strawberry.type
+class IfcRelationEdge:
+    """A graph edge between two products (or type/shape entities)."""
+
+    source_id: str
+    source_ifc_class: str
+    source_name: Optional[str] = None
+    target_id: str
+    target_ifc_class: str
+    target_name: Optional[str] = None
     relationship: IfcRelationshipType
 
 
@@ -81,6 +109,10 @@ class IfcProduct(IfcObjectDefinition):
     contained_in: Optional[IfcSpatialContainerRef] = None
     mesh: Optional[IfcMeshRepresentation] = None
     relations: list[IfcRelatedProduct] = strawberry.field(default_factory=list)
+    predefined_type: Optional[str] = None
+    representations: list[IfcShapeRepresentation] = strawberry.field(default_factory=list)
+    property_sets: Optional[JSON] = None
+    attributes: Optional[JSON] = None
 
 
 @strawberry.type
@@ -95,6 +127,14 @@ class IfcSpatialNode:
     name: Optional[str] = None
     children: list[IfcSpatialNode] = strawberry.field(default_factory=list)
     contained_elements: list[IfcRelatedProduct] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class IfcProductClassNode:
+    """A node in the IFC product class hierarchy used for filters."""
+
+    ifc_class: str
+    children: list["IfcProductClassNode"] = strawberry.field(default_factory=list)
 
 
 # -- Versioning types --

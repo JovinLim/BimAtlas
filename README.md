@@ -66,6 +66,8 @@ BimAtlas/
   infra/
     docker-compose.yml          # PostgreSQL/AGE + Adminer (DB web UI on :8080)
     init-age.sql                # Bootstrap: AGE extension + schema (project, branch, revision, ifc_entity, filter_sets, etc.)
+    migrations/                 # Incremental SQL migrations (run via run_migrations.sh)
+    run_migrations.sh           # Apply migrations in filename order
 ```
 
 ---
@@ -94,17 +96,38 @@ This spins up a PostgreSQL instance with the Apache AGE graph extension, creates
 
 After `docker compose up -d`, open **http://localhost:8080** to use Adminer. Log in with:
 
-| Field      | Value     |
-| ---------- | --------- |
-| System     | PostgreSQL |
-| Server     | age-db    |
-| Username   | bimatlas  |
-| Password   | bimatlas  |
-| Database   | bimatlas  |
+| Field    | Value      |
+| -------- | ---------- |
+| System   | PostgreSQL |
+| Server   | age-db     |
+| Username | bimatlas   |
+| Password | bimatlas   |
+| Database | bimatlas   |
 
 You can browse tables, run SQL, and inspect schema from the Adminer UI.
 
-### 2. Start the API
+### 2. Run Migrations (Optional)
+
+After the database is running, apply any incremental schema changes from `infra/migrations/`:
+
+```bash
+cd infra
+./run_migrations.sh
+```
+
+This runs all `.sql` files in `infra/migrations/` in filename order (e.g. `001_*.sql`, `002_*.sql`). Use `psql` if available, or `docker compose exec` when running from the repo root. Override connection settings with env vars:
+
+```
+BIMATLAS_DB_HOST=localhost
+BIMATLAS_DB_PORT=5432
+BIMATLAS_DB_NAME=bimatlas
+BIMATLAS_DB_USER=bimatlas
+BIMATLAS_DB_PASSWORD=bimatlas
+```
+
+**Note:** The initial schema is created by `init-age.sql` when the container is first started. Migrations are for incremental changes (new columns, indexes, etc.) when upgrading.
+
+### 3. Start the API
 
 ```bash
 cd apps/api
@@ -125,7 +148,7 @@ BIMATLAS_DB_PASSWORD=bimatlas
 PORT=8000
 ```
 
-### 3. Start the Frontend
+### 4. Start the Frontend
 
 ```bash
 cd apps/web
@@ -205,7 +228,10 @@ IFC geometry is extracted using IfcOpenShell with `USE_WORLD_COORDS` enabled (tr
 
 ```graphql
 query {
-  ifcProduct(branchId: "550e8400-e29b-41d4-a716-446655440000", globalId: "2O2Fr$t4X7Zf8NOew3FL9r") {
+  ifcProduct(
+    branchId: "550e8400-e29b-41d4-a716-446655440000"
+    globalId: "2O2Fr$t4X7Zf8NOew3FL9r"
+  ) {
     globalId
     ifcClass
     name
@@ -254,7 +280,11 @@ query {
 
 ```graphql
 query {
-  ifcProducts(branchId: "550e8400-e29b-41d4-a716-446655440000", ifcClass: "IfcWall", revision: 2) {
+  ifcProducts(
+    branchId: "550e8400-e29b-41d4-a716-446655440000"
+    ifcClass: "IfcWall"
+    revision: 2
+  ) {
     globalId
     name
   }
@@ -265,7 +295,11 @@ query {
 
 ```graphql
 query {
-  revisionDiff(branchId: "550e8400-e29b-41d4-a716-446655440000", fromRev: 1, toRev: 3) {
+  revisionDiff(
+    branchId: "550e8400-e29b-41d4-a716-446655440000"
+    fromRev: 1
+    toRev: 3
+  ) {
     added {
       globalId
       ifcClass
@@ -323,7 +357,10 @@ mutation {
 
 ```graphql
 mutation {
-  createBranch(projectId: "550e8400-e29b-41d4-a716-446655440000", name: "structural-update") {
+  createBranch(
+    projectId: "550e8400-e29b-41d4-a716-446655440000"
+    name: "structural-update"
+  ) {
     id
     name
   }
@@ -367,17 +404,17 @@ Product search supports three filter modes:
 
 ## Design Decisions
 
-| Decision                      | Rationale                                                                           |
-| ----------------------------- | ----------------------------------------------------------------------------------- |
-| Projects + Branches           | Organises multi-building work and enables parallel design exploration (like Git)    |
-| Branch-scoped SCD Type 2      | Each branch has independent version history; diffs are per-branch                   |
-| Binary via Base64 in GraphQL  | Avoids JSON overhead for large meshes while remaining GraphQL-compatible            |
-| `USE_WORLD_COORDS`            | Eliminates client-side transform matrix application; simpler Three.js code          |
-| Snippet extensibility         | `Viewport.svelte` accepts `Snippet` props for pluggable UI without subclassing      |
-| AGE + relational hybrid       | Attributes/blobs in SQL for fast retrieval; topology in graph for Cypher traversals |
-| JSONB attributes on ifc_entity| Single flexible column for IFC attributes; GIN index for filter/query performance   |
-| SCD Type 2 + tagged graph     | Avoids duplicating 100k+ unchanged elements per revision; enables full time-travel  |
-| Spatial structure first-class | Enforces IFC 4.3 constraint: one physical element per single spatial container      |
+| Decision                       | Rationale                                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| Projects + Branches            | Organises multi-building work and enables parallel design exploration (like Git)    |
+| Branch-scoped SCD Type 2       | Each branch has independent version history; diffs are per-branch                   |
+| Binary via Base64 in GraphQL   | Avoids JSON overhead for large meshes while remaining GraphQL-compatible            |
+| `USE_WORLD_COORDS`             | Eliminates client-side transform matrix application; simpler Three.js code          |
+| Snippet extensibility          | `Viewport.svelte` accepts `Snippet` props for pluggable UI without subclassing      |
+| AGE + relational hybrid        | Attributes/blobs in SQL for fast retrieval; topology in graph for Cypher traversals |
+| JSONB attributes on ifc_entity | Single flexible column for IFC attributes; GIN index for filter/query performance   |
+| SCD Type 2 + tagged graph      | Avoids duplicating 100k+ unchanged elements per revision; enables full time-travel  |
+| Spatial structure first-class  | Enforces IFC 4.3 constraint: one physical element per single spatial container      |
 
 ---
 
@@ -430,10 +467,7 @@ pytest -n auto  # Requires: uv pip install pytest-xdist
 
 ### Documentation
 
-- **Quick Start:** [apps/api/tests/QUICKSTART.md](apps/api/tests/QUICKSTART.md)
 - **Full Guide:** [apps/api/tests/README.md](apps/api/tests/README.md)
-- **Migration Guide:** [apps/api/tests/MIGRATION.md](apps/api/tests/MIGRATION.md)
-- **Summary:** [TESTING_SUMMARY.md](TESTING_SUMMARY.md)
 
 ---
 

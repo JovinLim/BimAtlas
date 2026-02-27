@@ -129,6 +129,8 @@ export const IFC_PRODUCT_QUERY = gql`
 			description
 			objectType
 			tag
+			predefinedType
+			attributes
 			containedIn {
 				globalId
 				ifcClass
@@ -139,6 +141,12 @@ export const IFC_PRODUCT_QUERY = gql`
 				normals
 				faces
 			}
+			representations {
+				globalId
+				representationIdentifier
+				representationType
+			}
+			propertySets
 			relations {
 				globalId
 				ifcClass
@@ -236,6 +244,45 @@ export const SPATIAL_TREE_QUERY = gql`
 				name
 				relationship
 			}
+		}
+	}
+`;
+
+/** IFC product class tree rooted at IfcProduct, pruned to classes present in DB. */
+export const IFC_PRODUCT_TREE_QUERY = gql`
+	query IfcProductTree($branchId: String!, $revision: Int) {
+		ifcProductTree(branchId: $branchId, revision: $revision) {
+			ifcClass
+			children {
+				ifcClass
+				children {
+					ifcClass
+					children {
+						ifcClass
+						children {
+							ifcClass
+							children {
+								ifcClass
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+`;
+
+/** Non-spatial element relations (voids, fills, connects, type-defines, shape reps) on a branch. */
+export const ELEMENT_RELATIONS_QUERY = gql`
+	query ElementRelations($branchId: String!, $revision: Int) {
+		elementRelations(branchId: $branchId, revision: $revision) {
+			sourceId
+			sourceIfcClass
+			sourceName
+			targetId
+			targetIfcClass
+			targetName
+			relationship
 		}
 	}
 `;

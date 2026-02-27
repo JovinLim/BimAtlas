@@ -5,7 +5,7 @@
    * selection state, and reacts to graph data changes from the store.
    */
   import { getSelection, getProjectState } from "$lib/state/selection.svelte";
-  import { getGraphStore, type GraphNode } from "$lib/graph/graphStore.svelte";
+  import { getGraphStore, type GraphNode, type GraphLink } from "$lib/graph/graphStore.svelte";
 
   const selection = getSelection();
   const projectState = getProjectState();
@@ -47,12 +47,26 @@
     "IfcSpace",
   ]);
 
+  const LINK_COLORS: Record<string, string> = {
+    IfcRelAggregates: "rgba(100,130,160,0.5)",
+    IfcRelContainedInSpatialStructure: "rgba(100,200,160,0.6)",
+    IfcRelVoidsElement: "rgba(255,140,0,0.7)",
+    IfcRelFillsElement: "rgba(52,152,219,0.7)",
+    IfcRelConnectsElements: "rgba(155,89,182,0.7)",
+    IfcRelDefinesByType: "rgba(241,196,15,0.7)",
+    HasShapeRepresentation: "rgba(231,76,60,0.7)",
+  };
+
   function getNodeColor(node: GraphNode): string {
     return NODE_COLORS[node.ifcClass] ?? "#8899aa";
   }
 
   function getNodeSize(node: GraphNode): number {
     return SPATIAL_CLASSES.has(node.ifcClass) ? 4 : 1.5;
+  }
+
+  function getLinkColor(link: GraphLink): string {
+    return LINK_COLORS[link.relType] ?? "rgba(100,130,160,0.35)";
   }
 
   // Initialize 3d-force-graph (dynamic import for SSR safety)
@@ -67,7 +81,8 @@
       const w = container.clientWidth || 400;
       const h = container.clientHeight || 400;
 
-      graph = ForceGraph3D()(container)
+      const ForceGraphFactory = ForceGraph3D as any;
+      graph = ForceGraphFactory(container)
         .nodeId("id")
         .nodeLabel(
           (node: GraphNode) => `<b>${node.ifcClass}</b><br/>${node.name}`,
@@ -77,7 +92,7 @@
         .nodeOpacity(0.9)
         .linkDirectionalArrowLength(3.5)
         .linkDirectionalArrowRelPos(1)
-        .linkColor(() => "rgba(100,130,160,0.4)")
+        .linkColor((link: GraphLink) => getLinkColor(link))
         .linkWidth(0.5)
         .onNodeClick((node: GraphNode) => {
           selection.activeGlobalId = node.id;
