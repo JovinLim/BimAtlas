@@ -287,15 +287,32 @@ export const ELEMENT_RELATIONS_QUERY = gql`
 	}
 `;
 
-/** List all revisions on a branch. */
+/** List revisions on a branch, optionally filtered by search (author, filename, message, date). */
 export const REVISIONS_QUERY = gql`
-	query Revisions($branchId: String!) {
-		revisions(branchId: $branchId) {
+	query Revisions(
+		$branchId: String!
+		$search: String
+		$authorSearch: String
+		$ifcFilenameSearch: String
+		$commitMessageSearch: String
+		$createdAfter: String
+		$createdBefore: String
+	) {
+		revisions(
+			branchId: $branchId
+			search: $search
+			authorSearch: $authorSearch
+			ifcFilenameSearch: $ifcFilenameSearch
+			commitMessageSearch: $commitMessageSearch
+			createdAfter: $createdAfter
+			createdBefore: $createdBefore
+		) {
 			id
 			branchId
 			revisionSeq
 			label
 			ifcFilename
+			authorId
 			createdAt
 		}
 	}

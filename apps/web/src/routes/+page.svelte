@@ -46,7 +46,7 @@
     createBufferGeometry,
     type RawMeshData,
   } from "$lib/engine/BufferGeometryLoader";
-  import { untrack, onMount, onDestroy } from "svelte";
+  import { untrack, onMount, onDestroy, tick } from "svelte";
   import { loadSettings, saveSettings } from "$lib/state/persistence";
   import { setProductTreeFromApi } from "$lib/ifc/schema";
 
@@ -119,6 +119,30 @@
   let deletingProject = $state(false);
   let deletingBranch = $state(false);
 
+  // ---- Revision list (for search when project is active) ----
+  interface RevisionRow {
+    id: string;
+    branchId: string;
+    revisionSeq: number;
+    label: string | null;
+    ifcFilename: string | null;
+    authorId: string | null;
+    createdAt: string;
+  }
+  let revisionList = $state<RevisionRow[]>([]);
+  /** Full list for building dropdown options (unfiltered). */
+  let allRevisionsForDropdown = $state<RevisionRow[]>([]);
+  let loadingRevisions = $state(false);
+  let revisionSearchDebounceId: ReturnType<typeof setTimeout> | null = null;
+
+  // Per-category revision filters: checkbox enables, text is the value; when enabled and text set, filter is applied.
+  let revisionFilterAuthor = $state({ enabled: false, text: "" });
+  let revisionFilterFilename = $state({ enabled: false, text: "" });
+  let revisionFilterMessage = $state({ enabled: false, text: "" });
+  let revisionFilterCreatedAfter = $state({ enabled: false, text: "" });
+  let revisionFilterCreatedBefore = $state({ enabled: false, text: "" });
+  let revisionFilterCollapsed = $state(false);
+
   // Derived: currently selected project and its branches
   let activeProject = $derived(
     projects.find((p) => p.id === projectState.activeProjectId) ?? null,
@@ -126,6 +150,19 @@
   let activeBranch = $derived(
     activeProject?.branches.find((b) => b.id === projectState.activeBranchId) ??
       null,
+  );
+
+  /** Revision row for the currently displayed revision (for "Current revision" block). Resolved from filtered list or full list. */
+  let currentRevisionRow = $derived(
+    revisionState.activeRevision === null
+      ? null
+      : (revisionList.find(
+          (r) => r.revisionSeq === revisionState.activeRevision,
+        ) ??
+          allRevisionsForDropdown.find(
+            (r) => r.revisionSeq === revisionState.activeRevision,
+          ) ??
+          null),
   );
 
   // ---- Lifecycle ----
@@ -167,6 +204,51 @@
     if (branchId && revisionState.activeRevision === null && !importing) {
       fetchLatestRevision(branchId);
     }
+  });
+
+  // Load revision list for active branch; apply per-category filters when checkboxes are enabled.
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    if (!branchId) {
+      revisionList = [];
+      allRevisionsForDropdown = [];
+      return;
+    }
+    const author = revisionFilterAuthor.enabled
+      ? revisionFilterAuthor.text.trim()
+      : "";
+    const filename = revisionFilterFilename.enabled
+      ? revisionFilterFilename.text.trim()
+      : "";
+    const message = revisionFilterMessage.enabled
+      ? revisionFilterMessage.text.trim()
+      : "";
+    const after = revisionFilterCreatedAfter.enabled
+      ? revisionFilterCreatedAfter.text.trim()
+      : "";
+    const before = revisionFilterCreatedBefore.enabled
+      ? revisionFilterCreatedBefore.text.trim()
+      : "";
+    const hasFilter = !!(author || filename || message || after || before);
+
+    if (revisionSearchDebounceId != null) {
+      clearTimeout(revisionSearchDebounceId);
+      revisionSearchDebounceId = null;
+    }
+    revisionSearchDebounceId = setTimeout(() => {
+      fetchRevisionsListWithFilters(branchId, {
+        authorSearch: author || undefined,
+        ifcFilenameSearch: filename || undefined,
+        commitMessageSearch: message || undefined,
+        createdAfter: after || undefined,
+        createdBefore: before || undefined,
+      });
+      revisionSearchDebounceId = null;
+    }, 300);
+    return () => {
+      if (revisionSearchDebounceId != null)
+        clearTimeout(revisionSearchDebounceId);
+    };
   });
 
   // Load 3D geometry when revision changes and sceneManager is ready
@@ -722,6 +804,47 @@
     }
   }
 
+  async function fetchRevisionsListWithFilters(
+    branchId: string,
+    filters: {
+      authorSearch?: string;
+      ifcFilenameSearch?: string;
+      commitMessageSearch?: string;
+      createdAfter?: string;
+      createdBefore?: string;
+    },
+  ) {
+    if (!branchId) return;
+    loadingRevisions = true;
+    try {
+      const variables: Record<string, unknown> = { branchId };
+      if (filters.authorSearch) variables.authorSearch = filters.authorSearch;
+      if (filters.ifcFilenameSearch)
+        variables.ifcFilenameSearch = filters.ifcFilenameSearch;
+      if (filters.commitMessageSearch)
+        variables.commitMessageSearch = filters.commitMessageSearch;
+      if (filters.createdAfter) variables.createdAfter = filters.createdAfter;
+      if (filters.createdBefore)
+        variables.createdBefore = filters.createdBefore;
+      const result = await client.query(REVISIONS_QUERY, variables).toPromise();
+      const list = (result.data?.revisions ?? []) as RevisionRow[];
+      revisionList = list;
+      const hasAnyFilter = !!(
+        filters.authorSearch ||
+        filters.ifcFilenameSearch ||
+        filters.commitMessageSearch ||
+        filters.createdAfter ||
+        filters.createdBefore
+      );
+      if (!hasAnyFilter) allRevisionsForDropdown = list;
+    } catch (err) {
+      console.error("Failed to fetch revisions:", err);
+      revisionList = [];
+    } finally {
+      loadingRevisions = false;
+    }
+  }
+
   /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
   function streamQueryParams(
     branchId: string,
@@ -977,22 +1100,17 @@
       </button>
     </div>
 
-    <!-- Project selector -->
+    <!-- Project (read-only when active; use BimAtlas button to change) -->
     {#if projectState.activeProjectId && activeProject}
       <div class="context-selector">
-        <div class="selector-group">
-          <label class="selector-label" for="project-select">Project</label>
-          <select
-            id="project-select"
-            class="selector"
-            value={projectState.activeProjectId}
-            onchange={(e) =>
-              selectProject((e.target as HTMLSelectElement).value)}
+        <div class="selector-group selector-group--readonly">
+          <span class="selector-label">Project</span>
+          <span
+            class="selector selector--readonly"
+            title="Click BimAtlas to select another project"
           >
-            {#each projects as p}
-              <option value={p.id}>{p.name}</option>
-            {/each}
-          </select>
+            {activeProject.name}
+          </span>
         </div>
 
         <span class="separator">/</span>
@@ -1257,6 +1375,226 @@
           >
             Fit View
           </button>
+          <!-- Revision filters (when branch is active) -->
+          {#if projectState.activeBranchId}
+            <section
+              class="sidebar-section revision-search-section"
+              aria-labelledby="revision-search-heading"
+            >
+              <h2 id="revision-search-heading" class="sidebar-section-heading">
+                Revision
+              </h2>
+
+              <!-- Filter revisions (collapsible) -->
+              <div class="revision-filter-group">
+                <button
+                  type="button"
+                  class="revision-filter-group-header"
+                  aria-expanded={!revisionFilterCollapsed}
+                  aria-controls="revision-filter-content"
+                  onclick={() =>
+                    (revisionFilterCollapsed = !revisionFilterCollapsed)}
+                >
+                  <span>Filter revisions</span>
+                  <span
+                    class="revision-filter-group-chevron"
+                    class:collapsed={revisionFilterCollapsed}
+                    aria-hidden="true">▼</span
+                  >
+                </button>
+                <div
+                  id="revision-filter-content"
+                  class="revision-filter-group-content"
+                  class:collapsed={revisionFilterCollapsed}
+                >
+                  <!-- Author -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterAuthor.enabled}
+                      />
+                      <span>Author</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Author…"
+                        aria-label="Filter by author"
+                        bind:value={revisionFilterAuthor.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- IFC Filename -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterFilename.enabled}
+                      />
+                      <span>IFC Filename</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Filename…"
+                        aria-label="Filter by IFC filename"
+                        bind:value={revisionFilterFilename.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Commit message -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterMessage.enabled}
+                      />
+                      <span>Commit message</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Message…"
+                        aria-label="Filter by commit message"
+                        bind:value={revisionFilterMessage.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Created after (date picker) -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterCreatedAfter.enabled}
+                      />
+                      <span>Created after</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="date"
+                        class="filter-select revision-date-input"
+                        aria-label="Created after date"
+                        bind:value={revisionFilterCreatedAfter.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Created before (date picker) -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterCreatedBefore.enabled}
+                      />
+                      <span>Created before</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="date"
+                        class="filter-select revision-date-input"
+                        aria-label="Created before date"
+                        bind:value={revisionFilterCreatedBefore.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Results (matching revisions) -->
+                  <div class="revision-list-wrapper">
+                    <h3 class="revision-results-heading">Results</h3>
+                    {#if loadingRevisions}
+                      <span class="revision-loading" aria-live="polite"
+                        >Loading…</span
+                      >
+                    {:else if revisionList.length === 0}
+                      <p class="revision-empty">No revisions match.</p>
+                    {:else}
+                      <ul class="revision-list" role="list">
+                        {#each revisionList as r}
+                          <li>
+                            <button
+                              type="button"
+                              class="revision-item"
+                              onclick={() =>
+                                (revisionState.activeRevision = r.revisionSeq)}
+                            >
+                              <span class="revision-seq">#{r.revisionSeq}</span>
+                              {#if r.ifcFilename}
+                                <span class="revision-filename"
+                                  >{r.ifcFilename}</span
+                                >
+                              {/if}
+                              {#if r.label}
+                                <span class="revision-label">{r.label}</span>
+                              {/if}
+                              {#if r.authorId}
+                                <span class="revision-author">{r.authorId}</span
+                                >
+                              {/if}
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Current revision (always the displayed one, not dependent on filters) -->
+              {#if revisionState.activeRevision !== null}
+                <div
+                  class="current-revision-block"
+                  aria-label="Current revision"
+                >
+                  {#if currentRevisionRow}
+                    <div class="revision-item revision-item--current">
+                      <span class="revision-current-label"
+                        >Current Revision</span
+                      >
+                      <span class="revision-seq"
+                        >#{currentRevisionRow.revisionSeq}</span
+                      >
+                      {#if currentRevisionRow.ifcFilename}
+                        <span class="revision-filename"
+                          >{currentRevisionRow.ifcFilename}</span
+                        >
+                      {/if}
+                      {#if currentRevisionRow.label}
+                        <span class="revision-label"
+                          >{currentRevisionRow.label}</span
+                        >
+                      {/if}
+                      {#if currentRevisionRow.authorId}
+                        <span class="revision-author"
+                          >{currentRevisionRow.authorId}</span
+                        >
+                      {/if}
+                    </div>
+                  {:else}
+                    <div
+                      class="revision-item revision-item--current revision-item--current-minimal"
+                    >
+                      <span class="revision-current-label"
+                        >Current Revision</span
+                      >
+                      <span class="revision-seq"
+                        >#{revisionState.activeRevision}</span
+                      >
+                      <span class="revision-current-not-in-filter"
+                        >(not in filtered list)</span
+                      >
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          {/if}
           <!-- View Options section -->
           <section
             class="sidebar-section"
@@ -1651,6 +1989,10 @@
     max-width: 180px;
   }
 
+  .selector--readonly {
+    cursor: default;
+  }
+
   .selector:focus {
     border-color: rgba(255, 136, 102, 0.4);
   }
@@ -1663,6 +2005,261 @@
   .separator {
     color: #555;
     font-size: 1rem;
+  }
+
+  .revision-search-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  /* CSS grid so all revision filter rows share the same column alignment */
+  .revision-search-section .filter-row.revision-filter-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.5rem 0.75rem;
+    align-items: start;
+    padding: 0.4rem 0;
+    min-width: 0;
+  }
+
+  .revision-search-section .filter-row-label,
+  .revision-search-section .revision-filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    color: #888;
+    cursor: pointer;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .revision-search-section .revision-filter-checkbox input {
+    accent-color: #ff8866;
+    flex-shrink: 0;
+  }
+
+  .revision-search-section .revision-filter-checkbox span {
+    word-break: break-word;
+    line-height: 1.3;
+  }
+
+  .revision-search-section .filter-fields {
+    display: flex;
+    align-items: stretch;
+    gap: 0.35rem;
+    min-width: 0;
+  }
+
+  .revision-search-section .revision-filter-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 2.25rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #ddd;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.78rem;
+    outline: none;
+    font-family: inherit;
+    cursor: text;
+  }
+
+  .revision-search-section .revision-filter-input:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .revision-search-section .revision-filter-input::placeholder {
+    color: #555;
+  }
+
+  .revision-search-section .revision-date-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 2.25rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #ddd;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.78rem;
+    outline: none;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .revision-search-section .revision-date-input:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .revision-search-section
+    .revision-date-input::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+    cursor: pointer;
+    opacity: 0.8;
+  }
+
+  .revision-loading,
+  .revision-empty {
+    font-size: 0.8rem;
+    color: #888;
+    margin: 0;
+  }
+
+  .revision-list-wrapper {
+    margin-top: 0.5rem;
+  }
+
+  .revision-results-heading {
+    margin: 0 0 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #aaa;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .revision-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+
+  .revision-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    text-align: left;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    border-radius: 0.25rem;
+    color: #bbb;
+    cursor: pointer;
+    margin-bottom: 0.2rem;
+  }
+
+  .revision-item:hover {
+    background: rgba(255, 136, 102, 0.12);
+    color: #ddd;
+  }
+
+  .revision-item--current {
+    cursor: default;
+    background: rgba(255, 136, 102, 0.2);
+    border-color: rgba(255, 136, 102, 0.4);
+    color: #ff8866;
+  }
+
+  .revision-item--current:hover {
+    background: rgba(255, 136, 102, 0.2);
+    color: #ff8866;
+  }
+
+  .revision-item--current,
+  .revision-item--current * {
+    cursor: default;
+  }
+
+  .revision-current-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(255, 136, 102, 0.9);
+    width: 100%;
+    flex-basis: 100%;
+    margin-bottom: 0.15rem;
+  }
+
+  .current-revision-block {
+    margin-top: 0.75rem;
+  }
+
+  .revision-current-not-in-filter {
+    font-size: 0.7rem;
+    color: #888;
+    font-style: italic;
+  }
+
+  .revision-seq {
+    font-weight: 600;
+    color: #999;
+  }
+
+  .revision-item--current .revision-seq {
+    color: #ff8866;
+  }
+
+  /* Collapsible "Filter revisions" group */
+  .revision-filter-group {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .revision-filter-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.35rem 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #aaa;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .revision-filter-group-header:hover {
+    color: #ddd;
+  }
+
+  .revision-filter-group-chevron {
+    font-size: 0.6rem;
+    transition: transform 0.2s ease;
+  }
+
+  .revision-filter-group-chevron.collapsed {
+    transform: rotate(90deg);
+  }
+
+  .revision-filter-group-content.collapsed {
+    display: none;
+  }
+
+  .revision-filter-group-content:not(.collapsed) {
+    display: block;
+    margin-top: 0.35rem;
+  }
+
+  .revision-filename,
+  .revision-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+
+  .revision-item--current .revision-filename,
+  .revision-item--current .revision-label {
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    max-width: none;
+    word-break: break-word;
+  }
+
+  .revision-author {
+    font-size: 0.7rem;
+    color: #777;
   }
 
   .icon-btn {

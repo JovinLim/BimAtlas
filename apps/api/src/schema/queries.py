@@ -42,6 +42,7 @@ from ..db import (
     fetch_projects,
     fetch_revision_diff,
     fetch_revisions,
+    fetch_revisions_filtered,
     fetch_shape_representations_for_product,
     fetch_shape_reps_for_products,
     fetch_spatial_container,
@@ -552,9 +553,39 @@ class Query:
         return edges
 
     @strawberry.field
-    async def revisions(self, branch_id: str) -> list[Revision]:
-        """List all revisions on a branch."""
-        rows = fetch_revisions(branch_id)
+    async def revisions(
+        self,
+        branch_id: str,
+        search: Optional[str] = None,
+        author_search: Optional[str] = None,
+        ifc_filename_search: Optional[str] = None,
+        commit_message_search: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+    ) -> list[Revision]:
+        """List revisions on a branch, optionally filtered by search terms (all parameterized)."""
+        if any(
+            x is not None and (x.strip() if isinstance(x, str) else True)
+            for x in (
+                search,
+                author_search,
+                ifc_filename_search,
+                commit_message_search,
+                created_after,
+                created_before,
+            )
+        ):
+            rows = fetch_revisions_filtered(
+                branch_id,
+                search=search or None,
+                author_search=author_search or None,
+                ifc_filename_search=ifc_filename_search or None,
+                commit_message_search=commit_message_search or None,
+                created_after=created_after or None,
+                created_before=created_before or None,
+            )
+        else:
+            rows = fetch_revisions(branch_id)
         return [
             Revision(
                 id=r["revision_id"],
@@ -562,6 +593,7 @@ class Query:
                 revision_seq=r["revision_seq"],
                 label=r.get("commit_message"),
                 ifc_filename=r["ifc_filename"],
+                author_id=r.get("author_id"),
                 created_at=_to_iso(r["created_at"]),
             )
             for r in rows

@@ -8,9 +8,48 @@
   } = $props();
 
   let open = $state(true);
+  const MIN_WIDTH = 160;
+  const MAX_WIDTH = 420;
+  let sidebarWidth = $state(220);
+  let resizing = $state(false);
+  let startX = 0;
+  let startWidth = 0;
+  let resizeHandleEl = $state<HTMLDivElement | null>(null);
+
+  function onResizePointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    const el = e.currentTarget as HTMLDivElement;
+    el.setPointerCapture(e.pointerId);
+    resizing = true;
+    startX = e.clientX;
+    startWidth = sidebarWidth;
+  }
+
+  function onResizePointerMove(e: PointerEvent) {
+    if (!resizing) return;
+    const dx = e.clientX - startX;
+    sidebarWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + dx)));
+  }
+
+  function onResizePointerUp(e: PointerEvent) {
+    if (e.button !== 0) return;
+    resizing = false;
+    resizeHandleEl?.releasePointerCapture?.(e.pointerId);
+  }
 </script>
 
-<div class="sidebar-container" class:collapsed={!open}>
+<svelte:window
+  onpointermove={onResizePointerMove}
+  onpointerup={onResizePointerUp}
+  onpointercancel={onResizePointerUp}
+/>
+
+<div
+  class="sidebar-container"
+  class:collapsed={!open}
+  class:resizing={resizing}
+  style="width: {open ? sidebarWidth : 0}px"
+>
   <aside class="sidebar">
     {#if open}
       <div class="sidebar-content">
@@ -18,6 +57,16 @@
       </div>
     {/if}
   </aside>
+  {#if open}
+    <div
+      bind:this={resizeHandleEl}
+      class="resize-handle"
+      role="separator"
+      aria-label="Resize sidebar"
+      tabindex="-1"
+      onpointerdown={onResizePointerDown}
+    ></div>
+  {/if}
   <button
     class="toggle-btn"
     onclick={() => (open = !open)}
@@ -49,13 +98,31 @@
   .sidebar-container {
     position: relative;
     height: 100%;
-    width: 220px;
     transition: width 0.2s ease;
     pointer-events: auto;
   }
 
   .sidebar-container.collapsed {
-    width: 0px;
+    width: 0;
+  }
+
+  .sidebar-container.resizing {
+    transition: none;
+  }
+
+  .resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 1;
+  }
+
+  .resize-handle:hover,
+  .sidebar-container.resizing .resize-handle {
+    background: rgba(255, 136, 102, 0.15);
   }
 
   .sidebar {

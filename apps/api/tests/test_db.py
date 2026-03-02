@@ -240,6 +240,55 @@ class TestRevisionHelpers:
         
         assert revisions[0]["revision_seq"] < revisions[1]["revision_seq"] < revisions[2]["revision_seq"]
 
+    def test_fetch_revisions_filtered_by_search(self, db_pool, test_branch):
+        """Test fetch_revisions_filtered with single search term (OR across author, filename, message)."""
+        branch_id = test_branch
+        with db.get_cursor() as cur:
+            cur.execute(
+                "INSERT INTO revision (branch_id, ifc_filename, commit_message, author_id) VALUES "
+                "(%s, 'model-a.ifc', 'First import', 'alice'), "
+                "(%s, 'model-b.ifc', 'Second import', 'bob'), "
+                "(%s, 'alice-v2.ifc', 'Alice update', 'alice')",
+                (branch_id, branch_id, branch_id),
+            )
+        # Search "alice" matches author_id and ifc_filename
+        rows = db.fetch_revisions_filtered(branch_id, search="alice")
+        assert len(rows) == 2
+        seqs = {r["revision_seq"] for r in rows}
+        assert 1 in seqs and 3 in seqs
+        # Search "Second" matches only commit_message
+        rows = db.fetch_revisions_filtered(branch_id, search="Second")
+        assert len(rows) == 1
+        assert rows[0]["commit_message"] == "Second import"
+
+    def test_fetch_revisions_filtered_branch_scoped(self, db_pool, test_branch):
+        """Test that fetch_revisions_filtered only returns revisions for the given branch."""
+        branch_id = test_branch
+        # Create another branch and revision
+        proj = db.create_project("Other")
+        other_branches = db.fetch_branches(proj["project_id"])
+        other_branch_id = str(other_branches[0]["branch_id"])
+        with db.get_cursor() as cur:
+            cur.execute(
+                "INSERT INTO revision (branch_id, ifc_filename) VALUES (%s, 'mine.ifc'), (%s, 'other.ifc')",
+                (branch_id, other_branch_id),
+            )
+        rows = db.fetch_revisions_filtered(branch_id, search="ifc")
+        assert len(rows) == 1
+        assert rows[0]["ifc_filename"] == "mine.ifc"
+
+    def test_fetch_revisions_filtered_empty_search_returns_all(self, db_pool, test_branch):
+        """Test that passing no filters returns same as fetch_revisions."""
+        branch_id = test_branch
+        with db.get_cursor() as cur:
+            cur.execute(
+                "INSERT INTO revision (branch_id, ifc_filename) VALUES (%s, 'v1.ifc'), (%s, 'v2.ifc')",
+                (branch_id, branch_id),
+            )
+        filtered = db.fetch_revisions_filtered(branch_id)
+        plain = db.fetch_revisions(branch_id)
+        assert len(filtered) == len(plain) == 2
+
 
 class TestProductQueries:
     """Test entity query functions."""
