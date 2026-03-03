@@ -4,7 +4,6 @@
    * Users first select (or create) a project, then pick a branch. All IFC data is scoped to the branch.
    */
   import Viewport from "$lib/ui/Viewport.svelte";
-  import ForceGraph from "$lib/graph/ForceGraph.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
@@ -30,6 +29,7 @@
   import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
+  import { GRAPH_CHANNEL, type GraphMessage } from "$lib/graph/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -57,11 +57,12 @@
   const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
-  let activeView: "viewport" | "graph" = $state("viewport");
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
   let attributePopup: Window | null = null;
   let attributesChannel: BroadcastChannel | null = null;
+  let graphPopup: Window | null = null;
+  let graphChannel: BroadcastChannel | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -69,7 +70,6 @@
     if (typeof window === "undefined" || settingsLoaded) return;
     const savedSettings = loadSettings();
     if (savedSettings) {
-      activeView = savedSettings.activeView;
       initializeFromSettings(savedSettings);
     }
     settingsLoaded = true;
@@ -141,7 +141,7 @@
   let revisionFilterMessage = $state({ enabled: false, text: "" });
   let revisionFilterCreatedAfter = $state({ enabled: false, text: "" });
   let revisionFilterCreatedBefore = $state({ enabled: false, text: "" });
-  let revisionFilterCollapsed = $state(false);
+  let revisionFilterCollapsed = $state(true);
 
   // Derived: currently selected project and its branches
   let activeProject = $derived(
@@ -176,26 +176,13 @@
       activeRevision: revisionState.activeRevision,
       activeGlobalId: selection.activeGlobalId,
       subgraphDepth: selection.subgraphDepth,
-      activeView: activeView,
+      activeView: "viewport",
     });
   });
 
   // Load projects on mount
   $effect(() => {
     loadProjects();
-  });
-
-  // Load graph data when switching to graph view (if branch is selected)
-  $effect(() => {
-    const branchId = projectState.activeBranchId;
-    if (
-      activeView === "graph" &&
-      branchId &&
-      graphStore.data.nodes.length === 0 &&
-      !graphStore.loading
-    ) {
-      graphStore.fetchGraph(branchId, revisionState.activeRevision);
-    }
   });
 
   // Load latest revision when branch changes
@@ -323,6 +310,24 @@
     } satisfies AttributesMessage);
   });
 
+  // Keep Graph popup in sync when selection or context changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    const subgraphDepth = selection.subgraphDepth;
+    if (!graphChannel) return;
+    graphChannel.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+      subgraphDepth,
+    } satisfies GraphMessage);
+  });
+
   // BroadcastChannels for cross-window communication
   onMount(() => {
     searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
@@ -344,11 +349,21 @@
         selection.activeGlobalId = e.data.globalId;
       }
     };
+
+    graphChannel = new BroadcastChannel(GRAPH_CHANNEL);
+    graphChannel.onmessage = (e: MessageEvent<GraphMessage>) => {
+      if (e.data.type === "request-context") {
+        sendGraphContext();
+      } else if (e.data.type === "selection-changed") {
+        selection.activeGlobalId = e.data.globalId;
+      }
+    };
   });
 
   onDestroy(() => {
     searchChannel?.close();
     attributesChannel?.close();
+    graphChannel?.close();
   });
 
   function sendBranchContext() {
@@ -380,6 +395,45 @@
       revision,
       globalId,
     } satisfies AttributesMessage);
+  }
+
+  function sendGraphContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    const subgraphDepth = selection.subgraphDepth;
+    graphChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+      subgraphDepth,
+    } satisfies GraphMessage);
+  }
+
+  function openGraphPopup() {
+    if (!graphPopup || graphPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const globalId = selection.activeGlobalId;
+      const subgraphDepth = selection.subgraphDepth;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      if (globalId != null) params.set("globalId", String(globalId));
+      params.set("subgraphDepth", String(subgraphDepth));
+      const query = params.toString();
+      const url = query ? `/graph?${query}` : "/graph";
+      graphPopup = window.open(url, "bimatlas-graph", "width=800,height=700");
+      setTimeout(sendGraphContext, 500);
+    } else {
+      graphPopup.focus();
+      sendGraphContext();
+    }
   }
 
   function openSearchPopup() {
@@ -1116,7 +1170,7 @@
         <span class="separator">/</span>
 
         <!-- Branch selector -->
-        <div class="selector-group">
+        <div class="selector-group selector-group--branch">
           <label class="selector-label" for="branch-select">Branch</label>
           <select
             id="branch-select"
@@ -1166,27 +1220,6 @@
             </svg>
           </button>
         </div>
-      </div>
-
-      <div class="view-toggle" role="tablist">
-        <button
-          class="tab-btn"
-          class:active={activeView === "viewport"}
-          role="tab"
-          aria-selected={activeView === "viewport"}
-          onclick={() => (activeView = "viewport")}
-        >
-          3D View
-        </button>
-        <button
-          class="tab-btn"
-          class:active={activeView === "graph"}
-          role="tab"
-          aria-selected={activeView === "graph"}
-          onclick={() => (activeView = "graph")}
-        >
-          Graph
-        </button>
       </div>
     {/if}
 
@@ -1303,7 +1336,7 @@
           {/if}
         </div>
       </div>
-    {:else if activeView === "viewport"}
+    {:else}
       <div class="viewport-container">
         <Viewport bind:manager={sceneManager} />
         {#if loadingGeometry}
@@ -1630,6 +1663,100 @@
             </svg>
             Search
           </button>
+          <!-- Open Graph popup button -->
+          <button
+            class="graph-btn"
+            onclick={openGraphPopup}
+            aria-label="Open graph in new tab"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <!-- Edges: center to outer nodes -->
+              <line
+                x1="12"
+                y1="12"
+                x2="12"
+                y2="6"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="18"
+                y2="14"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="7"
+                y2="15"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="8"
+                y2="9"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <!-- Nodes -->
+              <circle
+                cx="12"
+                cy="12"
+                r="2.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="12"
+                cy="6"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="18"
+                cy="14"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="7"
+                cy="15"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="8"
+                cy="9"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+            Graph
+          </button>
           <!-- Attribute panel pop-out button -->
           <button
             class="attributes-btn"
@@ -1661,10 +1788,6 @@
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
         >
-      </div>
-    {:else}
-      <div class="graph-wrapper">
-        <ForceGraph />
       </div>
     {/if}
 
@@ -1962,6 +2085,9 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 0 0 50%;
+    max-width: 50%;
+    min-width: 0;
   }
 
   .selector-group {
@@ -1991,6 +2117,17 @@
 
   .selector--readonly {
     cursor: default;
+  }
+
+  /* Allow the branch selector to grow and occupy half of the header context area */
+  .selector-group--branch {
+    flex: 1;
+    min-width: 0;
+  }
+
+  #branch-select.selector {
+    flex: 1 1 auto;
+    max-width: none;
   }
 
   .selector:focus {
@@ -2135,6 +2272,8 @@
     align-items: center;
     gap: 0.35rem;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     padding: 0.35rem 0.5rem;
     font-size: 0.78rem;
     text-align: left;
@@ -2313,38 +2452,6 @@
     cursor: not-allowed;
   }
 
-  /* ---- View toggle tabs ---- */
-
-  .view-toggle {
-    display: flex;
-    gap: 0;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 0.4rem;
-    padding: 0.2rem;
-  }
-
-  .tab-btn {
-    background: none;
-    border: none;
-    color: #888;
-    padding: 0.35rem 0.9rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    border-radius: 0.3rem;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-
-  .tab-btn:hover {
-    color: #ccc;
-  }
-
-  .tab-btn.active {
-    background: rgba(255, 102, 68, 0.15);
-    color: #ff8866;
-  }
-
   /* ---- Content area ---- */
 
   .content {
@@ -2423,12 +2530,6 @@
     flex-direction: row;
     justify-content: space-between;
     pointer-events: none;
-  }
-
-  .graph-wrapper {
-    flex: 1;
-    position: relative;
-    min-height: 0;
   }
 
   /* ---- Project picker ---- */
@@ -2681,6 +2782,7 @@
   }
 
   .search-btn,
+  .graph-btn,
   .attributes-btn {
     display: inline-flex;
     align-items: center;
@@ -2700,6 +2802,7 @@
   }
 
   .search-btn:hover,
+  .graph-btn:hover,
   .attributes-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);

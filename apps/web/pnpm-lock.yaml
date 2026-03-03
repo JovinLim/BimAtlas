@@ -23,6 +23,9 @@ importers:
       three:
         specifier: ^0.172.0
         version: 0.172.0
+      three-spritetext:
+        specifier: ^1.7.0
+        version: 1.10.0(three@0.172.0)
     devDependencies:
       '@sveltejs/adapter-auto':
         specifier: ^4.0.0
@@ -730,6 +733,12 @@ packages:
     peerDependencies:
       three: '>=0.168'
 
+  three-spritetext@1.10.0:
+    resolution: {integrity: sha512-t08iP1FCU1lQh8T5MmCpdijKgas8GDHJE0LqMGBuVu3xqMMpFnEZhTlih7FlxLPQizHIGoumUSpfOlY1GO/Tgg==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      three: '>=0.86.0'
+
   three@0.172.0:
     resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
 
@@ -1381,6 +1390,10 @@ snapshots:
       float-tooltip: 1.7.5
       kapsule: 1.16.3
       polished: 4.3.1
+      three: 0.172.0
+
+  three-spritetext@1.10.0(three@0.172.0):
+    dependencies:
       three: 0.172.0
 
   three@0.172.0: {}

@@ -1,3 +1,25 @@
+---
+features:
+  - feature_id: feature_001_dynamic_filter_sets
+    name: Dynamic Filter Sets & Attribute Search
+    description: |
+      Named, configurable filter sets stored as JSONB. Users create filter sets (e.g. IfcClass = 'IfcWall' AND FireRating = '2HR'), save them to a branch, and toggle them on/off to compose complex database views. Strictly relational JSONB attribute filtering—no graph traversal.
+    status: draft
+    priority: high
+  - feature_id: graph_view
+    name: Graph View
+    description: |
+      3D force-directed graph visualization of IFC entities and their relationships. Renders nodes (spatial containers, products) and edges (topology from Apache AGE). Supports selection, node labels, and branch/revision scoping. Built with 3d-force-graph and Three.js.
+    status: implemented
+    priority: core
+  - feature_id: feature_002_revision_search
+    name: Active-Project Revision Search & Import UX
+    description: |
+      Search and filter revisions for the active project by author, ifc_filename, commit_message, or created_at. Import IFC flow warns that a new revision is created; no manual empty revision creation allowed. Relational queries only—no AGE Cypher.
+    status: draft
+    priority: high
+---
+
 BimAtlas Product Overview
 High-Level Domain
 BimAtlas is a scalable web application designed to parse, visualize, and modify Industry Foundation Classes (IFC) data for the built environment. It tackles the strict hierarchical complexity of schemas like IFC 4.3 by treating the IFC data as a manipulable, version-controlled graph. The application allows multidisciplinary teams (Architecture, MEP, Structural) to collaborate on large-scale models through a Git-like system of projects, branches, and revisions, enabling parallel workflows and conflict resolution without data degradation.

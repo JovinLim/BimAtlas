@@ -8,9 +8,9 @@
   } = $props();
 
   let open = $state(true);
-  const MIN_WIDTH = 160;
-  const MAX_WIDTH = 420;
-  let sidebarWidth = $state(220);
+  const MIN_WIDTH = 150;
+  const MAX_WIDTH = 450;
+  let sidebarWidth = $state(300);
   let resizing = $state(false);
   let startX = 0;
   let startWidth = 0;
@@ -28,7 +28,9 @@
   function onResizePointerMove(e: PointerEvent) {
     if (!resizing) return;
     const dx = e.clientX - startX;
-    sidebarWidth = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + dx)));
+    sidebarWidth = Math.round(
+      Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + dx)),
+    );
   }
 
   function onResizePointerUp(e: PointerEvent) {
@@ -47,7 +49,7 @@
 <div
   class="sidebar-container"
   class:collapsed={!open}
-  class:resizing={resizing}
+  class:resizing
   style="width: {open ? sidebarWidth : 0}px"
 >
   <aside class="sidebar">
@@ -168,5 +170,6 @@
     flex-direction: column;
     gap: 1rem;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 </style>
