@@ -154,6 +154,7 @@ class Revision:
     revision_seq: int  # monotonic sequence for ordering and querying at revision
     label: Optional[str]
     ifc_filename: str
+    author_id: Optional[str]
     created_at: str  # ISO 8601
 
 

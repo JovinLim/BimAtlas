@@ -147,6 +147,10 @@
 				<p class="error-message">{error}</p>
 			{/if}
 
+			<p class="import-warning">
+				Importing will create a new revision on the current branch. You cannot create an empty revision manually.
+			</p>
+
 			<footer class="modal-footer">
 				<button class="btn btn-secondary" onclick={close}>Cancel</button>
 				<button class="btn btn-primary" disabled={!selectedFile} onclick={submit}>
@@ -290,6 +294,18 @@
 	.file-size {
 		font-size: 0.75rem;
 		color: #666;
+	}
+
+	/* ---- Import warning ---- */
+
+	.import-warning {
+		margin: 1rem 0 0;
+		padding: 0.5rem 0.75rem;
+		font-size: 0.8rem;
+		color: #c9a227;
+		background: rgba(201, 162, 39, 0.1);
+		border-radius: 0.35rem;
+		border-left: 3px solid rgba(201, 162, 39, 0.5);
 	}
 
 	/* ---- Error ---- */

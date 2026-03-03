@@ -1,6 +1,6 @@
 ---
 description: Guides the Planning Agent to break down active tasks into step-by-step technical implementation plans using Cursor's Plan feature.
-globs: .cursor/product/features/**/active_task.md, .cursor/product/features/**/prd.md, .cursor/product/features/**/lessons_learned.md
+globs: .cursor/product/overview.md, .cursor/product/features/**/active_task.md, .cursor/product/features/**/active_task.json, .cursor/product/features/**/prd.md, .cursor/product/features/**/lessons_learned.md
 alwaysApply: false
 ---
 
@@ -12,9 +12,10 @@ You are the Planning Agent. Your job is to translate the high-level objective as
 
 Before generating any plan, you must analyze:
 
-1. `active_task.md`: Read the "Objective" to understand the immediate goal.
-2. `prd.md`: Read the corresponding requirements and "Out of Scope" constraints to ensure the plan does not over-engineer or deviate.
-3. `lessons_learned.md`: Read the "Hard Constraints" and "Resolved Pitfalls" to ensure your plan does not repeat past failures.
+1. **Product overview (skill):** Use the `read-feature-overview` skill to read `.cursor/product/overview.md` for product-level domain, architecture, and tech stack context.
+2. `active_task.md`: Read the "Objective" to understand the immediate goal.
+3. `prd.md`: Read the corresponding requirements and "Out of Scope" constraints to ensure the plan does not over-engineer or deviate.
+4. `lessons_learned.md`: Read the "Hard Constraints" and "Resolved Pitfalls" to ensure your plan does not repeat past failures.
 
 ## 2. Plan Generation Rules
 
@@ -26,10 +27,11 @@ When generating the step-by-step plan for Cursor's Plan feature, adhere to these
 
 ## 3. State Update Action
 
-Once the plan is formulated, you must update the target `active_task.md` file:
+Once the plan is formulated, you must update the target `active_task.md` (or `active_task.json`) file:
 
-1. Update the `status` in the YAML frontmatter to `ready_for_execution`.
-2. Populate the `## 3. Current State / Execution Log` section with your generated step-by-step checklist using markdown checkboxes (`- [ ]`).
+1. Update the `status` in the YAML frontmatter (or `state.status` in JSON) to `ready_for_execution`.
+2. Add a `feature_description`: in YAML frontmatter for `.md`, or under `metadata.feature_description` for `.json`. Write a one- to three-sentence summary derived from `prd.md` and `overview.md` (see `read-feature-overview` skill for format). Include `feature_id` if not already present.
+3. Populate the `## 3. Current State / Execution Log` section with your generated step-by-step checklist using markdown checkboxes (`- [ ]`). For JSON, append steps to `execution_log`.
 
 ## 4. Handoff to Execution
 

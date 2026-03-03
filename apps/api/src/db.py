@@ -227,6 +227,59 @@ def fetch_revisions(branch_id: str) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def fetch_revisions_filtered(
+    branch_id: str,
+    *,
+    search: str | None = None,
+    author_search: str | None = None,
+    ifc_filename_search: str | None = None,
+    commit_message_search: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+) -> list[dict]:
+    """Return revisions for a branch matching optional filters. All filters are parameterized.
+    If search is set, it is OR-applied across author_id, ifc_filename, and commit_message.
+    """
+    base_sql = (
+        "SELECT revision_id, branch_id, revision_seq, parent_revision_id, "
+        "ifc_filename, commit_message, author_id, created_at "
+        "FROM revision WHERE branch_id = %s"
+    )
+    params: list = [branch_id]
+    conditions: list[str] = []
+
+    if search is not None and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            "(author_id::text ILIKE %s OR ifc_filename ILIKE %s OR commit_message ILIKE %s)"
+        )
+        params.extend([term, term, term])
+    else:
+        if author_search is not None and author_search.strip():
+            conditions.append("author_id::text ILIKE %s")
+            params.append(f"%{author_search.strip()}%")
+        if ifc_filename_search is not None and ifc_filename_search.strip():
+            conditions.append("ifc_filename ILIKE %s")
+            params.append(f"%{ifc_filename_search.strip()}%")
+        if commit_message_search is not None and commit_message_search.strip():
+            conditions.append("commit_message ILIKE %s")
+            params.append(f"%{commit_message_search.strip()}%")
+    if created_after is not None and created_after.strip():
+        conditions.append("created_at >= %s::timestamptz")
+        params.append(created_after.strip())
+    if created_before is not None and created_before.strip():
+        conditions.append("created_at <= %s::timestamptz")
+        params.append(created_before.strip())
+
+    if conditions:
+        base_sql += " AND " + " AND ".join(conditions)
+    base_sql += " ORDER BY revision_seq ASC"
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(base_sql, tuple(params))
+        return [dict(r) for r in cur.fetchall()]
+
+
 # ---------------------------------------------------------------------------
 # Entity queries -- branch + revision scoped (SCD Type 2)
 # ---------------------------------------------------------------------------

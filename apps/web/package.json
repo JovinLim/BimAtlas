@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "3d-force-graph": "^1.73.0",
+    "three-spritetext": "^1.7.0",
     "@urql/core": "^5.1.0",
     "@urql/svelte": "^4.2.0",
     "graphql": "^16.10.0",

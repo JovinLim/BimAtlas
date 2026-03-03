@@ -4,7 +4,6 @@
    * Users first select (or create) a project, then pick a branch. All IFC data is scoped to the branch.
    */
   import Viewport from "$lib/ui/Viewport.svelte";
-  import ForceGraph from "$lib/graph/ForceGraph.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
@@ -30,6 +29,7 @@
   import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
+  import { GRAPH_CHANNEL, type GraphMessage } from "$lib/graph/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -46,7 +46,7 @@
     createBufferGeometry,
     type RawMeshData,
   } from "$lib/engine/BufferGeometryLoader";
-  import { untrack, onMount, onDestroy } from "svelte";
+  import { untrack, onMount, onDestroy, tick } from "svelte";
   import { loadSettings, saveSettings } from "$lib/state/persistence";
   import { setProductTreeFromApi } from "$lib/ifc/schema";
 
@@ -57,11 +57,12 @@
   const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
-  let activeView: "viewport" | "graph" = $state("viewport");
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
   let attributePopup: Window | null = null;
   let attributesChannel: BroadcastChannel | null = null;
+  let graphPopup: Window | null = null;
+  let graphChannel: BroadcastChannel | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -69,7 +70,6 @@
     if (typeof window === "undefined" || settingsLoaded) return;
     const savedSettings = loadSettings();
     if (savedSettings) {
-      activeView = savedSettings.activeView;
       initializeFromSettings(savedSettings);
     }
     settingsLoaded = true;
@@ -119,6 +119,30 @@
   let deletingProject = $state(false);
   let deletingBranch = $state(false);
 
+  // ---- Revision list (for search when project is active) ----
+  interface RevisionRow {
+    id: string;
+    branchId: string;
+    revisionSeq: number;
+    label: string | null;
+    ifcFilename: string | null;
+    authorId: string | null;
+    createdAt: string;
+  }
+  let revisionList = $state<RevisionRow[]>([]);
+  /** Full list for building dropdown options (unfiltered). */
+  let allRevisionsForDropdown = $state<RevisionRow[]>([]);
+  let loadingRevisions = $state(false);
+  let revisionSearchDebounceId: ReturnType<typeof setTimeout> | null = null;
+
+  // Per-category revision filters: checkbox enables, text is the value; when enabled and text set, filter is applied.
+  let revisionFilterAuthor = $state({ enabled: false, text: "" });
+  let revisionFilterFilename = $state({ enabled: false, text: "" });
+  let revisionFilterMessage = $state({ enabled: false, text: "" });
+  let revisionFilterCreatedAfter = $state({ enabled: false, text: "" });
+  let revisionFilterCreatedBefore = $state({ enabled: false, text: "" });
+  let revisionFilterCollapsed = $state(true);
+
   // Derived: currently selected project and its branches
   let activeProject = $derived(
     projects.find((p) => p.id === projectState.activeProjectId) ?? null,
@@ -126,6 +150,19 @@
   let activeBranch = $derived(
     activeProject?.branches.find((b) => b.id === projectState.activeBranchId) ??
       null,
+  );
+
+  /** Revision row for the currently displayed revision (for "Current revision" block). Resolved from filtered list or full list. */
+  let currentRevisionRow = $derived(
+    revisionState.activeRevision === null
+      ? null
+      : (revisionList.find(
+          (r) => r.revisionSeq === revisionState.activeRevision,
+        ) ??
+          allRevisionsForDropdown.find(
+            (r) => r.revisionSeq === revisionState.activeRevision,
+          ) ??
+          null),
   );
 
   // ---- Lifecycle ----
@@ -139,7 +176,7 @@
       activeRevision: revisionState.activeRevision,
       activeGlobalId: selection.activeGlobalId,
       subgraphDepth: selection.subgraphDepth,
-      activeView: activeView,
+      activeView: "viewport",
     });
   });
 
@@ -148,25 +185,57 @@
     loadProjects();
   });
 
-  // Load graph data when switching to graph view (if branch is selected)
-  $effect(() => {
-    const branchId = projectState.activeBranchId;
-    if (
-      activeView === "graph" &&
-      branchId &&
-      graphStore.data.nodes.length === 0 &&
-      !graphStore.loading
-    ) {
-      graphStore.fetchGraph(branchId, revisionState.activeRevision);
-    }
-  });
-
   // Load latest revision when branch changes
   $effect(() => {
     const branchId = projectState.activeBranchId;
     if (branchId && revisionState.activeRevision === null && !importing) {
       fetchLatestRevision(branchId);
     }
+  });
+
+  // Load revision list for active branch; apply per-category filters when checkboxes are enabled.
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    if (!branchId) {
+      revisionList = [];
+      allRevisionsForDropdown = [];
+      return;
+    }
+    const author = revisionFilterAuthor.enabled
+      ? revisionFilterAuthor.text.trim()
+      : "";
+    const filename = revisionFilterFilename.enabled
+      ? revisionFilterFilename.text.trim()
+      : "";
+    const message = revisionFilterMessage.enabled
+      ? revisionFilterMessage.text.trim()
+      : "";
+    const after = revisionFilterCreatedAfter.enabled
+      ? revisionFilterCreatedAfter.text.trim()
+      : "";
+    const before = revisionFilterCreatedBefore.enabled
+      ? revisionFilterCreatedBefore.text.trim()
+      : "";
+    const hasFilter = !!(author || filename || message || after || before);
+
+    if (revisionSearchDebounceId != null) {
+      clearTimeout(revisionSearchDebounceId);
+      revisionSearchDebounceId = null;
+    }
+    revisionSearchDebounceId = setTimeout(() => {
+      fetchRevisionsListWithFilters(branchId, {
+        authorSearch: author || undefined,
+        ifcFilenameSearch: filename || undefined,
+        commitMessageSearch: message || undefined,
+        createdAfter: after || undefined,
+        createdBefore: before || undefined,
+      });
+      revisionSearchDebounceId = null;
+    }, 300);
+    return () => {
+      if (revisionSearchDebounceId != null)
+        clearTimeout(revisionSearchDebounceId);
+    };
   });
 
   // Load 3D geometry when revision changes and sceneManager is ready
@@ -241,6 +310,24 @@
     } satisfies AttributesMessage);
   });
 
+  // Keep Graph popup in sync when selection or context changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    const subgraphDepth = selection.subgraphDepth;
+    if (!graphChannel) return;
+    graphChannel.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+      subgraphDepth,
+    } satisfies GraphMessage);
+  });
+
   // BroadcastChannels for cross-window communication
   onMount(() => {
     searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
@@ -262,11 +349,21 @@
         selection.activeGlobalId = e.data.globalId;
       }
     };
+
+    graphChannel = new BroadcastChannel(GRAPH_CHANNEL);
+    graphChannel.onmessage = (e: MessageEvent<GraphMessage>) => {
+      if (e.data.type === "request-context") {
+        sendGraphContext();
+      } else if (e.data.type === "selection-changed") {
+        selection.activeGlobalId = e.data.globalId;
+      }
+    };
   });
 
   onDestroy(() => {
     searchChannel?.close();
     attributesChannel?.close();
+    graphChannel?.close();
   });
 
   function sendBranchContext() {
@@ -298,6 +395,45 @@
       revision,
       globalId,
     } satisfies AttributesMessage);
+  }
+
+  function sendGraphContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const globalId = selection.activeGlobalId;
+    const subgraphDepth = selection.subgraphDepth;
+    graphChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      globalId,
+      subgraphDepth,
+    } satisfies GraphMessage);
+  }
+
+  function openGraphPopup() {
+    if (!graphPopup || graphPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const globalId = selection.activeGlobalId;
+      const subgraphDepth = selection.subgraphDepth;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      if (globalId != null) params.set("globalId", String(globalId));
+      params.set("subgraphDepth", String(subgraphDepth));
+      const query = params.toString();
+      const url = query ? `/graph?${query}` : "/graph";
+      graphPopup = window.open(url, "bimatlas-graph", "width=800,height=700");
+      setTimeout(sendGraphContext, 500);
+    } else {
+      graphPopup.focus();
+      sendGraphContext();
+    }
   }
 
   function openSearchPopup() {
@@ -722,6 +858,47 @@
     }
   }
 
+  async function fetchRevisionsListWithFilters(
+    branchId: string,
+    filters: {
+      authorSearch?: string;
+      ifcFilenameSearch?: string;
+      commitMessageSearch?: string;
+      createdAfter?: string;
+      createdBefore?: string;
+    },
+  ) {
+    if (!branchId) return;
+    loadingRevisions = true;
+    try {
+      const variables: Record<string, unknown> = { branchId };
+      if (filters.authorSearch) variables.authorSearch = filters.authorSearch;
+      if (filters.ifcFilenameSearch)
+        variables.ifcFilenameSearch = filters.ifcFilenameSearch;
+      if (filters.commitMessageSearch)
+        variables.commitMessageSearch = filters.commitMessageSearch;
+      if (filters.createdAfter) variables.createdAfter = filters.createdAfter;
+      if (filters.createdBefore)
+        variables.createdBefore = filters.createdBefore;
+      const result = await client.query(REVISIONS_QUERY, variables).toPromise();
+      const list = (result.data?.revisions ?? []) as RevisionRow[];
+      revisionList = list;
+      const hasAnyFilter = !!(
+        filters.authorSearch ||
+        filters.ifcFilenameSearch ||
+        filters.commitMessageSearch ||
+        filters.createdAfter ||
+        filters.createdBefore
+      );
+      if (!hasAnyFilter) allRevisionsForDropdown = list;
+    } catch (err) {
+      console.error("Failed to fetch revisions:", err);
+      revisionList = [];
+    } finally {
+      loadingRevisions = false;
+    }
+  }
+
   /** Map GraphQL-style filter vars (camelCase) to stream query params (snake_case). */
   function streamQueryParams(
     branchId: string,
@@ -977,28 +1154,23 @@
       </button>
     </div>
 
-    <!-- Project selector -->
+    <!-- Project (read-only when active; use BimAtlas button to change) -->
     {#if projectState.activeProjectId && activeProject}
       <div class="context-selector">
-        <div class="selector-group">
-          <label class="selector-label" for="project-select">Project</label>
-          <select
-            id="project-select"
-            class="selector"
-            value={projectState.activeProjectId}
-            onchange={(e) =>
-              selectProject((e.target as HTMLSelectElement).value)}
+        <div class="selector-group selector-group--readonly">
+          <span class="selector-label">Project</span>
+          <span
+            class="selector selector--readonly"
+            title="Click BimAtlas to select another project"
           >
-            {#each projects as p}
-              <option value={p.id}>{p.name}</option>
-            {/each}
-          </select>
+            {activeProject.name}
+          </span>
         </div>
 
         <span class="separator">/</span>
 
         <!-- Branch selector -->
-        <div class="selector-group">
+        <div class="selector-group selector-group--branch">
           <label class="selector-label" for="branch-select">Branch</label>
           <select
             id="branch-select"
@@ -1048,27 +1220,6 @@
             </svg>
           </button>
         </div>
-      </div>
-
-      <div class="view-toggle" role="tablist">
-        <button
-          class="tab-btn"
-          class:active={activeView === "viewport"}
-          role="tab"
-          aria-selected={activeView === "viewport"}
-          onclick={() => (activeView = "viewport")}
-        >
-          3D View
-        </button>
-        <button
-          class="tab-btn"
-          class:active={activeView === "graph"}
-          role="tab"
-          aria-selected={activeView === "graph"}
-          onclick={() => (activeView = "graph")}
-        >
-          Graph
-        </button>
       </div>
     {/if}
 
@@ -1185,7 +1336,7 @@
           {/if}
         </div>
       </div>
-    {:else if activeView === "viewport"}
+    {:else}
       <div class="viewport-container">
         <Viewport bind:manager={sceneManager} />
         {#if loadingGeometry}
@@ -1257,6 +1408,226 @@
           >
             Fit View
           </button>
+          <!-- Revision filters (when branch is active) -->
+          {#if projectState.activeBranchId}
+            <section
+              class="sidebar-section revision-search-section"
+              aria-labelledby="revision-search-heading"
+            >
+              <h2 id="revision-search-heading" class="sidebar-section-heading">
+                Revision
+              </h2>
+
+              <!-- Filter revisions (collapsible) -->
+              <div class="revision-filter-group">
+                <button
+                  type="button"
+                  class="revision-filter-group-header"
+                  aria-expanded={!revisionFilterCollapsed}
+                  aria-controls="revision-filter-content"
+                  onclick={() =>
+                    (revisionFilterCollapsed = !revisionFilterCollapsed)}
+                >
+                  <span>Filter revisions</span>
+                  <span
+                    class="revision-filter-group-chevron"
+                    class:collapsed={revisionFilterCollapsed}
+                    aria-hidden="true">▼</span
+                  >
+                </button>
+                <div
+                  id="revision-filter-content"
+                  class="revision-filter-group-content"
+                  class:collapsed={revisionFilterCollapsed}
+                >
+                  <!-- Author -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterAuthor.enabled}
+                      />
+                      <span>Author</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Author…"
+                        aria-label="Filter by author"
+                        bind:value={revisionFilterAuthor.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- IFC Filename -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterFilename.enabled}
+                      />
+                      <span>IFC Filename</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Filename…"
+                        aria-label="Filter by IFC filename"
+                        bind:value={revisionFilterFilename.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Commit message -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterMessage.enabled}
+                      />
+                      <span>Commit message</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="text"
+                        class="filter-select revision-filter-input"
+                        placeholder="Message…"
+                        aria-label="Filter by commit message"
+                        bind:value={revisionFilterMessage.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Created after (date picker) -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterCreatedAfter.enabled}
+                      />
+                      <span>Created after</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="date"
+                        class="filter-select revision-date-input"
+                        aria-label="Created after date"
+                        bind:value={revisionFilterCreatedAfter.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Created before (date picker) -->
+                  <div class="filter-row revision-filter-row">
+                    <label class="revision-filter-checkbox filter-row-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={revisionFilterCreatedBefore.enabled}
+                      />
+                      <span>Created before</span>
+                    </label>
+                    <div class="filter-fields">
+                      <input
+                        type="date"
+                        class="filter-select revision-date-input"
+                        aria-label="Created before date"
+                        bind:value={revisionFilterCreatedBefore.text}
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Results (matching revisions) -->
+                  <div class="revision-list-wrapper">
+                    <h3 class="revision-results-heading">Results</h3>
+                    {#if loadingRevisions}
+                      <span class="revision-loading" aria-live="polite"
+                        >Loading…</span
+                      >
+                    {:else if revisionList.length === 0}
+                      <p class="revision-empty">No revisions match.</p>
+                    {:else}
+                      <ul class="revision-list" role="list">
+                        {#each revisionList as r}
+                          <li>
+                            <button
+                              type="button"
+                              class="revision-item"
+                              onclick={() =>
+                                (revisionState.activeRevision = r.revisionSeq)}
+                            >
+                              <span class="revision-seq">#{r.revisionSeq}</span>
+                              {#if r.ifcFilename}
+                                <span class="revision-filename"
+                                  >{r.ifcFilename}</span
+                                >
+                              {/if}
+                              {#if r.label}
+                                <span class="revision-label">{r.label}</span>
+                              {/if}
+                              {#if r.authorId}
+                                <span class="revision-author">{r.authorId}</span
+                                >
+                              {/if}
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Current revision (always the displayed one, not dependent on filters) -->
+              {#if revisionState.activeRevision !== null}
+                <div
+                  class="current-revision-block"
+                  aria-label="Current revision"
+                >
+                  {#if currentRevisionRow}
+                    <div class="revision-item revision-item--current">
+                      <span class="revision-current-label"
+                        >Current Revision</span
+                      >
+                      <span class="revision-seq"
+                        >#{currentRevisionRow.revisionSeq}</span
+                      >
+                      {#if currentRevisionRow.ifcFilename}
+                        <span class="revision-filename"
+                          >{currentRevisionRow.ifcFilename}</span
+                        >
+                      {/if}
+                      {#if currentRevisionRow.label}
+                        <span class="revision-label"
+                          >{currentRevisionRow.label}</span
+                        >
+                      {/if}
+                      {#if currentRevisionRow.authorId}
+                        <span class="revision-author"
+                          >{currentRevisionRow.authorId}</span
+                        >
+                      {/if}
+                    </div>
+                  {:else}
+                    <div
+                      class="revision-item revision-item--current revision-item--current-minimal"
+                    >
+                      <span class="revision-current-label"
+                        >Current Revision</span
+                      >
+                      <span class="revision-seq"
+                        >#{revisionState.activeRevision}</span
+                      >
+                      <span class="revision-current-not-in-filter"
+                        >(not in filtered list)</span
+                      >
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </section>
+          {/if}
           <!-- View Options section -->
           <section
             class="sidebar-section"
@@ -1292,6 +1663,100 @@
             </svg>
             Search
           </button>
+          <!-- Open Graph popup button -->
+          <button
+            class="graph-btn"
+            onclick={openGraphPopup}
+            aria-label="Open graph in new tab"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <!-- Edges: center to outer nodes -->
+              <line
+                x1="12"
+                y1="12"
+                x2="12"
+                y2="6"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="18"
+                y2="14"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="7"
+                y2="15"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <line
+                x1="12"
+                y1="12"
+                x2="8"
+                y2="9"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+              <!-- Nodes -->
+              <circle
+                cx="12"
+                cy="12"
+                r="2.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="12"
+                cy="6"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="18"
+                cy="14"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="7"
+                cy="15"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+              <circle
+                cx="8"
+                cy="9"
+                r="2"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+            Graph
+          </button>
           <!-- Attribute panel pop-out button -->
           <button
             class="attributes-btn"
@@ -1323,10 +1788,6 @@
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
         >
-      </div>
-    {:else}
-      <div class="graph-wrapper">
-        <ForceGraph />
       </div>
     {/if}
 
@@ -1624,6 +2085,9 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 0 0 50%;
+    max-width: 50%;
+    min-width: 0;
   }
 
   .selector-group {
@@ -1651,6 +2115,21 @@
     max-width: 180px;
   }
 
+  .selector--readonly {
+    cursor: default;
+  }
+
+  /* Allow the branch selector to grow and occupy half of the header context area */
+  .selector-group--branch {
+    flex: 1;
+    min-width: 0;
+  }
+
+  #branch-select.selector {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
   .selector:focus {
     border-color: rgba(255, 136, 102, 0.4);
   }
@@ -1663,6 +2142,263 @@
   .separator {
     color: #555;
     font-size: 1rem;
+  }
+
+  .revision-search-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  /* CSS grid so all revision filter rows share the same column alignment */
+  .revision-search-section .filter-row.revision-filter-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.5rem 0.75rem;
+    align-items: start;
+    padding: 0.4rem 0;
+    min-width: 0;
+  }
+
+  .revision-search-section .filter-row-label,
+  .revision-search-section .revision-filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    color: #888;
+    cursor: pointer;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .revision-search-section .revision-filter-checkbox input {
+    accent-color: #ff8866;
+    flex-shrink: 0;
+  }
+
+  .revision-search-section .revision-filter-checkbox span {
+    word-break: break-word;
+    line-height: 1.3;
+  }
+
+  .revision-search-section .filter-fields {
+    display: flex;
+    align-items: stretch;
+    gap: 0.35rem;
+    min-width: 0;
+  }
+
+  .revision-search-section .revision-filter-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 2.25rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #ddd;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.78rem;
+    outline: none;
+    font-family: inherit;
+    cursor: text;
+  }
+
+  .revision-search-section .revision-filter-input:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .revision-search-section .revision-filter-input::placeholder {
+    color: #555;
+  }
+
+  .revision-search-section .revision-date-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 2.25rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.3rem;
+    color: #ddd;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.78rem;
+    outline: none;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .revision-search-section .revision-date-input:focus {
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .revision-search-section
+    .revision-date-input::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+    cursor: pointer;
+    opacity: 0.8;
+  }
+
+  .revision-loading,
+  .revision-empty {
+    font-size: 0.8rem;
+    color: #888;
+    margin: 0;
+  }
+
+  .revision-list-wrapper {
+    margin-top: 0.5rem;
+  }
+
+  .revision-results-heading {
+    margin: 0 0 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #aaa;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .revision-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+
+  .revision-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    text-align: left;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    border-radius: 0.25rem;
+    color: #bbb;
+    cursor: pointer;
+    margin-bottom: 0.2rem;
+  }
+
+  .revision-item:hover {
+    background: rgba(255, 136, 102, 0.12);
+    color: #ddd;
+  }
+
+  .revision-item--current {
+    cursor: default;
+    background: rgba(255, 136, 102, 0.2);
+    border-color: rgba(255, 136, 102, 0.4);
+    color: #ff8866;
+  }
+
+  .revision-item--current:hover {
+    background: rgba(255, 136, 102, 0.2);
+    color: #ff8866;
+  }
+
+  .revision-item--current,
+  .revision-item--current * {
+    cursor: default;
+  }
+
+  .revision-current-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(255, 136, 102, 0.9);
+    width: 100%;
+    flex-basis: 100%;
+    margin-bottom: 0.15rem;
+  }
+
+  .current-revision-block {
+    margin-top: 0.75rem;
+  }
+
+  .revision-current-not-in-filter {
+    font-size: 0.7rem;
+    color: #888;
+    font-style: italic;
+  }
+
+  .revision-seq {
+    font-weight: 600;
+    color: #999;
+  }
+
+  .revision-item--current .revision-seq {
+    color: #ff8866;
+  }
+
+  /* Collapsible "Filter revisions" group */
+  .revision-filter-group {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .revision-filter-group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.35rem 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #aaa;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .revision-filter-group-header:hover {
+    color: #ddd;
+  }
+
+  .revision-filter-group-chevron {
+    font-size: 0.6rem;
+    transition: transform 0.2s ease;
+  }
+
+  .revision-filter-group-chevron.collapsed {
+    transform: rotate(90deg);
+  }
+
+  .revision-filter-group-content.collapsed {
+    display: none;
+  }
+
+  .revision-filter-group-content:not(.collapsed) {
+    display: block;
+    margin-top: 0.35rem;
+  }
+
+  .revision-filename,
+  .revision-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+
+  .revision-item--current .revision-filename,
+  .revision-item--current .revision-label {
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    max-width: none;
+    word-break: break-word;
+  }
+
+  .revision-author {
+    font-size: 0.7rem;
+    color: #777;
   }
 
   .icon-btn {
@@ -1714,38 +2450,6 @@
   .icon-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-  }
-
-  /* ---- View toggle tabs ---- */
-
-  .view-toggle {
-    display: flex;
-    gap: 0;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 0.4rem;
-    padding: 0.2rem;
-  }
-
-  .tab-btn {
-    background: none;
-    border: none;
-    color: #888;
-    padding: 0.35rem 0.9rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    border-radius: 0.3rem;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-
-  .tab-btn:hover {
-    color: #ccc;
-  }
-
-  .tab-btn.active {
-    background: rgba(255, 102, 68, 0.15);
-    color: #ff8866;
   }
 
   /* ---- Content area ---- */
@@ -1826,12 +2530,6 @@
     flex-direction: row;
     justify-content: space-between;
     pointer-events: none;
-  }
-
-  .graph-wrapper {
-    flex: 1;
-    position: relative;
-    min-height: 0;
   }
 
   /* ---- Project picker ---- */
@@ -2084,6 +2782,7 @@
   }
 
   .search-btn,
+  .graph-btn,
   .attributes-btn {
     display: inline-flex;
     align-items: center;
@@ -2103,6 +2802,7 @@
   }
 
   .search-btn:hover,
+  .graph-btn:hover,
   .attributes-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);

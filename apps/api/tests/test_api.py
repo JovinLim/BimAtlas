@@ -427,6 +427,33 @@ class TestGraphQLEndpoint:
             f"Tree should contain IfcWall/IfcSlab or at least IfcElement; got: {names}"
         )
 
+    def test_graphql_no_create_revision_mutation(self, client):
+        """Regression: ensure no mutation exists to create a revision manually.
+
+        Revisions must be created only via IFC ingestion (/upload-ifc).
+        """
+        query = """
+        query {
+            __schema {
+                mutationType {
+                    fields {
+                        name
+                    }
+                }
+            }
+        }
+        """
+        response = client.post("/graphql", json={"query": query})
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "data" in data and data["data"] is not None
+        mutation_type = data["data"]["__schema"]["mutationType"]
+        assert mutation_type is not None
+        mutation_names = {f["name"] for f in mutation_type["fields"]}
+        assert "createRevision" not in mutation_names, (
+            "Schema must not expose createRevision; revisions are created only via IFC upload."
+        )
+
 
 class TestCORS:
     """Test CORS middleware configuration."""
