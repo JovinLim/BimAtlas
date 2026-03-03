@@ -1076,13 +1076,7 @@
                 objectType: product.objectType ?? null,
                 tag: product.tag ?? null,
               });
-              console.log("[geometry load] product received:", product);
               if (product.mesh?.vertices && product.mesh?.faces) {
-                console.log(
-                  "[geometry load] adding geometry for:",
-                  product.globalId,
-                  product.mesh,
-                );
                 try {
                   const geometry = createBufferGeometry(
                     product.mesh as RawMeshData,
@@ -1143,22 +1137,7 @@
         }
       }
 
-      if (import.meta.env.DEV && (startTotal > 0 || metaList.length > 0)) {
-        console.debug("[geometry] stream done:", {
-          startTotal,
-          productMetaCount: metaList.length,
-          productEventsWithMesh,
-          sceneElementCount: mgr.elementCount,
-        });
-      }
-
       searchState.setProducts(metaList);
-
-      console.log(
-        "[geometry load] geometries received:",
-        metaList.length,
-        metaList,
-      );
 
       // If the Table popup is open, push updated context so it sees
       // the latest filtered entities instead of only the initial snapshot.
