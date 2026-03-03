@@ -18,6 +18,12 @@ features:
       Search and filter revisions for the active project by author, ifc_filename, commit_message, or created_at. Import IFC flow warns that a new revision is created; no manual empty revision creation allowed. Relational queries only—no AGE Cypher.
     status: draft
     priority: high
+  - feature_id: feature_003_filtered_entities_table_view
+    name: Filtered Entities Table View
+    description: |
+      Popup table view of currently filtered IFC entities with lock/unlock rows, protected columns (e.g. IfcClass), and a split layout: top entity table, bottom sheet for quantity surveying or other spreadsheet-style interactions. Data source is searchState.products.
+    status: implemented
+    priority: high
 ---
 
 BimAtlas Product Overview

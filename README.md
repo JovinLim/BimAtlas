@@ -469,6 +469,23 @@ pytest -n auto  # Requires: uv pip install pytest-xdist
 
 - **Full Guide:** [apps/api/tests/README.md](apps/api/tests/README.md)
 
+### Frontend (Playwright) — Table / spreadsheet tests
+
+The table view has an isolated Playwright suite that uses dummy fixture data (no backend or IFC stream required). From `apps/web/`:
+
+```bash
+# Install Playwright browsers (one-time)
+pnpm exec playwright install chromium
+
+# Headless run (CI / default)
+pnpm run test:spreadsheet
+
+# Headed run: open Chromium so you can watch edits (lock/unlock, sheet rows)
+pnpm run test:spreadsheet:headed
+```
+
+Tests live in `apps/web/tests/table-spreadsheet/` and target `/table?fixture=1`.
+
 ---
 
 ## License

@@ -30,6 +30,11 @@
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
   import { GRAPH_CHANNEL, type GraphMessage } from "$lib/graph/protocol";
+  import {
+    TABLE_CHANNEL,
+    TABLE_PROTOCOL_VERSION,
+    type TableMessage,
+  } from "$lib/table/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -63,6 +68,8 @@
   let attributesChannel: BroadcastChannel | null = null;
   let graphPopup: Window | null = null;
   let graphChannel: BroadcastChannel | null = null;
+  let tablePopup: Window | null = null;
+  let tableChannel: BroadcastChannel | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -358,12 +365,22 @@
         selection.activeGlobalId = e.data.globalId;
       }
     };
+
+    tableChannel = new BroadcastChannel(TABLE_CHANNEL);
+    tableChannel.onmessage = (e: MessageEvent<TableMessage>) => {
+      if (e.data.type === "request-context") {
+        sendTableContext();
+      } else if (e.data.type === "selection-changed") {
+        selection.activeGlobalId = e.data.globalId;
+      }
+    };
   });
 
   onDestroy(() => {
     searchChannel?.close();
     attributesChannel?.close();
     graphChannel?.close();
+    tableChannel?.close();
   });
 
   function sendBranchContext() {
@@ -411,6 +428,40 @@
       globalId,
       subgraphDepth,
     } satisfies GraphMessage);
+  }
+
+  function sendTableContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const products = searchState.products;
+    // Ensure BroadcastChannel payload is plain cloneable data.
+    const plainProducts = products.map((p) => ({
+      globalId: p.globalId,
+      ifcClass: p.ifcClass,
+      name: p.name ?? null,
+      description: p.description ?? null,
+      objectType: p.objectType ?? null,
+      tag: p.tag ?? null,
+    }));
+
+    // Resolve human-readable names from loaded project list
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
+
+    tableChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      branchName: branch?.name ?? null,
+      projectName: project?.name ?? null,
+      revision,
+      products: plainProducts,
+      version: TABLE_PROTOCOL_VERSION,
+    } satisfies TableMessage);
   }
 
   function openGraphPopup() {
@@ -475,6 +526,29 @@
     } else {
       attributePopup.focus();
       sendAttributesContext();
+    }
+  }
+
+  function openTablePopup() {
+    if (!tablePopup || tablePopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/table?${query}` : "/table";
+      tablePopup = window.open(
+        url,
+        "bimatlas-table",
+        "width=900,height=700",
+      );
+      setTimeout(sendTableContext, 500);
+    } else {
+      tablePopup.focus();
+      sendTableContext();
     }
   }
 
@@ -1085,6 +1159,14 @@
         metaList.length,
         metaList,
       );
+
+      // If the Table popup is open, push updated context so it sees
+      // the latest filtered entities instead of only the initial snapshot.
+      try {
+        sendTableContext();
+      } catch {
+        // Best-effort; table popup might not be open yet.
+      }
 
       if (Object.keys(filterVars).length === 0) {
         searchState.totalProductCount = metaList.length;
@@ -1756,6 +1838,28 @@
               />
             </svg>
             Graph
+          </button>
+          <!-- Table popup button -->
+          <button
+            class="table-btn"
+            onclick={openTablePopup}
+            aria-label="Open table view"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M3 6h18M3 12h18M3 18h18"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                d="M3 6v12h18V6H3z"
+                stroke="currentColor"
+                stroke-width="2"
+                fill="none"
+              />
+            </svg>
+            Table
           </button>
           <!-- Attribute panel pop-out button -->
           <button
@@ -2783,6 +2887,7 @@
 
   .search-btn,
   .graph-btn,
+  .table-btn,
   .attributes-btn {
     display: inline-flex;
     align-items: center;
@@ -2803,6 +2908,7 @@
 
   .search-btn:hover,
   .graph-btn:hover,
+  .table-btn:hover,
   .attributes-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);
