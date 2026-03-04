@@ -2,6 +2,26 @@
   import type { SpreadsheetCellState } from "$lib/table/engine";
   import type { SheetEntry } from "$lib/table/types";
 
+  function closeContextMenuOnOutsideClick() {
+    const menu = contextMenu;
+    if (menu == null) return;
+    const el = document.querySelector("[data-sheet-context-menu]");
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (el && !el.contains(target)) closeContextMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeContextMenu();
+    };
+    document.addEventListener("mousedown", onMouseDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }
+  $effect(closeContextMenuOnOutsideClick);
+
   type Props = {
     entries?: SheetEntry[];
     rowStart?: number;
@@ -49,13 +69,47 @@
     onCellPointerUp,
   }: Props = $props();
 
-  function addEntry() {
+  function newEntry(): SheetEntry {
     const id = crypto.randomUUID?.() ?? `sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    entries = [
-      ...entries,
-      { id, entityGlobalId: null, category: "", label: "", value: "", notes: "", tag: "" },
-    ];
+    return { id, entityGlobalId: null, category: "", label: "", value: "", notes: "", tag: "" };
+  }
+
+  function addEntry() {
+    entries = [...entries, newEntry()];
     onEntriesChange?.(entries);
+  }
+
+  let contextMenu = $state<{ x: number; y: number; rowIndex: number } | null>(null);
+
+  function addRowAbove(rowIndex: number) {
+    const idx = rowIndex;
+    const entry = newEntry();
+    entries = [...entries.slice(0, idx), entry, ...entries.slice(idx)];
+    onEntriesChange?.(entries);
+    contextMenu = null;
+  }
+
+  function addRowBelow(rowIndex: number) {
+    const idx = rowIndex + 1;
+    const entry = newEntry();
+    entries = [...entries.slice(0, idx), entry, ...entries.slice(idx)];
+    onEntriesChange?.(entries);
+    contextMenu = null;
+  }
+
+  function deleteRow(rowIndex: number) {
+    entries = entries.filter((_, i) => i !== rowIndex);
+    onEntriesChange?.(entries);
+    contextMenu = null;
+  }
+
+  function openContextMenu(e: MouseEvent, rowIndex: number) {
+    e.preventDefault();
+    contextMenu = { x: e.clientX, y: e.clientY, rowIndex };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
   }
 
   function isEntryLocked(entryId: string): boolean {
@@ -138,7 +192,7 @@
       <div class="lock-rail" aria-label="Sheet row actions">
         <div class="lock-rail-corner mono">LOCK</div>
         {#if entries.length > 0}
-          {#each entries as entry (entry.id)}
+          {#each entries as entry, idx (entry.id)}
             {@const locked = isEntryLocked(entry.id)}
             <button
               type="button"
@@ -146,6 +200,7 @@
               aria-label={locked ? "Unlock row" : "Lock row"}
               title={locked ? "Unlock row" : "Lock row"}
               onclick={() => onToggleEntryLock(entry.id)}
+              oncontextmenu={(e) => openContextMenu(e, idx)}
             >
               {#if locked}
                 <svg class="lock-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -188,7 +243,10 @@
             {#each entries as entry, idx (entry.id)}
               {@const row = rowStart + idx}
               {@const rowLocked = isEntryLocked(entry.id)}
-              <tr class="sheet-row">
+              <tr
+                class="sheet-row"
+                oncontextmenu={(e) => openContextMenu(e, idx)}
+              >
                 <th class="row-index" scope="row">{row}</th>
                 <td class="col-globalId">
                 <input
@@ -347,6 +405,40 @@
       </table>
     </div>
   </div>
+
+  {#if contextMenu}
+    <div
+      data-sheet-context-menu
+      class="sheet-context-menu"
+      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+      role="menu"
+    >
+      <button
+        type="button"
+        role="menuitem"
+        class="sheet-context-item"
+        onclick={() => addRowAbove(contextMenu!.rowIndex)}
+      >
+        Add row above
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="sheet-context-item"
+        onclick={() => addRowBelow(contextMenu!.rowIndex)}
+      >
+        Add row below
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="sheet-context-item sheet-context-item-danger"
+        onclick={() => deleteRow(contextMenu!.rowIndex)}
+      >
+        Delete row
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -440,4 +532,33 @@
   .sheet-input.selected-range { background: rgba(102, 171, 255, 0.12); }
   .sheet-input[readonly] { color: #b9b9c5; }
 
+  .sheet-context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 10rem;
+    padding: 0.25rem 0;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+  .sheet-context-item {
+    display: block;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .sheet-context-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .sheet-context-item-danger:hover {
+    background: rgba(220, 80, 60, 0.2);
+    color: #ffaa99;
+  }
 </style>
