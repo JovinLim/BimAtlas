@@ -161,9 +161,10 @@ test.describe("Table view (fixture data)", () => {
 
     const formulaInput = page.locator(".formula-input");
     await formulaInput.fill("11");
-    await page.getByRole("button", { name: /apply/i }).click();
+    await formulaInput.press("Enter");
 
-    await page.getByRole("button", { name: /fill down from active cell/i }).click();
+    await firstNameInput.click();
+    await page.keyboard.press("Control+d");
     const secondNameInput = table.locator("tbody .col-name input").nth(1);
     await expect(secondNameInput).toHaveValue("11");
   });
@@ -192,7 +193,7 @@ test.describe("Table view (fixture data)", () => {
 
     const formulaInput = page.locator(".formula-input");
     await formulaInput.fill("Renamed-By-Test");
-    await page.getByRole("button", { name: /apply/i }).click();
+    await formulaInput.press("Enter");
     await expect(nameInput).toHaveValue("Renamed-By-Test");
 
     await page.getByRole("button", { name: /^undo$/i }).click();

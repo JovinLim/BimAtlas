@@ -15,6 +15,15 @@
     B: "ifcClass",
   } as const;
 
+  const HEADER_COLUMNS: { col: "A" | "B" | "C" | "D" | "E" | "F"; key: keyof ProductMeta; label: string }[] = [
+    { col: "A", key: "globalId", label: "Global ID" },
+    { col: "B", key: "ifcClass", label: "IFC CLASS" },
+    { col: "C", key: "name", label: "Name" },
+    { col: "D", key: "description", label: "Description" },
+    { col: "E", key: "objectType", label: "Object Type" },
+    { col: "F", key: "tag", label: "Tag" },
+  ];
+
   type Props = {
     products: ProductMeta[];
     lockedIds: Set<string>;
@@ -35,6 +44,9 @@
       shift: boolean,
     ) => void;
     onFillDown: (cell: SpreadsheetCellState) => void;
+    sortBy: keyof ProductMeta;
+    sortDir: "asc" | "desc";
+    onSortChange: (column: keyof ProductMeta, direction: "asc" | "desc") => void;
     isCellInSelection: (ref: string) => boolean;
     onCellPointerDown: (
       cell: SpreadsheetCellState,
@@ -58,11 +70,28 @@
     onCellCancel,
     onCellNavigate,
     onFillDown,
+    sortBy,
+    sortDir,
+    onSortChange,
     isCellInSelection,
     onCellPointerDown,
     onCellPointerEnter,
     onCellPointerUp,
   }: Props = $props();
+
+  let openSortColumn = $state<keyof ProductMeta | null>(null);
+
+  $effect(() => {
+    const key = openSortColumn;
+    if (key == null) return;
+    const el = document.querySelector(`[data-sort-column="${key}"]`);
+    if (!el) return;
+    const close = (e: MouseEvent) => {
+      if (!el.contains(e.target as Node)) openSortColumn = null;
+    };
+    document.addEventListener("mousedown", close, true);
+    return () => document.removeEventListener("mousedown", close, true);
+  });
 
   function isLocked(globalId: string): boolean {
     return lockedIds.has(globalId);
@@ -185,12 +214,53 @@
         </tr>
         <tr class="labels-row">
           <th class="row-index" scope="row">1</th>
-          <th scope="col">Global ID</th>
-          <th scope="col">IFC CLASS</th>
-          <th scope="col">Name</th>
-          <th scope="col">Description</th>
-          <th scope="col">Object Type</th>
-          <th scope="col">Tag</th>
+          {#each HEADER_COLUMNS as { col, key, label }}
+            <th scope="col" class="th-sort" data-sort-column={key}>
+              <div class="th-sort-inner">
+                <span class="th-sort-label">{label}</span>
+                <button
+                  type="button"
+                  class="th-sort-btn"
+                  aria-label="Sort column"
+                  aria-expanded={openSortColumn === key}
+                  aria-haspopup="menu"
+                  onclick={() => (openSortColumn = openSortColumn === key ? null : key)}
+                >
+                  <svg class="th-sort-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path fill="currentColor" d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+                  </svg>
+                </button>
+                {#if openSortColumn === key}
+                  <div class="th-sort-dropdown" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="th-sort-option"
+                      class:active={sortBy === key && sortDir === "asc"}
+                      onclick={() => {
+                        onSortChange(key, "asc");
+                        openSortColumn = null;
+                      }}
+                    >
+                      Sort A–Z
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="th-sort-option"
+                      class:active={sortBy === key && sortDir === "desc"}
+                      onclick={() => {
+                        onSortChange(key, "desc");
+                        openSortColumn = null;
+                      }}
+                    >
+                      Sort Z–A
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            </th>
+          {/each}
         </tr>
       </thead>
       <tbody>
@@ -349,10 +419,19 @@
     color: #c0c0d0;
     font-weight: 600;
     text-align: center;
+    /* Extend coverage so no content shows through between this row and the labels row when scrolling */
+    box-shadow: 0 calc(var(--table-grid-border-width, 1px) + 1px) 0 0 #1a1a2e;
+  }
+  /* First column (corner + row numbers) stays fixed when scrolling horizontally, next to lock-rail. */
+  .corner {
+    left: var(--lock-rail-width, 3rem);
+    z-index: 8;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.15);
   }
   .labels-row th {
     position: sticky;
-    top: calc(var(--table-header-height, 28px) + var(--table-grid-border-width, 1px));
+    /* Sit flush under the letters row so no gap shows when scrolling (letters row has shadow to cover any sub-pixel gap) */
+    top: var(--table-header-height, 28px);
     z-index: 3;
     background: #1a1a2e;
     color: #ccccd8;
@@ -362,6 +441,91 @@
     padding: 0 0.5rem;
     text-align: left;
     height: var(--table-subheader-height, 34px);
+  }
+  .th-sort {
+    vertical-align: middle;
+    overflow: visible;
+  }
+  .th-sort-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    position: relative;
+    min-height: 1.5rem;
+    overflow: visible;
+  }
+  .th-sort-label {
+    flex: 1;
+    min-width: 0;
+  }
+  .th-sort-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: #a0a0b0;
+    cursor: pointer;
+  }
+  .th-sort-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #e0e0e0;
+  }
+  .th-sort-btn[aria-expanded="true"] {
+    background: rgba(255, 136, 102, 0.15);
+    color: #ff8866;
+  }
+  .th-sort-icon {
+    display: block;
+  }
+  .th-sort-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 0.2rem;
+    min-width: 8rem;
+    padding: 0.25rem 0;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+    list-style: none;
+  }
+  .th-sort-option {
+    display: block;
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .th-sort-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .th-sort-option.active {
+    background: rgba(255, 136, 102, 0.15);
+    color: #ff8866;
+  }
+  .entity-grid thead th.row-index {
+    left: var(--lock-rail-width, 3rem);
+    z-index: 5;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.15);
+  }
+  .entity-grid tbody th.row-index {
+    position: sticky;
+    left: var(--lock-rail-width, 3rem);
+    z-index: 2;
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.15);
   }
   .row-index {
     background: #1a1a2e;

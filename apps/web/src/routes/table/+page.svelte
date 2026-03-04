@@ -29,6 +29,9 @@
   /** Products from main window context, or fixture when ?fixture=1 */
   let products = $state<ProductMeta[]>([]);
   let useFixture = $state(false);
+  /** Sort by column key; default ascending (A–Z). */
+  let sortBy = $state<keyof ProductMeta>("name");
+  let sortDir = $state<"asc" | "desc">("asc");
   /** Row lock state: locked rows are read-only for editable cells. */
   let lockedIds = $state<Set<string>>(new Set());
   /** Bottom-sheet row lock state by entry id. */
@@ -323,14 +326,25 @@
     applySnapshot(next);
   }
 
+  const displayProducts = $derived.by(() => {
+    const key = sortBy;
+    const dir = sortDir;
+    return [...products].sort((a, b) => {
+      const va = (a[key] ?? "") as string;
+      const vb = (b[key] ?? "") as string;
+      const cmp = va.localeCompare(vb, undefined, { sensitivity: "base" });
+      return dir === "asc" ? cmp : -cmp;
+    });
+  });
+
   function sheetRowStart(): number {
     return products.length + 2;
   }
 
   function getTopProductByRow(row: number): ProductMeta | null {
     const index = row - 2;
-    if (index < 0 || index >= products.length) return null;
-    return products[index] ?? null;
+    if (index < 0 || index >= displayProducts.length) return null;
+    return displayProducts[index] ?? null;
   }
 
   function getSheetEntryByRow(row: number): SheetEntry | null {
@@ -766,6 +780,11 @@
     fillDownFromActive();
   }
 
+  function onSortChange(column: keyof ProductMeta, direction: "asc" | "desc") {
+    sortBy = column;
+    sortDir = direction;
+  }
+
   function onSheetEntriesChange(nextEntries: SheetEntry[]) {
     if (nextEntries.length !== sheetEntries.length) {
       pushHistory();
@@ -954,31 +973,6 @@
     <button
       type="button"
       class="formula-btn"
-      onclick={applyFormulaInput}
-      disabled={activeCell == null || !activeCell.editable}
-    >
-      Apply
-    </button>
-    <button
-      type="button"
-      class="formula-btn"
-      onclick={cancelFormulaInput}
-      disabled={activeCell == null}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="formula-btn"
-      onclick={fillDownFromActive}
-      disabled={activeCell == null || !activeCell.editable}
-      aria-label="Fill down from active cell"
-    >
-      Fill Down
-    </button>
-    <button
-      type="button"
-      class="formula-btn"
       onclick={undo}
       disabled={undoStack.length === 0}
       aria-label="Undo"
@@ -1032,7 +1026,7 @@
         </button>
       </div>
       <EntityGrid
-        products={products}
+        products={displayProducts}
         lockedIds={lockedIds}
         onToggleLock={toggleLock}
         activeCellRef={activeCell?.ref ?? null}
@@ -1045,6 +1039,9 @@
         onCellCancel={onCellCancel}
         onCellNavigate={onCellNavigate}
         onFillDown={onFillDownRequest}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        onSortChange={onSortChange}
       isCellInSelection={isCellInSelection}
       onCellPointerDown={onCellPointerDown}
       onCellPointerEnter={onCellPointerEnter}
@@ -1193,7 +1190,7 @@
   .formula-bar {
     flex-shrink: 0;
     display: grid;
-    grid-template-columns: auto minmax(280px, 1fr) repeat(5, auto);
+    grid-template-columns: auto 1fr repeat(2, auto);
     gap: 0.4rem;
     align-items: center;
     padding: 0.45rem 0.75rem;
@@ -1265,7 +1262,9 @@
   }
 
   .formula-input {
+    width: 100%;
     height: 2rem;
+    box-sizing: border-box;
     border-radius: 0.35rem;
     border: 1px solid rgba(255, 255, 255, 0.18);
     background: rgba(255, 255, 255, 0.03);
