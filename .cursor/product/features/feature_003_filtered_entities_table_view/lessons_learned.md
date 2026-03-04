@@ -23,6 +23,7 @@
 - Sending full product attributes via BroadcastChannel (e.g. context-attributes messages) can fail to reach the table or hit size limits. Requesting attributes only when the user applies an ENTITY formula and fetching them from the backend (POST /table/entity-attributes) ensures the table gets the data it needs and keeps the context payload small.
 - BottomSheet previously used entries as $bindable for two-way binding. When refactoring to multi-sheet state (derived activeSheet), the parent cannot bind to a derived value. Switching to a controlled pattern (entries prop + onEntriesChange) lets the parent own the state and update the active sheet.
 - Persisting sheet rows as domain-shaped objects (`entityGlobalId`, `category`, etc.) locks storage to current UI semantics and makes schema evolution painful. Serializing to a sparse Excel-like `cells` map (`A1` refs with value/formula) plus row metadata keeps payloads compact and lets frontend hydration stay stable while still supporting legacy payload migration on read.
+- CSV export initially omitted IFC entity rows when `getCommittedValue` returned empty for some cells. Using `getTopFallback(ref, product)` as a fallback ensures entity data is always exported. Export columns must match the frontend UI; extra "Sheet Category" etc. headers were removed so the CSV reflects only visible columns.
 
 ## Univer feasibility (timeboxed spike)
 

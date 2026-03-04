@@ -273,5 +273,24 @@
       { "step": "Added 4 Playwright tests: button visibility/enabled, download columns, sheet data in export, CSV escaping.", "status": "complete" }
     ],
     "handoff_notes": "Export CSV in top segment toolbar. Merged export includes entity columns + Sheet Category/Label/Value/Notes/Tag. All CSV tests passing."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/filtered-entities-table-view_d1b27ff6.plan.md#export-full-csv",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-04T11:00:00Z",
+      "feature_description": "CSV export bug fixes: include IFC entity rows and data; remove extra Sheet columns to match frontend UI."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "CSV export bugs fixed and verified."
+    },
+    "execution_log": [
+      { "step": "Fixed entity rows missing: use getTopFallback(ref, product) fallback when getCommittedValue empty.", "status": "complete" },
+      { "step": "Removed Sheet Category/Label/Value/Notes/Tag columns; export only frontend-visible columns.", "status": "complete" },
+      { "step": "Updated buildMergedCsv to use single headers param; sheet rows map to same column set.", "status": "complete" }
+    ],
+    "handoff_notes": "CSV export now includes IFC entity data and matches frontend column set. No extra Sheet-specific headers."
   }
 ]
