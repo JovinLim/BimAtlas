@@ -166,6 +166,16 @@
   let formulaComposeSourceRef = $state<string | null>(null);
   let formulaSuggestionIndex = $state(0);
   let showFormulaGuideOverlay = $state(false);
+  let showCellContentOverlay = $state(false);
+
+  $effect(() => {
+    if (!showCellContentOverlay) return;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") showCellContentOverlay = false;
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  });
 
   $effect(() => {
     if (!showFormulaGuideOverlay) return;
@@ -1354,6 +1364,15 @@
     >
       Redo
     </button>
+    <button
+      type="button"
+      class="formula-btn"
+      onclick={() => (showCellContentOverlay = true)}
+      disabled={activeCell == null}
+      aria-label="View full cell contents"
+    >
+      View full
+    </button>
   </div>
 
   <div class="table-split">
@@ -1495,6 +1514,53 @@
     </div>
   {/if}
 
+  {#if showCellContentOverlay && activeCell}
+    {@const rawContent = getCommittedValue(activeCell.ref)}
+    {@const formattedContent = (() => {
+      if (rawContent == null || rawContent === "") return "(empty)";
+      const trimmed = String(rawContent).trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          return JSON.stringify(JSON.parse(trimmed), null, 2);
+        } catch {
+          return rawContent;
+        }
+      }
+      return rawContent;
+    })()}
+    <div
+      class="cell-content-backdrop"
+      role="presentation"
+      onclick={() => (showCellContentOverlay = false)}
+      onkeydown={(e) => e.key === "Escape" && (showCellContentOverlay = false)}
+    >
+      <div
+        class="cell-content-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cell-content-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === "Escape" && (showCellContentOverlay = false)}
+      >
+        <div class="cell-content-header">
+          <h2 id="cell-content-title" class="cell-content-title mono">{activeCell.ref}</h2>
+          <button
+            type="button"
+            class="formula-guide-close"
+            onclick={() => (showCellContentOverlay = false)}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="cell-content-body">
+          <pre class="cell-content-pre">{formattedContent}</pre>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if toastMessage}
     <div class="table-toast" role="status" aria-live="polite">
       {toastMessage}
@@ -1574,7 +1640,7 @@
   .formula-bar {
     flex-shrink: 0;
     display: grid;
-    grid-template-columns: auto 1fr repeat(2, auto);
+    grid-template-columns: auto 1fr repeat(3, auto);
     gap: 0.4rem;
     align-items: center;
     padding: 0.45rem 0.75rem;
@@ -1798,6 +1864,64 @@
     min-height: 0;
     overflow-y: auto;
     padding: 1rem;
+  }
+
+  .cell-content-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+
+  .cell-content-overlay {
+    width: 75%;
+    height: 75%;
+    min-width: 18rem;
+    min-height: 12rem;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+
+  .cell-content-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cell-content-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #ff8866;
+  }
+
+  .cell-content-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1rem;
+  }
+
+  .cell-content-pre {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: #e0e0e0;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .formula-guide-section {
