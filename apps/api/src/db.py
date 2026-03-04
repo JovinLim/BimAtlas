@@ -474,6 +474,31 @@ def fetch_distinct_ifc_classes_at_revision(rev: int, branch_id: str) -> list[str
     return [row[0] for row in rows]
 
 
+def fetch_common_attribute_keys(rev: int, branch_id: str, limit: int = 50) -> list[str]:
+    """Return the most common top-level JSONB attribute keys across entities."""
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT k, COUNT(*) AS cnt "
+            f"FROM {_ENTITY_FROM}, "
+            f"LATERAL jsonb_object_keys(COALESCE(e.attributes, '{{}}'::jsonb)) AS k "
+            f"WHERE e.branch_id = %s AND {_REV_FILTER} "
+            f"GROUP BY k ORDER BY cnt DESC LIMIT %s",
+            (branch_id, rev, rev, limit),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def fetch_entity_count_at_revision(rev: int, branch_id: str) -> int:
+    """Return the total number of entities visible at *rev* on *branch_id*."""
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s AND {_REV_FILTER}",
+            (branch_id, rev, rev),
+        )
+        return cur.fetchone()[0]
+
+
 def fetch_spatial_container(
     contained_in_gid: str | None, rev: int, branch_id: str,
 ) -> dict | None:

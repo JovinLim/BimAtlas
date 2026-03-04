@@ -8,6 +8,8 @@
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
   import DepthWidget from "$lib/ui/DepthWidget.svelte";
+  import ChatPanel from "$lib/agent/ChatPanel.svelte";
+  import type { AgentBusEvent } from "$lib/agent/protocol";
   import {
     getSelection,
     getRevisionState,
@@ -86,6 +88,36 @@
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
     : "/api";
+
+  let showAgentPanel = $state(false);
+  let agentEventSource: EventSource | null = null;
+
+  // Agent events SSE: subscribe when branchId changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    if (agentEventSource) {
+      agentEventSource.close();
+      agentEventSource = null;
+    }
+    if (!branchId || typeof window === "undefined") return;
+    const url = `${API_BASE}/stream/agent-events?branch_id=${encodeURIComponent(branchId)}`;
+    const es = new EventSource(url);
+    agentEventSource = es;
+    es.onmessage = (e) => {
+      try {
+        const event: AgentBusEvent = JSON.parse(e.data);
+        if (event.type === "filter-applied") {
+          autoLoadAppliedFilterSets(event.branchId);
+        }
+      } catch {}
+    };
+    es.onerror = () => {
+      // Reconnect is automatic with EventSource
+    };
+    return () => {
+      es.close();
+    };
+  });
 
   let showImportModal = $state(false);
   let importing = $state(false);
@@ -1898,7 +1930,36 @@
             </svg>
             Attributes
           </button>
+          <!-- Agent chat panel toggle -->
+          <button
+            class="agent-btn"
+            class:active={showAgentPanel}
+            onclick={() => (showAgentPanel = !showAgentPanel)}
+            aria-label="Toggle AI agent panel"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2C6.48 2 2 6.02 2 11c0 2.62 1.2 4.98 3.09 6.61L4 22l4.54-2.27A10.9 10.9 0 0012 20c5.52 0 10-3.58 10-8s-4.48-9-10-9z"
+                stroke="currentColor"
+                stroke-width="2"
+                fill="none"
+              />
+              <circle cx="8" cy="11" r="1" fill="currentColor" />
+              <circle cx="12" cy="11" r="1" fill="currentColor" />
+              <circle cx="16" cy="11" r="1" fill="currentColor" />
+            </svg>
+            Agent
+          </button>
         </div>
+        <!-- Agent chat panel (right side) -->
+        {#if showAgentPanel}
+          <div class="agent-panel-container">
+            <ChatPanel
+              branchId={projectState.activeBranchId}
+              revision={revisionState.activeRevision}
+            />
+          </div>
+        {/if}
         <!-- Element count -->
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
@@ -2899,7 +2960,8 @@
   .search-btn,
   .graph-btn,
   .table-btn,
-  .attributes-btn {
+  .attributes-btn,
+  .agent-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -2917,10 +2979,28 @@
       border-color 0.15s;
   }
 
+  .agent-btn.active {
+    background: rgba(255, 136, 102, 0.2);
+    border-color: rgba(255, 136, 102, 0.4);
+    color: #ff8866;
+  }
+
+  .agent-panel-container {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 340px;
+    height: 100%;
+    pointer-events: auto;
+    z-index: 10;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
   .search-btn:hover,
   .graph-btn:hover,
   .table-btn:hover,
-  .attributes-btn:hover {
+  .attributes-btn:hover,
+  .agent-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);
     color: #fff;

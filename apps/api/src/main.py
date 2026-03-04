@@ -5,6 +5,7 @@ Run with::
     uvicorn src.main:app --reload
 """
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -353,3 +354,118 @@ async def delete_ifc_schema(schema_name: str):
             detail=f"Schema '{schema_name}' not found.",
         )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agent endpoints (FEAT-004 Agentic Filtering Framework)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/agent/chat")
+async def agent_chat(body: dict = Body(...)):
+    """Stream an agentic filtering conversation turn.
+
+    Request body::
+
+        {
+            "message": str,
+            "provider": "openai" | "anthropic" | "google" | "ollama" | "custom",
+            "model": str,
+            "apiKey": str,
+            "branchId": str,
+            "revision": int | null,
+            "baseUrl": str | null,
+            "chatHistory": [ { "role": "user"|"assistant", "content": str } ] | null
+        }
+
+    Returns an SSE stream of JSON events.
+    """
+    message = body.get("message")
+    provider = body.get("provider")
+    model = body.get("model")
+    api_key = body.get("apiKey")
+    branch_id = body.get("branchId")
+    revision = body.get("revision")
+    base_url = body.get("baseUrl")
+    chat_history = body.get("chatHistory")
+
+    if not message or not provider or not model or not branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="message, provider, model, and branchId are required",
+        )
+    if not api_key and provider not in ("ollama",):
+        raise HTTPException(status_code=400, detail="apiKey is required for this provider")
+
+    try:
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Invalid branchId")
+
+    from .services.agent.workflow import run_agent_streaming
+
+    async def event_generator():
+        async for event in run_agent_streaming(
+            message=message,
+            branch_id=branch_id,
+            provider=provider,
+            model=model,
+            api_key=api_key or "",
+            revision=revision,
+            base_url=base_url,
+            chat_history=chat_history,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/stream/agent-events")
+async def stream_agent_events(
+    branch_id: str = Query(..., description="Branch ID (UUID) to subscribe to"),
+):
+    """SSE endpoint for real-time agent event notifications.
+
+    Pushes events when the agent applies filters (filter-applied),
+    reports progress (agent-thinking), or encounters errors (agent-error).
+    """
+    try:
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+    from .services.agent.events import event_bus
+
+    queue = event_bus.subscribe(branch_id)
+
+    async def event_generator():
+        try:
+            yield f"data: {json.dumps({'type': 'connected', 'branchId': branch_id})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            event_bus.unsubscribe(branch_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
