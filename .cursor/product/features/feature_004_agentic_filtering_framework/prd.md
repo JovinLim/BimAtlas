@@ -33,7 +33,7 @@ The backend must expose four MCP-compliant tools:
 ### Req 3 (Frontend Chat Interface)
 
 - A Svelte chat panel with streaming LLM responses.
-- A model configuration sub-panel: Provider (OpenAI, Anthropic, Ollama, etc.), Model name, API Key (stored in browser localStorage, never sent to backend storage).
+- A model configuration sub-panel: Provider (OpenAI, Anthropic, Google, Ollama, Custom), Model name, API Key (stored in browser localStorage, never sent to backend storage).
 - Chat messages must show tool-call activity (which MCP tools were invoked, with what arguments) for transparency.
 - The chat must be accessible from the main page (e.g., sidebar panel or popup tab following existing popup conventions).
 
@@ -58,7 +58,9 @@ The full operator vocabulary from FEAT-001 must be available to the agent:
 - Do not modify the existing filter set CRUD or JSONB schema — the MCP tools must wrap existing functions.
 - Do not implement graph traversal via Cypher for filtering; use the existing relational JSONB filter engine.
 - Do not expose geometry (BYTEA) data to the LLM or through MCP tools.
-- Do not require a specific LLM provider; the system must be provider-agnostic (OpenAI, Anthropic, Ollama, etc.).
+- Do not require a specific LLM provider; the system must be provider-agnostic (OpenAI, Anthropic, Google, Ollama, etc.).
+- Inter-set `combination_logic` for applying multiple filter sets to the same context is always `"OR"`. `"AND"` combination is disabled for now.
+- All frontend UI must follow `.cursor/rules/style.md` for HTML structure, layout conventions, CSS tokens, and the BimAtlas color scheme.
 
 ## 4. Success Criteria
 
@@ -102,7 +104,7 @@ The full operator vocabulary from FEAT-001 must be available to the agent:
 
 ## 6. Key Dependencies
 
-- **LlamaIndex** (`llama-index-core`, `llama-index-llms-openai`, `llama-index-llms-anthropic`, `llama-index-llms-ollama`)
+- **LlamaIndex** (`llama-index-core`, `llama-index-llms-openai`, `llama-index-llms-anthropic`, `llama-index-llms-google`, `llama-index-llms-ollama`)
 - **MCP SDK** (`mcp` Python package for tool definition, or custom tool wrappers following MCP JSON-RPC spec)
 - Existing FEAT-001 filter engine (db.py, filter_operators.py, queries.py)
 - Existing IFC schema loader (ifc_schema_loader.py, ifc_4_3_schema.json)

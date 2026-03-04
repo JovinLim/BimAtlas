@@ -328,9 +328,9 @@ Implement an AI-powered natural language filtering interface for BimAtlas that u
       },
       "combination_logic": {
         "type": "string",
-        "enum": ["AND", "OR"],
-        "description": "Logic for combining multiple filter sets. Default: AND",
-        "default": "AND"
+        "enum": ["OR"],
+        "description": "Logic for combining multiple filter sets. Always OR (AND is disabled).",
+        "default": "OR"
       }
     },
     "required": ["branch_id", "filter_set_ids"]
@@ -394,7 +394,7 @@ The agent handles a request like "Filter for only entities which IFC class inher
 #### Step 4: Application
 
 **Trigger:** `FilterSetCreatedEvent` received.
-**Action:** Call `apply_filter_set_to_context(branch_id, filter_set_ids=[filter_set_id], combination_logic="AND")`.
+**Action:** Call `apply_filter_set_to_context(branch_id, filter_set_ids=[filter_set_id], combination_logic="OR")`.
 **Output Event:** `FilterAppliedEvent` with matched entity count.
 **Side Effect:** Backend emits an SSE event on `/stream/agent-events` notifying the frontend to refresh.
 **Final Response:** "I've applied a filter for entities inheriting from IfcWindow. Found {N} matching entities including IfcWindow, IfcWindowStandardCase, etc."
@@ -411,7 +411,7 @@ User: "Show me fire-rated walls with a rating above 2 hours"
    - `create_filter_set(branch_id, "Fire-rated walls >2hr", "AND")`
    - `add_filter_condition(filter_set_id, mode="class", operator="is", ifc_class="IfcWall")`
    - `add_filter_condition(filter_set_id, mode="attribute", operator="gt", attribute="FireRating", value="2", value_type="numeric")`
-4. **Application:** `apply_filter_set_to_context(branch_id, [filter_set_id], "AND")`
+4. **Application:** `apply_filter_set_to_context(branch_id, [filter_set_id], "OR")`
 
 ## State Management Strategy
 
@@ -470,7 +470,7 @@ export interface ToolCallInfo {
 }
 
 export interface AgentConfig {
-  provider: 'openai' | 'anthropic' | 'ollama' | 'custom';
+  provider: 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
   model: string;
   apiKey: string;
   baseUrl?: string;  // For Ollama / custom endpoints
@@ -548,7 +548,7 @@ export type AgentEvent =
 - `apps/api/src/services/agent/events.py` (new — event bus for SSE notifications)
 
 **Actions:**
-- [ ] Implement `apply_filter_set_to_context(branch_id, filter_set_ids, combination_logic="AND")` that:
+- [ ] Implement `apply_filter_set_to_context(branch_id, filter_set_ids, combination_logic="OR")` that:
   1. Calls `db.apply_filter_sets(branch_id, filter_set_ids, combination_logic)`.
   2. Optionally counts matched entities via `db.fetch_entities_with_filter_sets(...)`.
   3. Emits a `filter-applied` event to the SSE event bus.
@@ -562,7 +562,7 @@ export type AgentEvent =
 - `apps/api/src/services/agent/llm_factory.py`
 
 **Actions:**
-- [ ] Create `llm_factory.py` with `create_llm(provider, model, api_key, base_url=None)` that returns the appropriate LlamaIndex LLM instance (OpenAI, Anthropic, Ollama, etc.).
+- [ ] Create `llm_factory.py` with `create_llm(provider, model, api_key, base_url=None)` that returns the appropriate LlamaIndex LLM instance (OpenAI, Anthropic, Google, Ollama, etc.).
 - [ ] Create `workflow.py` with the `AgentWorkflow` class (or use LlamaIndex `Workflow` if evaluating it provides benefits over `ReActAgent`):
   1. Accept user message, branch context, and LLM config.
   2. Bind the four MCP tools with branch context injected.
@@ -615,6 +615,8 @@ export type AgentEvent =
 
 ### Step 9: Frontend Chat Component (`step-09-frontend-chat-component`)
 
+**Style constraint:** Read and follow `.cursor/rules/style.md` for all markup, layout, and color decisions in this step.
+
 **Files to create:**
 - `apps/web/src/lib/agent/ChatPanel.svelte`
 - `apps/web/src/lib/agent/ChatMessage.svelte`
@@ -637,19 +639,23 @@ export type AgentEvent =
 
 ### Step 10: Frontend Model Configuration Panel (`step-10-frontend-model-config`)
 
+**Style constraint:** Read and follow `.cursor/rules/style.md` for all markup, layout, and color decisions in this step.
+
 **Files to create:**
 - `apps/web/src/lib/agent/ModelConfig.svelte`
 
 **Actions:**
 - [ ] Create `ModelConfig.svelte`:
-  - Provider dropdown: OpenAI, Anthropic, Ollama, Custom.
-  - Model text input (with suggestions per provider, e.g., `gpt-4o`, `claude-sonnet-4-20250514`, `llama3`).
+  - Provider dropdown: OpenAI, Anthropic, Google, Ollama, Custom.
+  - Model text input (with suggestions per provider, e.g., `gpt-4o`, `claude-sonnet-4-20250514`, `gemini-2.0-flash`, `llama3`).
   - API Key password input.
   - Base URL input (shown only for Ollama/Custom providers).
   - Persist to localStorage via existing `persistence.ts` patterns.
   - Collapsible panel (expanded by default on first use, collapsed after configuration).
 
 ### Step 11: Frontend State Sync (`step-11-frontend-state-sync`)
+
+**Style constraint:** Read and follow `.cursor/rules/style.md` for any UI elements added in this step.
 
 **Files to modify:**
 - `apps/web/src/lib/agent/protocol.ts`
@@ -664,6 +670,8 @@ export type AgentEvent =
 - [ ] Broadcast changes via `SEARCH_CHANNEL` BroadcastChannel so search/table/graph popups stay in sync.
 
 ### Step 12: Frontend Chat Route (`step-12-frontend-chat-route`)
+
+**Style constraint:** Read and follow `.cursor/rules/style.md` for all markup, layout, and color decisions in this step.
 
 **Files to create/modify:**
 - `apps/web/src/routes/agent/+page.svelte` (new route for popup) OR
@@ -719,12 +727,14 @@ export type AgentEvent =
 - AGE graph properties use `ifc_global_id` (not `global_id`), `branch_id` as UUID string, `valid_from_rev`/`valid_to_rev` as `revision_seq` integers.
 - LLM API keys must never be stored server-side. They are passed per-request from the frontend.
 - MCP tools must wrap existing DB functions, not duplicate their logic.
+- Inter-set `combination_logic` is always `"OR"`. `"AND"` combination of multiple filter sets is disabled for now.
+- **Frontend style guide:** All frontend steps (09–12) must read and follow `.cursor/rules/style.md` for HTML structure, layout, CSS tokens, and the BimAtlas color scheme. Use design tokens (`--color-bg-*`, `--color-text-*`, `--color-border-*`, `--color-brand-*`) for all styling.
 
 ## Dependencies to Install
 
 ### Backend (apps/api)
 ```bash
-uv pip install llama-index-core llama-index-llms-openai llama-index-llms-anthropic llama-index-llms-ollama
+uv pip install llama-index-core llama-index-llms-openai llama-index-llms-anthropic llama-index-llms-google llama-index-llms-ollama
 ```
 
 ### Frontend (apps/web)

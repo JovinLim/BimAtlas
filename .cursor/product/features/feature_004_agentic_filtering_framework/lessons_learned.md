@@ -6,6 +6,8 @@
 - LLM API keys must never be stored on the backend or in the database. Keys are provided per-session from the frontend and passed through to the LLM provider.
 - MCP tools must wrap existing DB functions (db.py), not duplicate their logic. The filter engine, operator validation, and JSONB translation are already implemented.
 - Nested JSONB key filtering uses a recursive JSONB walk in SQL; attribute keys can target keys at any depth (e.g., `PropertySets.PsetWallCommon.FireRating`).
+- Inter-set `combination_logic` for applying multiple filter sets is always `"OR"`. `"AND"` combination of multiple filter sets is disabled. The agent must always pass `combination_logic="OR"` to `apply_filter_set_to_context`.
+- All frontend Svelte components must follow `.cursor/rules/style.md` for HTML structure, layout (Flexbox/Grid, `gap`), CSS design tokens (`--color-bg-*`, `--color-text-*`, `--color-border-*`, `--color-brand-*`), and the BimAtlas dark color scheme.
 
 # Resolved Pitfalls
 
