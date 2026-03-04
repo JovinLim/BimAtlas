@@ -1,4 +1,4 @@
-import { parseCellRef } from "$lib/table/engine";
+import { colToIndex, indexToCol, parseCellRef } from "$lib/table/engine";
 
 type CellResolver = (ref: string) => string | null;
 
@@ -25,6 +25,24 @@ export const FORMULA_SUGGESTIONS: FormulaSuggestion[] = [
     signature: "AVERAGE(start:end)",
     description: "Average of numeric cells in a range; skips empty/non-numeric (e.g. =AVERAGE(D2:D4))",
   },
+  {
+    name: "ENTITY",
+    template: "ENTITY.",
+    signature: "=ENTITY.Attribute",
+    description: "Top header columns can pull an IFC entity attribute for every row.",
+  },
+  {
+    name: "ENTITY_NESTED",
+    template: "ENTITY.PropertySets.PsetWallCommon",
+    signature: "=ENTITY.PropertySets.PsetWallCommon",
+    description: "Nested attribute access through attributes JSON. Missing path resolves to NULL/empty.",
+  },
+  {
+    name: "HEADER_ALIAS",
+    template: "[Display Text](=ENTITY.Attribute)",
+    signature: "[Display Text](Formula)",
+    description: "Top header-only alias syntax: show custom label while evaluating another formula.",
+  },
 ];
 
 export function getFormulaSuggestions(prefix: string): FormulaSuggestion[] {
@@ -46,26 +64,6 @@ function toNumber(value: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function colToIndex(col: string): number {
-  let result = 0;
-  const normalized = col.toUpperCase();
-  for (let i = 0; i < normalized.length; i += 1) {
-    result = result * 26 + (normalized.charCodeAt(i) - 64);
-  }
-  return result - 1;
-}
-
-function indexToCol(index: number): string {
-  let n = index + 1;
-  let out = "";
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
-    n = Math.floor((n - 1) / 26);
-  }
-  return out;
-}
-
 function eachRefInRange(startRef: string, endRef: string): string[] {
   const start = parseCellRef(startRef);
   const end = parseCellRef(endRef);
@@ -81,6 +79,51 @@ function eachRefInRange(startRef: string, endRef: string): string[] {
     }
   }
   return refs;
+}
+
+export function parseHeaderAliasFormula(value: string): {
+  displayText: string;
+  formula: string;
+} | null {
+  const trimmed = value.trim();
+  const match = /^\[([^\]]+)\]\((.+)\)$/.exec(trimmed);
+  if (!match) return null;
+  return {
+    displayText: match[1].trim(),
+    formula: match[2].trim(),
+  };
+}
+
+export function extractEntityPath(formula: string): string | null {
+  const trimmed = formula.trim();
+  if (!trimmed.startsWith("=")) return null;
+  const body = trimmed.slice(1).trim();
+  if (!body.toUpperCase().startsWith("ENTITY.")) return null;
+  const path = body.slice("ENTITY.".length).trim();
+  return path === "" ? null : path;
+}
+
+export function resolveEntityPath(
+  source: Record<string, unknown> | null | undefined,
+  path: string,
+): unknown | null {
+  if (!source) return null;
+  const parts = path
+    .split(".")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return null;
+
+  let current: unknown = source;
+  for (const part of parts) {
+    if (current == null || typeof current !== "object" || Array.isArray(current)) {
+      return null;
+    }
+    const record = current as Record<string, unknown>;
+    if (!(part in record)) return null;
+    current = record[part];
+  }
+  return current ?? null;
 }
 
 export function evaluateFormula(input: string, resolver: CellResolver): FormulaResult {

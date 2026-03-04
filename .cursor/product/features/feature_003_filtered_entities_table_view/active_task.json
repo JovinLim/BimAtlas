@@ -157,5 +157,41 @@
       }
     ],
     "handoff_notes": "Enter now commits and fully escapes (blur + no selection). Formula display and bottom-sheet editability match requested behavior. All spreadsheet tests passing."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/entity-formula-columns_57dee564.plan.md#implementation-steps",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-04T14:05:00Z",
+      "feature_description": "Entity formula columns for the filtered entities table: add user-defined top columns after protected defaults, support =ENTITY.path (including nested attributes) with NULL-safe rendering, and top-header-only [Display Text](Formula) aliases documented in the formula guide."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Entity formula columns implemented and verified in spreadsheet test suite."
+    },
+    "execution_log": [
+      {
+        "step": "Claimed entity-formula-columns plan TODOs and started by extending stream + frontend ProductMeta payload with attributes JSON.",
+        "status": "complete"
+      },
+      {
+        "step": "Added dynamic top-table column model with undeletable default IFC columns and user-added custom columns.",
+        "status": "complete"
+      },
+      {
+        "step": "Implemented top-header formulas for custom columns, including =ENTITY.path nested JSON traversal and [Display Text](Formula) alias parsing.",
+        "status": "complete"
+      },
+      {
+        "step": "Updated formula guide suggestions and expanded fixture/test coverage for entity formulas, null handling, and header alias behavior.",
+        "status": "complete"
+      },
+      {
+        "step": "Validated with pnpm run check and CI= pnpm run test:spreadsheet.",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": "All plan todos complete. Streamed product payload now includes attributes JSON; custom top columns can evaluate ENTITY-path formulas and alias syntax in headers."
   }
 ]

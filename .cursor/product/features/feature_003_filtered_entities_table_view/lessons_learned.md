@@ -18,6 +18,7 @@
 - When the selected cell displays the raw formula, a subsequent blur can fire with the displayed computed value and overwrite the stored formula. In `commitCell`, ignore commits when the cell is not active, has a stored formula, and the incoming value equals the already-committed computed value.
 - Bottom-sheet rows are user-added and not IFC entities; column C there must be editable. Only the top entity grid’s IfcClass/Global ID columns are protected; `resolveCellByRef` marks sheet cells as non-protected.
 - Lock-rail rows drifted from table rows because rail buttons used a fixed height plus a border, yielding a different effective row height than table cells. Use shared CSS variables and, for rail segments, `calc(var(--table-row-height) + var(--table-grid-border-width))` (with `box-sizing: border-box`) so the rail and table share the same row height and stay aligned when variables change.
+- Playwright can click toolbar/header buttons before Svelte hydration wires handlers, which looks like a successful click but leaves state unchanged. Use short retry loops in fixture tests for newly added UI controls (for example Add custom column and Formula guide) and verify the expected post-click element appears before continuing.
 
 ## Univer feasibility (timeboxed spike)
 

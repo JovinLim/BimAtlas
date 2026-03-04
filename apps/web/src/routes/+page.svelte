@@ -457,6 +457,7 @@
       description: p.description ?? null,
       objectType: p.objectType ?? null,
       tag: p.tag ?? null,
+      attributes: p.attributes ?? null,
     }));
 
     // Resolve human-readable names from loaded project list
@@ -466,17 +467,34 @@
       projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
       null;
 
-    tableChannel?.postMessage({
-      type: "context",
+    const contextBase = {
+      type: "context" as const,
       branchId,
       projectId,
       branchName: branch?.name ?? null,
       projectName: project?.name ?? null,
       revision,
-      products: plainProducts,
       version: TABLE_PROTOCOL_VERSION,
       activeGlobalId: selection.activeGlobalId,
+    };
+
+    // Always send lean context first (small payload), then attributes in chunks.
+    // This avoids postMessage size limits that cause ENTITY.* columns to show "—" when one big payload fails.
+    const leanProducts = plainProducts.map((p) => ({
+      globalId: p.globalId,
+      ifcClass: p.ifcClass,
+      name: p.name,
+      description: p.description,
+      objectType: p.objectType,
+      tag: p.tag,
+      attributes: null,
+    }));
+    tableChannel?.postMessage({
+      ...contextBase,
+      products: leanProducts,
     } satisfies TableMessage);
+    // Do not send attribute chunks here; table will request them after receiving context
+    // so it is guaranteed to be listening when chunks arrive (fixes chunks not reaching table).
     if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) {
       tableChannel?.postMessage({
         type: "selection-sync",
@@ -1096,6 +1114,7 @@
                 description: product.description ?? null,
                 objectType: product.objectType ?? null,
                 tag: product.tag ?? null,
+                attributes: product.attributes ?? null,
               });
               if (product.mesh?.vertices && product.mesh?.faces) {
                 try {
@@ -1142,6 +1161,7 @@
                   description: product.description ?? null,
                   objectType: product.objectType ?? null,
                   tag: product.tag ?? null,
+                  attributes: product.attributes ?? null,
                 });
                 if (product.mesh?.vertices && product.mesh?.faces) {
                   try {

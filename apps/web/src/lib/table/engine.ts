@@ -38,6 +38,7 @@ export interface SpreadsheetCellState extends SpreadsheetCellRef {
 export interface SpreadsheetSnapshot {
   topEdits: Record<string, string>;
   topFormulas: Record<string, string>;
+  topColumns?: TopTableColumn[];
   sheetEntries: Array<{
     id: string;
     entityGlobalId: string | null;
@@ -50,6 +51,47 @@ export interface SpreadsheetSnapshot {
   sheetFormulas: Record<string, string>;
   lockedIds: string[];
   sheetLockedIds: string[];
+}
+
+export type DefaultTopColumnKey =
+  | "globalId"
+  | "ifcClass"
+  | "name"
+  | "description"
+  | "objectType"
+  | "tag";
+
+export interface TopTableColumn {
+  id: string;
+  col: string;
+  label: string;
+  /** Raw user-entered header formula, supports [Display](Formula). */
+  headerFormula: string;
+  isDefault: boolean;
+  deletable: boolean;
+  editableCells: boolean;
+  protected: boolean;
+  defaultKey?: DefaultTopColumnKey;
+}
+
+export function indexToCol(index: number): string {
+  let n = index + 1;
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+export function colToIndex(col: string): number {
+  let result = 0;
+  const normalized = col.toUpperCase();
+  for (let i = 0; i < normalized.length; i += 1) {
+    result = result * 26 + (normalized.charCodeAt(i) - 64);
+  }
+  return result - 1;
 }
 
 const DEFAULT_ENGINE: TableEngine = {

@@ -179,6 +179,7 @@ def row_to_stream_product(
         "description": attrs.get("Description"),
         "objectType": attrs.get("ObjectType"),
         "tag": attrs.get("Tag"),
+        "attributes": attrs,
         "mesh": mesh,
     }
 

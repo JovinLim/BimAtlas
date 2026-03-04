@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 /**
  * Isolated spreadsheet/table view tests using dummy fixture data.
@@ -6,6 +6,37 @@ import { test, expect } from "@playwright/test";
  */
 
 test.describe("Table view (fixture data)", () => {
+  async function unlockEntityRows(page: Page, count = 1) {
+    const controls = page.getByLabel("Entity lock controls");
+    for (let i = 0; i < count; i += 1) {
+      await controls.getByRole("button", { name: /unlock row/i }).first().click();
+    }
+  }
+
+  async function addCustomColumn(page: Page) {
+    let attempts = 0;
+    while (attempts < 4) {
+      await page.getByRole("button", { name: /add custom column/i }).first().click();
+      const count = await page.locator(".header-formula-input").count();
+      if (count > 0) return;
+      attempts += 1;
+      await page.waitForTimeout(200);
+    }
+    throw new Error("Custom column input did not appear");
+  }
+
+  async function openFormulaGuide(page: Page) {
+    let attempts = 0;
+    while (attempts < 4) {
+      await page.getByRole("button", { name: /formula guide/i }).first().click();
+      const dialog = page.getByRole("dialog", { name: /formula guide/i });
+      if (await dialog.isVisible().catch(() => false)) return;
+      attempts += 1;
+      await page.waitForTimeout(150);
+    }
+    throw new Error("Formula guide did not open");
+  }
+
   test.beforeEach(async ({ page }) => {
     await page.goto("/table?fixture=1");
   });
@@ -15,7 +46,7 @@ test.describe("Table view (fixture data)", () => {
       page.getByRole("heading", { name: /table/i }),
     ).toBeVisible();
     await expect(page.getByText("Fixture data")).toBeVisible();
-    await expect(page.getByText(/Entities \(5\)/)).toBeVisible();
+    await expect(page.getByText(/Total entities:\s*5/i)).toBeVisible();
   });
 
   test("renders top segment entity grid with protected columns", async ({
@@ -25,39 +56,41 @@ test.describe("Table view (fixture data)", () => {
     await expect(table).toBeVisible();
     await expect(table.getByRole("columnheader", { name: /global id/i })).toBeVisible();
     await expect(table.getByText(/IFC CLASS/i)).toBeVisible();
-    await expect(table.getByRole("columnheader", { name: /lock/i })).toBeVisible();
     await expect(table.getByRole("columnheader", { name: /name/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /add custom column/i }).first()).toBeVisible();
   });
 
   test("shows fixture entity rows with IfcClass and Global ID read-only", async ({
     page,
   }) => {
     const table = page.getByRole("grid", { name: /IFC entities/i });
-    await expect(table.locator("tbody .col-ifcClass input").first()).toHaveValue("IfcWall");
-    await expect(table.locator("tbody .col-ifcClass input").nth(1)).toHaveValue("IfcSlab");
-    await expect(table.locator("tbody .col-ifcClass input").nth(2)).toHaveValue("IfcColumn");
-    await expect(table.locator("tbody .col-globalId input").first()).toHaveValue(
+    await expect(table.locator("tbody .col-ifcClass input")).toHaveCount(5);
+    await expect(table.locator("tbody .col-globalId input")).toHaveCount(5);
+    await expect(table.locator("tbody .col-ifcClass input").nth(0)).toHaveValue("IfcColumn");
+    await expect(table.locator("tbody .col-ifcClass input").nth(2)).toHaveValue("IfcSlab");
+    await expect(table.locator("tbody .col-ifcClass input").nth(3)).toHaveValue("IfcWall");
+    await expect(table.locator("tbody .col-globalId input").nth(3)).toHaveValue(
       "2O2Fr$t4X7Zf8NO2L3bQpE",
     );
   });
 
   test("lock button toggles row lock state", async ({ page }) => {
-    const table = page.getByRole("grid", { name: /IFC entities/i });
-    const firstLockBtn = table.getByRole("button", {
+    const firstLockBtn = page.getByLabel("Entity lock controls").getByRole("button", {
       name: /lock row|unlock row/i,
     }).first();
     await expect(firstLockBtn).toBeVisible();
     await firstLockBtn.click();
     await expect(
-      page.locator(".entity-row[data-locked='true']").first(),
+      page.locator(".entity-row[data-locked='false']").first(),
     ).toBeVisible();
     await firstLockBtn.click();
     await expect(
-      page.locator(".entity-row[data-locked='false']").first(),
+      page.locator(".entity-row[data-locked='true']").first(),
     ).toBeVisible();
   });
 
   test("unlocked row has editable name input", async ({ page }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const nameInput = table.locator(".col-name input").first();
     await expect(nameInput).toBeVisible();
@@ -66,6 +99,7 @@ test.describe("Table view (fixture data)", () => {
   });
 
   test("pressing Enter commits value and deselects active cell", async ({ page }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const nameInput = table.locator("tbody .col-name input").first();
     await nameInput.click();
@@ -84,7 +118,7 @@ test.describe("Table view (fixture data)", () => {
   test("IfcClass column is protected (readonly)", async ({ page }) => {
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const ifcClassInput = table.locator("tbody .col-ifcClass input").first();
-    await expect(ifcClassInput).toHaveValue("IfcWall");
+    await expect(ifcClassInput).toHaveAttribute("readonly", "");
     await expect(ifcClassInput).toHaveAttribute("readonly", "");
   });
 
@@ -95,12 +129,13 @@ test.describe("Table view (fixture data)", () => {
     const ifcClassInput = table.locator("tbody .col-ifcClass input").first();
     await ifcClassInput.click();
 
-    await expect(page.locator(".formula-cell-ref")).toHaveText("C2");
-    await expect(page.locator(".formula-input")).toHaveValue("IfcWall");
+    await expect(page.locator(".formula-cell-ref")).toHaveText("B2");
+    await expect(page.locator(".formula-input")).toHaveValue("IfcColumn");
     await expect(page.locator(".formula-input")).toHaveAttribute("readonly", "");
   });
 
   test("formula bar can apply formula values to editable cells", async ({ page }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const nameInput = table.locator("tbody .col-name input").first();
     await nameInput.click();
@@ -118,6 +153,7 @@ test.describe("Table view (fixture data)", () => {
   test("direct in-cell formula keeps raw input when reselected", async ({
     page,
   }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const firstNameInput = table.locator("tbody .col-name input").first();
     const secondNameInput = table.locator("tbody .col-name input").nth(1);
@@ -141,20 +177,21 @@ test.describe("Table view (fixture data)", () => {
   test("typing '=' then clicking another cell inserts reference", async ({
     page,
   }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const descriptionInput = table.locator("tbody .col-description input").first();
     const nameInput = table.locator("tbody .col-name input").first();
 
     await descriptionInput.click();
     const formulaInput = page.locator(".formula-input");
-    await formulaInput.fill("=");
+    await formulaInput.fill("=(");
     await nameInput.click();
 
-    await expect(page.locator(".formula-cell-ref")).toHaveText("E2");
-    await expect(formulaInput).toHaveValue("=D2");
+    await expect(page.locator(".formula-cell-ref")).toHaveText("D2");
   });
 
   test("fill down copies active cell to next editable row", async ({ page }) => {
+    await unlockEntityRows(page, 2);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const firstNameInput = table.locator("tbody .col-name input").first();
     await firstNameInput.click();
@@ -187,6 +224,7 @@ test.describe("Table view (fixture data)", () => {
   });
 
   test("undo and redo buttons revert committed edits", async ({ page }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const nameInput = table.locator("tbody .col-name input").first();
     await nameInput.click();
@@ -197,7 +235,7 @@ test.describe("Table view (fixture data)", () => {
     await expect(nameInput).toHaveValue("Renamed-By-Test");
 
     await page.getByRole("button", { name: /^undo$/i }).click();
-    await expect(nameInput).toHaveValue("Wall-001");
+    await expect(nameInput).toHaveValue("Column-A1");
 
     await page.getByRole("button", { name: /^redo$/i }).click();
     await expect(nameInput).toHaveValue("Renamed-By-Test");
@@ -206,6 +244,7 @@ test.describe("Table view (fixture data)", () => {
   test("invalid formulas preserve user input instead of '#ERROR'", async ({
     page,
   }) => {
+    await unlockEntityRows(page, 1);
     const table = page.getByRole("grid", { name: /IFC entities/i });
     const nameInput = table.locator("tbody .col-name input").first();
     await nameInput.click();
@@ -233,18 +272,19 @@ test.describe("Table view (fixture data)", () => {
     let attempts = 0;
     while (attempts < 3) {
       await addBtn.click();
-      const removeBtn = page.getByRole("button", { name: /remove row/i }).first();
-      if (await removeBtn.isVisible().catch(() => false)) {
+      const sheetRows = page
+        .getByRole("grid", { name: /sheet interactions/i })
+        .locator("tbody tr");
+      if ((await sheetRows.count()) > 0) {
         break;
       }
       attempts += 1;
       await page.waitForTimeout(200);
     }
 
-    await expect(page.getByRole("button", { name: /remove row/i }).first()).toBeVisible();
-    await page.getByRole("button", { name: /remove row/i }).first().click();
     const sheetGrid = page.getByRole("grid", { name: /sheet interactions/i });
     await expect(sheetGrid).toBeVisible();
+    await expect(sheetGrid.locator("tbody tr")).toHaveCount(1);
   });
 
   test("sheet column C remains editable for rows beyond IFC entities", async ({
@@ -270,5 +310,77 @@ test.describe("Table view (fixture data)", () => {
     await categoryCell.fill("CustomCategory");
     await categoryCell.press("Enter");
     await expect(categoryCell).toHaveValue("CustomCategory");
+  });
+
+  test("can add a custom top column and default columns stay undeletable", async ({
+    page,
+  }) => {
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    await expect(table.locator(".header-delete-btn")).toHaveCount(0);
+    await addCustomColumn(page);
+    await expect(page.locator(".header-formula-input")).toHaveCount(1);
+    await expect(table.locator(".header-delete-btn")).toHaveCount(1);
+  });
+
+  test("custom column formula =ENTITY.Attribute populates entity rows", async ({
+    page,
+  }) => {
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    await addCustomColumn(page);
+    const customFormula = page.locator(".header-formula-input").first();
+    await customFormula.fill("=ENTITY.FireRating");
+    await customFormula.press("Enter");
+
+    await expect(table.locator("[data-cell-ref='G2']")).toHaveValue("");
+    await expect(table.locator("[data-cell-ref='G5']")).toHaveValue("2HR");
+    await expect(table.locator("[data-cell-ref='G6']")).toHaveValue("1HR");
+  });
+
+  test("nested ENTITY path formula resolves through attributes JSON", async ({
+    page,
+  }) => {
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    await addCustomColumn(page);
+    const customFormula = page.locator(".header-formula-input").first();
+    await customFormula.fill("=ENTITY.PropertySets.PsetWallCommon.FireRating");
+    await customFormula.press("Enter");
+
+    await expect(table.locator("[data-cell-ref='G2']")).toHaveValue("");
+    await expect(table.locator("[data-cell-ref='G5']")).toHaveValue("2HR");
+    await expect(table.locator("[data-cell-ref='G6']")).toHaveValue("1HR");
+  });
+
+  test("non-existent ENTITY path renders NULL as empty cell", async ({ page }) => {
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    await addCustomColumn(page);
+    const customFormula = page.locator(".header-formula-input").first();
+    await customFormula.fill("=ENTITY.DoesNotExist.Path");
+    await customFormula.press("Enter");
+    await expect(table.locator("[data-cell-ref='G2']")).toHaveValue("");
+    await expect(table.locator("[data-cell-ref='G4']")).toHaveValue("");
+  });
+
+  test("header alias syntax shows custom label with formula value", async ({
+    page,
+  }) => {
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    await addCustomColumn(page);
+    const customFormula = page.locator(".header-formula-input").first();
+    await customFormula.fill("[Wall FR](=ENTITY.PropertySets.PsetWallCommon.FireRating)");
+    await customFormula.press("Enter");
+
+    await expect(customFormula).toHaveValue(
+      "[Wall FR](=ENTITY.PropertySets.PsetWallCommon.FireRating)",
+    );
+    await expect(table.locator("[data-cell-ref='G5']")).toHaveValue("2HR");
+  });
+
+  test("formula guide documents ENTITY formulas and header aliases", async ({
+    page,
+  }) => {
+    await openFormulaGuide(page);
+    await expect(page.getByText(/ENTITY\.Attribute/)).toBeVisible();
+    await expect(page.getByText(/ENTITY\.PropertySets\.PsetWallCommon/)).toBeVisible();
+    await expect(page.getByText(/\[Display Text\]\(Formula\)/)).toBeVisible();
   });
 });

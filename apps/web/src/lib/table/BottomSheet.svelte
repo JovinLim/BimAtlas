@@ -25,6 +25,8 @@
   type Props = {
     entries?: SheetEntry[];
     rowStart?: number;
+    /** Column widths from the top grid’s calculated (rendered) widths; bottom sheet follows these only. */
+    getColumnWidthPx: (col: string) => number;
     onEntriesChange?: (entries: SheetEntry[]) => void;
     lockedEntryIds: Set<string>;
     onToggleEntryLock: (entryId: string) => void;
@@ -52,6 +54,7 @@
   let {
     entries = $bindable([]),
     rowStart = 2,
+    getColumnWidthPx,
     onEntriesChange,
     lockedEntryIds,
     onToggleEntryLock,
@@ -220,12 +223,12 @@
       <table class="sheet-table" role="grid" aria-label="Sheet interactions">
         <colgroup>
           <col class="col-rownum" />
-          <col class="col-globalId" />
-          <col class="col-ifcClass" />
-          <col class="col-name" />
-          <col class="col-description" />
-          <col class="col-objectType" />
-          <col class="col-tag" />
+          <col class="col-globalId" style="width: {getColumnWidthPx('A')}px; min-width: {getColumnWidthPx('A')}px; max-width: {getColumnWidthPx('A')}px;" />
+          <col class="col-ifcClass" style="width: {getColumnWidthPx('B')}px; min-width: {getColumnWidthPx('B')}px; max-width: {getColumnWidthPx('B')}px;" />
+          <col class="col-name" style="width: {getColumnWidthPx('C')}px; min-width: {getColumnWidthPx('C')}px; max-width: {getColumnWidthPx('C')}px;" />
+          <col class="col-description" style="width: {getColumnWidthPx('D')}px; min-width: {getColumnWidthPx('D')}px; max-width: {getColumnWidthPx('D')}px;" />
+          <col class="col-objectType" style="width: {getColumnWidthPx('E')}px; min-width: {getColumnWidthPx('E')}px; max-width: {getColumnWidthPx('E')}px;" />
+          <col class="col-tag" style="width: {getColumnWidthPx('F')}px; min-width: {getColumnWidthPx('F')}px; max-width: {getColumnWidthPx('F')}px;" />
         </colgroup>
         <thead>
           <tr class="letters-row">
@@ -499,18 +502,14 @@
 
   .sheet-table { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.78rem; }
   .sheet-table col.col-rownum { width: 2.8rem; }
-  .sheet-table col.col-globalId { width: 16rem; }
-  .sheet-table col.col-ifcClass { width: 10rem; }
-  .sheet-table col.col-name { width: 10rem; }
-  .sheet-table col.col-description { width: 14rem; }
-  .sheet-table col.col-objectType { width: 10rem; }
-  .sheet-table col.col-tag { width: 8rem; }
+  /* Column widths come from top grid’s calculated widths via getColumnWidthPx; no local width rules. */
 
   .sheet-table th, .sheet-table td {
     border-right: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
     border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
     padding: 0;
     height: var(--table-row-height, 34px);
+    overflow: hidden;
   }
   .letters-row th {
     position: sticky;

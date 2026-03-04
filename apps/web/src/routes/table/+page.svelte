@@ -11,15 +11,30 @@
   import { TABLE_FIXTURE_PRODUCTS } from "$lib/table/fixtures";
   import { loadSettings } from "$lib/state/persistence";
   import { client, PROJECTS_QUERY } from "$lib/api/client";
-  import EntityGrid from "$lib/table/EntityGrid.svelte";
+  import EntityGridDynamic from "$lib/table/EntityGridDynamic.svelte";
   import BottomSheet from "$lib/table/BottomSheet.svelte";
   import type { SheetEntry } from "$lib/table/types";
   import {
+    colToIndex,
+    indexToCol,
     parseCellRef,
+    type DefaultTopColumnKey,
     type SpreadsheetCellState,
     type SpreadsheetSnapshot,
+    type TopTableColumn,
   } from "$lib/table/engine";
-  import { evaluateFormula, getFormulaSuggestions, FORMULA_SUGGESTIONS } from "$lib/table/formulas";
+  import {
+    evaluateFormula,
+    extractEntityPath,
+    getFormulaSuggestions,
+    FORMULA_SUGGESTIONS,
+    parseHeaderAliasFormula,
+    resolveEntityPath,
+  } from "$lib/table/formulas";
+
+  const API_BASE = import.meta.env.VITE_API_URL
+    ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
+    : "/api";
 
   let branchId = $state<string | null>(null);
   let projectId = $state<string | null>(null);
@@ -29,8 +44,112 @@
   /** Products from main window context, or fixture when ?fixture=1 */
   let products = $state<ProductMeta[]>([]);
   let useFixture = $state(false);
+
+  const DEFAULT_TOP_COLUMNS: TopTableColumn[] = [
+    {
+      id: "col-global-id",
+      col: "A",
+      label: "Global ID",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: false,
+      protected: true,
+      defaultKey: "globalId",
+    },
+    {
+      id: "col-ifc-class",
+      col: "B",
+      label: "IFC CLASS",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: false,
+      protected: true,
+      defaultKey: "ifcClass",
+    },
+    {
+      id: "col-name",
+      col: "C",
+      label: "Name",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: true,
+      protected: false,
+      defaultKey: "name",
+    },
+    {
+      id: "col-description",
+      col: "D",
+      label: "Description",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: true,
+      protected: false,
+      defaultKey: "description",
+    },
+    {
+      id: "col-object-type",
+      col: "E",
+      label: "Object Type",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: true,
+      protected: false,
+      defaultKey: "objectType",
+    },
+    {
+      id: "col-tag",
+      col: "F",
+      label: "Tag",
+      headerFormula: "",
+      isDefault: true,
+      deletable: false,
+      editableCells: true,
+      protected: false,
+      defaultKey: "tag",
+    },
+  ];
+
+  /** Minimum column width in px. Enforced for both top grid and bottom sheet. */
+  const MIN_COLUMN_WIDTH_PX = 48;
+
+  /** Default column widths in px (A–F). Used when no user resize has been stored. */
+  const DEFAULT_COLUMN_WIDTHS_PX: Record<string, number> = {
+    A: 256,  /* globalId, 16rem */
+    B: 160,  /* ifcClass, 10rem */
+    C: 160,  /* name, 10rem */
+    D: 224,  /* description, 14rem */
+    E: 160,  /* objectType, 10rem */
+    F: 160,  /* tag, 10rem */
+  };
+  const DEFAULT_WIDTH_PX = 192; /* custom columns, 12rem */
+
+  /**
+   * Single mapping for column widths (px), keyed by column letter.
+   * Only this mapping is used; top grid updates it via resize, bottom sheet only reads it.
+   */
+  let columnWidths = $state<Record<string, number>>({ ...DEFAULT_COLUMN_WIDTHS_PX });
+
+  /** Read from the mapping (with fallback and min clamp). Both tables use this so they never differ. */
+  function getColumnWidthPx(col: string): number {
+    const w = columnWidths[col] ?? DEFAULT_COLUMN_WIDTHS_PX[col] ?? DEFAULT_WIDTH_PX;
+    return Math.max(MIN_COLUMN_WIDTH_PX, w);
+  }
+
+  function setColumnWidth(col: string, widthPx: number) {
+    const clamped = Math.max(MIN_COLUMN_WIDTH_PX, Math.round(widthPx));
+    columnWidths = { ...columnWidths, [col]: clamped };
+  }
+
+  let topColumns = $state<TopTableColumn[]>([...DEFAULT_TOP_COLUMNS]);
+  let headerDrafts = $state<Record<string, string>>({});
+  type SortKey = DefaultTopColumnKey;
   /** Sort by column key; default ascending (A–Z). */
-  let sortBy = $state<keyof ProductMeta>("name");
+  let sortBy = $state<SortKey>("name");
   let sortDir = $state<"asc" | "desc">("asc");
   /** Row lock state: locked rows are read-only for editable cells. */
   let lockedIds = $state<Set<string>>(new Set());
@@ -101,10 +220,12 @@
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
   let hasChannelContext = $state(false);
-  const NAV_COLS = ["A", "B", "C", "D", "E", "F"] as const;
+  function getNavCols(): string[] {
+    return topColumns.map((column) => column.col);
+  }
 
   function colIndex(col: string): number {
-    return NAV_COLS.indexOf(col as (typeof NAV_COLS)[number]);
+    return colToIndex(col);
   }
 
   function applyContextFromUrl() {
@@ -284,6 +405,7 @@
     return {
       topEdits: { ...topEdits },
       topFormulas: { ...topFormulas },
+      topColumns: topColumns.map((column) => ({ ...column })),
       sheetEntries: sheetEntries.map((entry) => ({ ...entry })),
       sheetFormulas: { ...sheetFormulas },
       lockedIds: Array.from(lockedIds),
@@ -294,6 +416,8 @@
   function applySnapshot(value: SpreadsheetSnapshot) {
     topEdits = { ...value.topEdits };
     topFormulas = { ...value.topFormulas };
+    topColumns = value.topColumns?.map((column) => ({ ...column })) ?? [...DEFAULT_TOP_COLUMNS];
+    headerDrafts = {};
     sheetEntries = value.sheetEntries.map((entry) => ({ ...entry }));
     sheetFormulas = { ...value.sheetFormulas };
     lockedIds = new Set(value.lockedIds);
@@ -359,20 +483,24 @@
     return sheetLockedIds.has(entry.id);
   }
 
+  function getTopColumnByCol(col: string): TopTableColumn | null {
+    return topColumns.find((column) => column.col === col) ?? null;
+  }
+
   function resolveCellByRef(ref: string): SpreadsheetCellState | null {
     const parsed = parseCellRef(ref);
     if (!parsed) return null;
-    if (!NAV_COLS.includes(parsed.col as (typeof NAV_COLS)[number])) return null;
+    const navCols = getNavCols();
+    if (!navCols.includes(parsed.col) && !["A", "B", "C", "D", "E", "F"].includes(parsed.col)) {
+      return null;
+    }
 
     const topProduct = getTopProductByRow(parsed.row);
     if (topProduct) {
-      const editable =
-        !lockedIds.has(topProduct.globalId) &&
-        (parsed.col === "C" ||
-          parsed.col === "D" ||
-          parsed.col === "E" ||
-          parsed.col === "F");
-      const isProtected = parsed.col === "A" || parsed.col === "B";
+      const column = getTopColumnByCol(parsed.col);
+      if (!column) return null;
+      const editable = !lockedIds.has(topProduct.globalId) && column.editableCells;
+      const isProtected = column.protected;
       return {
         surface: "entity",
         row: parsed.row,
@@ -385,6 +513,8 @@
 
     const sheetEntry = getSheetEntryByRow(parsed.row);
     if (sheetEntry) {
+      const sheetField = getSheetField(parsed.col);
+      if (!sheetField) return null;
       const isProtected = false;
       return {
         surface: "sheet",
@@ -398,16 +528,246 @@
     return null;
   }
 
+  function toDisplayString(value: unknown): string {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return JSON.stringify(value);
+  }
+
+  function normalizeFormulaValue(formula: string): string {
+    const trimmed = formula.trim();
+    if (trimmed === "") return "";
+    return trimmed.startsWith("=") ? trimmed : `=${trimmed}`;
+  }
+
+  function getTopDefaultValue(column: TopTableColumn, product: ProductMeta): string {
+    if (column.defaultKey === "globalId") return product.globalId ?? "";
+    if (column.defaultKey === "ifcClass") return product.ifcClass ?? "";
+    if (column.defaultKey === "name") return product.name ?? "";
+    if (column.defaultKey === "description") return product.description ?? "";
+    if (column.defaultKey === "objectType") return product.objectType ?? "";
+    if (column.defaultKey === "tag") return product.tag ?? "";
+    return "";
+  }
+
   function getTopFallback(ref: string, product: ProductMeta): string {
     const parsed = parseCellRef(ref);
     if (!parsed) return "";
-    if (parsed.col === "A") return product.globalId ?? "";
-    if (parsed.col === "B") return product.ifcClass ?? "";
-    if (parsed.col === "C") return product.name ?? "";
-    if (parsed.col === "D") return product.description ?? "";
-    if (parsed.col === "E") return product.objectType ?? "";
-    if (parsed.col === "F") return product.tag ?? "";
-    return "";
+    const column = getTopColumnByCol(parsed.col);
+    if (!column) return "";
+    if (column.defaultKey) return getTopDefaultValue(column, product);
+    if (!column.headerFormula.trim()) return "";
+
+    // ENTITY paths are resolved against product.attributes (the row's entity JSON from the API).
+    // So =ENTITY.PropertySets means product.attributes.PropertySets; no need for ENTITY.attributes.X.
+    const normalizedFormula = normalizeFormulaValue(column.headerFormula);
+    const entityPath = extractEntityPath(normalizedFormula);
+    if (entityPath) {
+      const attrs = (product.attributes as Record<string, unknown> | null | undefined) ?? null;
+      const resolved = resolveEntityPath(attrs, entityPath);
+      if (attrs === null && resolved === null) return "—";
+      return toDisplayString(resolved);
+    }
+
+    const result = evaluateFormula(normalizedFormula, resolveValueForFormula);
+    return result.ok ? result.value : "";
+  }
+
+  function deriveLabelFromFormula(formula: string): string {
+    const entityPath = extractEntityPath(normalizeFormulaValue(formula));
+    if (entityPath) {
+      const parts = entityPath.split(".").filter(Boolean);
+      return parts[parts.length - 1] ?? "Custom";
+    }
+    const compact = formula.replace(/^=/, "").trim();
+    if (compact.length === 0) return "Custom";
+    return compact.length > 20 ? `${compact.slice(0, 20)}…` : compact;
+  }
+
+  function parseHeaderFormulaInput(input: string): {
+    label: string;
+    formula: string;
+  } {
+    const alias = parseHeaderAliasFormula(input);
+    if (alias) {
+      return {
+        label: alias.displayText || "Custom",
+        formula: normalizeFormulaValue(alias.formula),
+      };
+    }
+    if (input.trim() === "") {
+      return {
+        label: "Custom",
+        formula: "",
+      };
+    }
+    if (!input.trim().startsWith("=")) {
+      return {
+        label: input.trim(),
+        formula: "",
+      };
+    }
+    const normalized = normalizeFormulaValue(input);
+    if (normalized.trim() === "=") {
+      return {
+        label: "Custom",
+        formula: "",
+      };
+    }
+    return {
+      label: deriveLabelFromFormula(normalized),
+      formula: normalized,
+    };
+  }
+
+  function getHeaderFormulaInput(columnId: string): string {
+    const draft = headerDrafts[columnId];
+    if (draft !== undefined) return draft;
+    const column = topColumns.find((c) => c.id === columnId);
+    if (!column) return "";
+    if (column.headerFormula.trim() === "") return "";
+    return `[${column.label}](${column.headerFormula})`;
+  }
+
+  function onHeaderFormulaInput(columnId: string, value: string) {
+    headerDrafts = { ...headerDrafts, [columnId]: value };
+  }
+
+  function onHeaderFormulaCancel(columnId: string) {
+    if (headerDrafts[columnId] === undefined) return;
+    const next = { ...headerDrafts };
+    delete next[columnId];
+    headerDrafts = next;
+  }
+
+  function clearColumnRefs(columnCol: string) {
+    const nextTopEdits = { ...topEdits };
+    const nextTopFormulas = { ...topFormulas };
+    const nextDraftValues = { ...draftValues };
+    for (const ref of Object.keys(nextTopEdits)) {
+      if (parseCellRef(ref)?.col === columnCol) delete nextTopEdits[ref];
+    }
+    for (const ref of Object.keys(nextTopFormulas)) {
+      if (parseCellRef(ref)?.col === columnCol) delete nextTopFormulas[ref];
+    }
+    for (const ref of Object.keys(nextDraftValues)) {
+      if (parseCellRef(ref)?.col === columnCol) delete nextDraftValues[ref];
+    }
+    topEdits = nextTopEdits;
+    topFormulas = nextTopFormulas;
+    draftValues = nextDraftValues;
+  }
+
+  function resequenceColumns(columns: TopTableColumn[]): TopTableColumn[] {
+    return columns.map((column, index) => ({ ...column, col: indexToCol(index) }));
+  }
+
+  function addCustomColumn() {
+    const next: TopTableColumn = {
+      id: `col-custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      col: indexToCol(topColumns.length),
+      label: "Custom",
+      headerFormula: "",
+      isDefault: false,
+      deletable: true,
+      editableCells: false,
+      protected: true,
+    };
+    topColumns = [...topColumns, next];
+    headerDrafts = { ...headerDrafts, [next.id]: "" };
+  }
+
+  function deleteCustomColumn(columnId: string) {
+    const target = topColumns.find((column) => column.id === columnId);
+    if (!target || target.isDefault) return;
+    clearColumnRefs(target.col);
+    topColumns = resequenceColumns(topColumns.filter((column) => column.id !== columnId));
+    const nextDrafts = { ...headerDrafts };
+    delete nextDrafts[columnId];
+    headerDrafts = nextDrafts;
+    if (activeCell?.col === target.col) {
+      activeCell = null;
+      formulaInput = "";
+      selectionRange = null;
+    }
+  }
+
+  /** Top-level attribute keys required by ENTITY.* formulas in the given columns. */
+  function getRequiredEntityPathKeys(columns: TopTableColumn[]): string[] {
+    const keys = new Set<string>();
+    for (const col of columns) {
+      const path = extractEntityPath(normalizeFormulaValue(col.headerFormula));
+      if (path) {
+        const top = path.split(".").map((p) => p.trim()).filter(Boolean)[0];
+        if (top) keys.add(top);
+      }
+    }
+    return [...keys];
+  }
+
+  async function fetchEntityAttributesFromBackend(
+    branchId: string,
+    revision: number | null,
+    globalIds: string[],
+    paths: string[],
+  ): Promise<Record<string, Record<string, unknown>>> {
+    const res = await fetch(`${API_BASE}/table/entity-attributes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        branchId,
+        revision,
+        globalIds,
+        paths,
+      }),
+    });
+    if (!res.ok) throw new Error(`entity-attributes: ${res.status}`);
+    const data = (await res.json()) as { attributesByGlobalId: Record<string, Record<string, unknown>> };
+    return data.attributesByGlobalId ?? {};
+  }
+
+  function commitHeaderFormula(columnId: string, rawInput: string) {
+    const column = topColumns.find((c) => c.id === columnId);
+    if (!column || column.isDefault) return;
+    const trimmed = rawInput.trim();
+    const { label, formula } = parseHeaderFormulaInput(trimmed);
+    const nextColumns = topColumns.map((c) =>
+      c.id === columnId
+        ? {
+            ...c,
+            label,
+            headerFormula: formula,
+          }
+        : c,
+    );
+    topColumns = nextColumns;
+    const nextDrafts = { ...headerDrafts };
+    delete nextDrafts[columnId];
+    headerDrafts = nextDrafts;
+    clearColumnRefs(column.col);
+
+    // When user applies an ENTITY formula, request only required properties from the backend and fill rows.
+    if (useFixture || !branchId || !revision || products.length === 0) return;
+    const paths = getRequiredEntityPathKeys(nextColumns);
+    if (paths.length === 0) return;
+    const globalIds = products.map((p) => p.globalId);
+    fetchEntityAttributesFromBackend(branchId, revision, globalIds, paths)
+      .then((attributesByGlobalId) => {
+        console.log(
+          "[Table] entity attributes stream (data to fill ENTITY rows):",
+          attributesByGlobalId,
+        );
+        products = products.map((p) => {
+          const attrs = attributesByGlobalId[p.globalId];
+          if (attrs == null) return p;
+          const merged = { ...(p.attributes as Record<string, unknown> ?? {}), ...attrs };
+          return { ...p, attributes: merged };
+        });
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch entity attributes for table:", err);
+      });
   }
 
   function getSheetField(col: string): keyof Omit<SheetEntry, "id"> | null {
@@ -449,6 +809,10 @@
       if (rawFormula != null) return rawFormula;
     }
     if (topEdits[ref] !== undefined) return topEdits[ref] ?? "";
+    const resolved = resolveCellByRef(ref);
+    if (resolved?.surface === "entity") {
+      return getCommittedValue(ref);
+    }
     const parsed = parseCellRef(ref);
     if (!parsed) return fallback;
     if (parsed.row >= sheetRowStart() && sheetFormulas[ref] !== undefined) {
@@ -711,12 +1075,14 @@
     if (direction === "right") deltaCol = 1;
     if (direction === "tab") deltaCol = shift ? -1 : 1;
 
-    const colIndex = NAV_COLS.indexOf(cell.col as (typeof NAV_COLS)[number]);
-    const targetColIndex = Math.max(0, Math.min(NAV_COLS.length - 1, colIndex + deltaCol));
+    const navCols = cell.surface === "sheet" ? ["A", "B", "C", "D", "E", "F"] : getNavCols();
+    const currentColIndex = navCols.indexOf(cell.col);
+    if (currentColIndex < 0) return;
+    const targetColIndex = Math.max(0, Math.min(navCols.length - 1, currentColIndex + deltaCol));
     const minRow = 2;
     const maxRow = Math.max(sheetRowStart() + sheetEntries.length - 1, products.length + 1);
     const targetRow = Math.max(minRow, Math.min(maxRow, cell.row + deltaRow));
-    const nextRef = `${NAV_COLS[targetColIndex]}${targetRow}`;
+    const nextRef = `${navCols[targetColIndex]}${targetRow}`;
     const nextCell = resolveCellByRef(nextRef);
     if (!nextCell) return;
     selectionRange = { startRef: nextRef, endRef: nextRef };
@@ -780,7 +1146,7 @@
     fillDownFromActive();
   }
 
-  function onSortChange(column: keyof ProductMeta, direction: "asc" | "desc") {
+  function onSortChange(column: SortKey, direction: "asc" | "desc") {
     sortBy = column;
     sortDir = direction;
   }
@@ -895,7 +1261,7 @@
         type="text"
         class="formula-input"
         value={formulaInput}
-        placeholder="Enter value or formula (e.g. =D2+E2, =SUM(D2:D4))"
+        placeholder="Enter value or formula (e.g. =D2+E2, =SUM(D2:D4), =ENTITY.PropertySets.PsetWallCommon)"
         disabled={activeCell == null}
         readonly={activeCell != null && !activeCell.editable}
         autocomplete="off"
@@ -1019,16 +1385,33 @@
         <button
           type="button"
           class="formula-guide-btn"
+          onclick={addCustomColumn}
+          aria-label="Add custom column"
+        >
+          Add column
+        </button>
+        <button
+          type="button"
+          class="formula-guide-btn"
           onclick={() => (showFormulaGuideOverlay = true)}
           aria-label="Open formula guide"
         >
           Formula guide
         </button>
       </div>
-      <EntityGrid
+      <EntityGridDynamic
         products={displayProducts}
+        columns={topColumns}
+        getColumnWidthPx={getColumnWidthPx}
+        onColumnWidthChange={setColumnWidth}
         lockedIds={lockedIds}
         onToggleLock={toggleLock}
+        onAddCustomColumn={addCustomColumn}
+        onDeleteCustomColumn={deleteCustomColumn}
+        getHeaderFormulaInput={getHeaderFormulaInput}
+        onHeaderFormulaInput={onHeaderFormulaInput}
+        onHeaderFormulaCommit={commitHeaderFormula}
+        onHeaderFormulaCancel={onHeaderFormulaCancel}
         activeCellRef={activeCell?.ref ?? null}
         selectedRowGlobalId={selectedRowGlobalId}
         findHighlightGlobalId={findHighlightGlobalId}
@@ -1042,16 +1425,17 @@
         sortBy={sortBy}
         sortDir={sortDir}
         onSortChange={onSortChange}
-      isCellInSelection={isCellInSelection}
-      onCellPointerDown={onCellPointerDown}
-      onCellPointerEnter={onCellPointerEnter}
-      onCellPointerUp={onCellPointerUp}
+        isCellInSelection={isCellInSelection}
+        onCellPointerDown={onCellPointerDown}
+        onCellPointerEnter={onCellPointerEnter}
+        onCellPointerUp={onCellPointerUp}
       />
     </section>
     <section class="table-segment table-segment-bottom" aria-label="Sheet interactions">
       <BottomSheet
         bind:entries={sheetEntries}
         rowStart={products.length + 2}
+        getColumnWidthPx={getColumnWidthPx}
         onEntriesChange={onSheetEntriesChange}
         lockedEntryIds={sheetLockedIds}
         onToggleEntryLock={toggleSheetEntryLock}

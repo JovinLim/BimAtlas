@@ -23,6 +23,7 @@ from .db import (
     delete_ifc_schema_with_rules,
     fetch_branch,
     fetch_entities_at_revision,
+    fetch_entity_attributes_for_global_ids,
     fetch_shape_reps_for_products,
     get_latest_revision_seq,
     init_pool,
@@ -79,6 +80,42 @@ app.include_router(graphql_app, prefix="/graphql")
 async def health():
     """Basic liveness check."""
     return {"status": "ok"}
+
+
+@app.post("/table/entity-attributes")
+async def table_entity_attributes(
+    body: dict = Body(...),
+):
+    """Return entity attributes for given global IDs, optionally restricted to requested top-level keys.
+    Request body: { "branchId": str, "revision": int | null, "globalIds": str[], "paths": str[] | null }.
+    paths: e.g. ["PropertySets", "Name"]; if null or empty, all attributes are returned.
+    Response: { "attributesByGlobalId": { [globalId]: { ...attributes } } }.
+    """
+    try:
+        branch_id = body.get("branchId")
+        revision = body.get("revision")
+        global_ids = body.get("globalIds") or []
+        paths = body.get("paths")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid body")
+    if not branch_id or not isinstance(global_ids, list):
+        raise HTTPException(status_code=400, detail="branchId and globalIds required")
+    try:
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Branch not found")
+    rev = revision if revision is not None else get_latest_revision_seq(branch_id)
+    if rev is None:
+        raise HTTPException(status_code=404, detail="No revisions on branch")
+    rows = fetch_entity_attributes_for_global_ids(rev, branch_id, global_ids)
+    attributes_by_global_id = {}
+    for row in rows:
+        gid = row["ifc_global_id"]
+        attrs = row.get("attributes") or {}
+        if paths and len(paths) > 0:
+            attrs = {k: attrs[k] for k in paths if k in attrs}
+        attributes_by_global_id[gid] = attrs
+    return {"attributesByGlobalId": attributes_by_global_id}
 
 
 def _stream_ifc_products_generator(

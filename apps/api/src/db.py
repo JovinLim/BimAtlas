@@ -318,6 +318,30 @@ def fetch_entity_at_revision(
         return dict(row) if row else None
 
 
+def fetch_entity_attributes_for_global_ids(
+    rev: int, branch_id: str, global_ids: list[str],
+) -> list[dict]:
+    """Fetch ifc_global_id and attributes for entities visible at *rev* on *branch_id*.
+    Returns list of dicts with keys ifc_global_id, attributes (JSONB as dict).
+    """
+    if not global_ids:
+        return []
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT e.ifc_global_id, e.attributes FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s AND e.ifc_global_id = ANY(%s) AND {_REV_FILTER}",
+            (branch_id, global_ids, rev, rev),
+        )
+        rows = cur.fetchall()
+    result = []
+    for r in rows:
+        attrs = r.get("attributes") or {}
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+        result.append({"ifc_global_id": r["ifc_global_id"], "attributes": attrs})
+    return result
+
+
 def fetch_shape_representations_for_product(
     product_global_id: str,
     rev: int,

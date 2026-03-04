@@ -24,8 +24,17 @@ export interface TableContextPayload {
   activeGlobalId?: string | null;
 }
 
+/** Follow-up payload to attach attributes to products already sent via a lean context. */
+export interface TableContextAttributesPayload {
+  type: "context-attributes";
+  /** globalId -> attributes (entity JSON). Table merges into existing products. */
+  attributesByGlobalId: Record<string, Record<string, unknown> | null>;
+}
+
 export type TableMessage =
   | { type: "request-context" }
+  | { type: "request-attributes" }
   | ({ type: "context" } & TableContextPayload)
+  | TableContextAttributesPayload
   | { type: "selection-changed"; globalId: string | null }
   | { type: "selection-sync"; globalId: string | null };
