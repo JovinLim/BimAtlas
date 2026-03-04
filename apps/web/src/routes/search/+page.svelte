@@ -39,6 +39,7 @@
 
   let resultCount = $state(0);
   let totalCount = $state(0);
+  let filterGuideOpen = $state(false);
 
   let nextId = 0;
   function genId(): string {
@@ -602,6 +603,15 @@
     }
   });
 
+  $effect(() => {
+    if (!filterGuideOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") filterGuideOpen = false;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   onDestroy(() => {
     channel?.close();
     clearTimeout(searchTimeout);
@@ -614,9 +624,64 @@
 
 <div class="search-page">
   <header class="page-header">
-    <h2>Search &amp; Filter</h2>
+    <div class="page-header-title-row">
+      <h2>Search &amp; Filter</h2>
+      <button
+        type="button"
+        class="btn btn-guide"
+        onclick={() => (filterGuideOpen = true)}
+      >
+        Filter Guide
+      </button>
+    </div>
     <span class="result-count">{resultCount} / {totalCount} elements</span>
   </header>
+
+  <!-- Filter Guide modal -->
+  {#if filterGuideOpen}
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+    <div class="guide-backdrop" onclick={() => (filterGuideOpen = false)}>
+      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+      <div
+        class="guide-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="guide-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <div class="guide-header">
+          <h3 id="guide-title">Filter Guide</h3>
+          <button
+            type="button"
+            class="icon-btn icon-btn-close"
+            aria-label="Close"
+            onclick={() => (filterGuideOpen = false)}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div class="guide-body">
+          <h4>Filter sets</h4>
+          <p>A filter set is a named collection of filters you can save and reuse. Each set has AND/OR logic: filters inside a set are combined with that logic. When multiple sets are applied, they are combined with the combination logic shown above the applied list.</p>
+
+          <h4>Adding filters</h4>
+          <p>Create a new filter set with <strong>New Filter Set</strong>, add filters with <strong>Add Filter</strong>, then save. Or select existing sets and click <strong>Apply</strong>. You can also add filters to applied sets and click <strong>Update</strong>.</p>
+
+          <h4>Class filters</h4>
+          <p>Match IFC entity classes (e.g. <code>IfcWall</code>, <code>IfcDoor</code>). Use <strong>is</strong> for exact match, <strong>is not</strong> to exclude, or <strong>inherits from</strong> to include the class and all its descendants (e.g. walls and subtypes).</p>
+
+          <h4>Attribute filters</h4>
+          <p>Match entity attributes at any depth in the JSONB data. Enter the attribute key (e.g. <code>Name</code>, <code>PropertySets</code>) and value. Choose the operator (is, contains, starts with, etc.) and data type (String, Numeric, or Object). For nested keys like <code>PropertySets</code>, use <strong>Object</strong> type to match object key names (e.g. <code>Pset_WallCommon</code>).</p>
+
+          <h4>Relation filters</h4>
+          <p>Match entities by IFC relationships (e.g. <code>ContainedIn</code>, <code>FillsVoid</code>). The filter finds entities that have the specified relation type in the graph.</p>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- ═══════ Filter Set Browser ═══════ -->
   <section class="section">
@@ -1047,6 +1112,8 @@
     flex-direction: column;
     gap: 1rem;
     min-height: 100vh;
+    max-height: 100vh;
+    overflow: hidden;
     padding: 1rem;
     background: #12121e;
     color: #e0e0e0;
@@ -1061,6 +1128,91 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .page-header-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .btn-guide {
+    font-size: 0.72rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(255, 255, 255, 0.06);
+    color: #aaa;
+  }
+
+  .btn-guide:hover {
+    background: rgba(255, 136, 102, 0.15);
+    color: #ff8866;
+  }
+
+  .guide-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .guide-modal {
+    background: #1a1a28;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    width: 75%;
+    height: 75%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .guide-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .guide-header h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin: 0;
+  }
+
+  .guide-body {
+    padding: 1rem;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #bbb;
+  }
+
+  .guide-body h4 {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #ccc;
+    margin: 1rem 0 0.4rem;
+  }
+
+  .guide-body h4:first-child {
+    margin-top: 0;
+  }
+
+  .guide-body p {
+    margin: 0 0 0.5rem;
+  }
+
+  .guide-body code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
   }
 
   .page-header h2 {
@@ -1237,6 +1389,15 @@
     border: none;
     background: transparent;
     padding: 0;
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .section--applied .section-header {
+    flex-shrink: 0;
   }
 
   .applied-logic {
@@ -1249,7 +1410,9 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    height: fit-content;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .applied-item {

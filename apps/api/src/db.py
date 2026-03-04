@@ -949,13 +949,14 @@ def _is_global_id_attribute(attr: str) -> bool:
     return compact in {"globalid", "ifcglobalid"}
 
 
-def _build_attribute_value_source(attr: str, params: list) -> str:
-    """Return a SQL subquery (text_value column) for all matching nested key values."""
+def _build_attribute_value_source(attr: str, value_type: str) -> str:
+    """Return SQL subquery (text_value column) for a nested attribute key + value type."""
     if _is_global_id_attribute(attr):
+        if value_type == "object":
+            return "(SELECT NULL::text AS text_value WHERE FALSE)"
         return "(SELECT e.ifc_global_id::text AS text_value)"
 
-    params.append(attr)
-    return """
+    walk_sql = """
     (
         WITH RECURSIVE walk(node, key_name, key_value) AS (
             SELECT e.attributes, NULL::text, NULL::jsonb
@@ -979,18 +980,76 @@ def _build_attribute_value_source(attr: str, params: list) -> str:
                     END
                 ) AS arr(value)
             ) AS child ON TRUE
+        ),
+        attr_matches(node) AS (
+            SELECT walk.key_value
+            FROM walk
+            WHERE walk.key_name IS NOT NULL
+              AND lower(walk.key_name) = lower(%s)
+        ),
+        descendants(node) AS (
+            SELECT node FROM attr_matches
+            UNION ALL
+            SELECT child.value
+            FROM descendants d
+            JOIN LATERAL (
+                SELECT kv.value
+                FROM jsonb_each(
+                    CASE
+                        WHEN jsonb_typeof(d.node) = 'object' THEN d.node
+                        ELSE '{}'::jsonb
+                    END
+                ) AS kv
+                UNION ALL
+                SELECT arr.value
+                FROM jsonb_array_elements(
+                    CASE
+                        WHEN jsonb_typeof(d.node) = 'array' THEN d.node
+                        ELSE '[]'::jsonb
+                    END
+                ) AS arr(value)
+            ) AS child ON TRUE
         )
-        SELECT
-            CASE
-                WHEN jsonb_typeof(walk.key_value) IN ('string', 'number', 'boolean', 'null')
-                    THEN walk.key_value #>> '{}'
-                ELSE walk.key_value::text
-            END AS text_value
-        FROM walk
-        WHERE walk.key_name IS NOT NULL
-          AND lower(walk.key_name) = lower(%s)
+    """
+    if value_type == "numeric":
+        return (
+            walk_sql
+            + """
+        SELECT descendants.node #>> '{}' AS text_value
+        FROM descendants
+        WHERE jsonb_typeof(descendants.node) IN ('number', 'string')
     )
     """
+        )
+    if value_type == "object":
+        return (
+            walk_sql
+            + """
+        SELECT keys.key_name AS text_value
+        FROM descendants
+        JOIN LATERAL (
+            SELECT obj_keys.key_name
+            FROM jsonb_object_keys(
+                CASE
+                    WHEN jsonb_typeof(descendants.node) = 'object' THEN descendants.node
+                    ELSE '{}'::jsonb
+                END
+            ) AS obj_keys(key_name)
+        ) AS keys ON TRUE
+    )
+    """
+        )
+    # default: string
+    return (
+        walk_sql
+        + """
+        SELECT
+            descendants.node #>> '{}' AS text_value
+        FROM descendants
+        WHERE jsonb_typeof(descendants.node) = 'string'
+    )
+    """
+    )
 
 
 def _build_class_clause(f: dict, params: list) -> str | None:
@@ -1044,7 +1103,14 @@ def _build_attribute_clause(f: dict, params: list) -> str | None:
     attr = str(attr).strip()
     if not attr:
         return None
-    source_sql = _build_attribute_value_source(attr, params)
+    source_sql = _build_attribute_value_source(attr, value_type)
+    is_gid = _is_global_id_attribute(attr)
+
+    def src() -> str:
+        """Embed source_sql and append the attr bind param in correct position."""
+        if not is_gid:
+            params.append(attr)
+        return source_sql
 
     # Numeric operators
     if value_type == "numeric" and op in NUMERIC_OPERATORS:
@@ -1054,52 +1120,56 @@ def _build_attribute_clause(f: dict, params: list) -> str | None:
             return None
         if num_val is None:
             return None
-        # Safe numeric comparison: only compare when DB value parses as number.
-        # Applicability: key must exist somewhere in attributes.
         num_regex = r"^-?[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?$"
         numeric_exists = (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {src()} AS attr_values "
             f"WHERE attr_values.text_value ~ '{num_regex}')"
         )
         if op == "equals":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric = %s))"
             )
         if op == "not_equals":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND NOT EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric = %s))"
             )
         if op == "gt":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric > %s))"
             )
         if op == "lt":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric < %s))"
             )
         if op == "gte":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric >= %s))"
             )
         if op == "lte":
+            s = src()
             params.append(num_val)
             return (
-                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {s} AS attr_values "
                 f"WHERE attr_values.text_value ~ '{num_regex}' "
                 f"AND (attr_values.text_value)::numeric <= %s))"
             )
@@ -1110,12 +1180,12 @@ def _build_attribute_clause(f: dict, params: list) -> str | None:
 
     if op == "is_empty":
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {src()} AS attr_values "
             f"WHERE attr_values.text_value IS NULL OR attr_values.text_value = '')"
         )
     if op == "is_not_empty":
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {src()} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value != '')"
         )
 
@@ -1123,41 +1193,49 @@ def _build_attribute_clause(f: dict, params: list) -> str | None:
         return None
 
     if op == "is":
+        s = src()
         params.append(_escape_ilike(str(value)))
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {s} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
         )
     if op == "is_not":
+        s1 = src()
+        s2 = src()
         params.append(_escape_ilike(str(value)))
         return (
-            f"(EXISTS (SELECT 1 FROM {source_sql} AS attr_values) "
-            f"AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"(EXISTS (SELECT 1 FROM {s1} AS attr_values) "
+            f"AND NOT EXISTS (SELECT 1 FROM {s2} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s))"
         )
     if op == "contains":
+        s = src()
         params.append(f"%{_escape_ilike(str(value))}%")
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {s} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
         )
     if op == "not_contains":
+        s1 = src()
+        s2 = src()
         params.append(f"%{_escape_ilike(str(value))}%")
         return (
-            f"(EXISTS (SELECT 1 FROM {source_sql} AS attr_values) "
-            f"AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"(EXISTS (SELECT 1 FROM {s1} AS attr_values) "
+            f"AND NOT EXISTS (SELECT 1 FROM {s2} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s))"
         )
     if op == "starts_with":
+        s = src()
         params.append(f"{_escape_ilike(str(value))}%")
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {s} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
         )
     if op == "ends_with":
+        s = src()
         params.append(f"%{_escape_ilike(str(value))}")
         return (
-            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"EXISTS (SELECT 1 FROM {s} AS attr_values "
             f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
         )
 

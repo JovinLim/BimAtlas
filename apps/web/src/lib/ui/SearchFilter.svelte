@@ -616,18 +616,6 @@
 				{/if}
 			</div>
 			<select
-				class="filter-select filter-select--value-type"
-				value={filter.valueType ?? 'string'}
-				onchange={(e) =>
-					onupdate({
-						valueType: (e.currentTarget.value as 'string' | 'numeric') || undefined,
-						operator: undefined
-					})}
-			>
-				<option value="string">String</option>
-				<option value="numeric">Numeric</option>
-			</select>
-			<select
 				class="filter-select filter-select--op"
 				value={
 					filter.valueType === 'numeric'
@@ -641,6 +629,19 @@
 				{#each (filter.valueType === 'numeric' ? NUMERIC_OPERATORS : STRING_OPERATORS) as op}
 					<option value={op}>{OPERATOR_LABELS[op] ?? op}</option>
 				{/each}
+			</select>
+			<select
+				class="filter-select filter-select--value-type"
+				value={filter.valueType ?? 'string'}
+				onchange={(e) =>
+					onupdate({
+						valueType: (e.currentTarget.value as 'string' | 'numeric' | 'object') || undefined,
+						operator: undefined
+					})}
+			>
+				<option value="string">String</option>
+				<option value="numeric">Numeric</option>
+				<option value="object">Object</option>
 			</select>
 			{#if !VALUE_OPTIONAL_OPERATORS.has(filter.operator ?? '')}
 				<input

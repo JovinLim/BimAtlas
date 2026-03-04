@@ -211,7 +211,7 @@ class TestProductFilterWithFilterSets:
                 gid, cls, name, desc, otype, tag = prod[:6]
                 attrs = {"Name": name or "", "Description": desc or "", "ObjectType": otype or "", "Tag": tag or ""}
                 if gid == "g1":
-                    attrs["PropertySets"] = {"PsetWallCommon": {"FireRating": "2HR"}}
+                    attrs["PropertySets"] = {"Pset_WallCommon": {"FireRating": "2HR"}}
                 if gid == "g3":
                     attrs["Meta"] = {"Name": "Basic Wall: Interior"}
                 if gid == "g5":
@@ -443,8 +443,8 @@ class TestProductFilterWithFilterSets:
         assert len(rows) == 1
         assert rows[0]["ifc_global_id"] == "g5"
 
-    def test_nested_attribute_key_contains_with_applicability(self):
-        """PropertySets contains PsetWallCommon should match only entities with that key+value."""
+    def test_nested_attribute_key_contains_with_object_type(self):
+        """PropertySets + object type should match nested object key names (with underscore)."""
         rows = db.fetch_entities_with_filter_sets(
             self.rev_seq,
             self.branch_id,
@@ -453,14 +453,34 @@ class TestProductFilterWithFilterSets:
                 "filters": [{
                     "mode": "attribute",
                     "attribute": "PropertySets",
-                    "value": "PsetWallCommon",
+                    "value": "Pset_WallCommon",
                     "operator": "contains",
+                    "valueType": "object",
                 }],
             }],
             "AND",
         )
         assert len(rows) == 1
         assert rows[0]["ifc_global_id"] == "g1"
+
+    def test_nested_attribute_key_contains_with_string_type_no_match(self):
+        """PropertySets + string type should not match object key names like Pset_WallCommon."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq,
+            self.branch_id,
+            [{
+                "logic": "AND",
+                "filters": [{
+                    "mode": "attribute",
+                    "attribute": "PropertySets",
+                    "value": "Pset_WallCommon",
+                    "operator": "contains",
+                    "valueType": "string",
+                }],
+            }],
+            "AND",
+        )
+        assert rows == []
 
     def test_nested_attribute_key_is_match_any_depth(self):
         """Name=is should match nested Name keys, not only top-level attributes.Name."""

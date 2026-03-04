@@ -250,5 +250,82 @@
       }
     ],
     "handoff_notes": ""
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/feat001-multi-operator-filtering_087e6763.plan.md#attribute-datatype-object-followup",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-03-04T12:30:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Swap attribute operator/data-type control order and add Object data type with type-aware nested key evaluation."
+    },
+    "execution_log": [
+      {
+        "step": "Swap UI order for attribute controls to Attribute -> Operator -> Data Type and add Object option",
+        "status": "complete"
+      },
+      {
+        "step": "Refactor backend nested-key extraction by valueType so string checks scalar strings, numeric checks numbers, and object checks nested object key names",
+        "status": "complete"
+      },
+      {
+        "step": "Add regression tests for PropertySets with valueType=object (match) and valueType=string (no match)",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": "Backend tests require PostgreSQL and were skipped in this environment."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/feat001-multi-operator-filtering_087e6763.plan.md#object-key-matching-bugfix",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-03-04T13:00:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Fix object-type attribute matching for nested PropertySets keys like Pset_WallCommon in production-shaped payloads."
+    },
+    "execution_log": [
+      {
+        "step": "Correct object-key extraction SQL aliasing in db.py and align tests to underscore key names (Pset_WallCommon)",
+        "status": "complete"
+      },
+      {
+        "step": "Re-run syntax/focused checks (DB-backed tests still skipped without PostgreSQL)",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": "Please verify against a running DB by applying PropertySets + contains + object + Pset_WallCommon from the frontend."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_001_dynamic_filter_sets",
+      "plan_reference": ".cursor/plans/feat001-multi-operator-filtering_087e6763.plan.md#parameter-ordering-bugfix",
+      "assigned_agent": "execution_agent_1",
+      "last_updated": "2026-03-04T14:00:00Z"
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Fix attribute clause parameter ordering so attr bind params are added before operator params; extend numeric extraction to accept JSON string values."
+    },
+    "execution_log": [
+      {
+        "step": "Replace deferred finalize() with src() helper that appends attr param each time CTE is embedded, before operator value",
+        "status": "complete"
+      },
+      {
+        "step": "Extend numeric value_type extraction to accept jsonb_typeof IN ('number','string') for IFC payloads storing numbers as strings",
+        "status": "complete"
+      },
+      {
+        "step": "Run full test_filter_sets.py (44 passed)",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": ""
   }
 ]
