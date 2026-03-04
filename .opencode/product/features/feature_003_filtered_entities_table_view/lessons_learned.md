@@ -8,7 +8,7 @@
 
 ## Resolved Pitfalls
 
-- Playwright headed runs can race Svelte hydration for new buttons; a short retry loop around the first click on \"Add row\" made the spreadsheet tests robust without changing the user-facing behavior.
+- Playwright headed runs can race Svelte hydration for new buttons; a short retry loop around the first click on "Add row" made the spreadsheet tests robust without changing the user-facing behavior.
 - Sticky grid headers (column letters and row indices) initially used translucent backgrounds, so scrolled rows were visible behind the first row/column; switching those backgrounds to match the table page color fixed the bleed-through while preserving the Excel-like layout.
 - Optional Univer loading can break Vite import analysis if `@univerjs/core` is referenced as a static string in `import()`. Using a variable with `/* @vite-ignore */` keeps the integration path optional while avoiding hard module-resolution failures in dev/test.
 - `onDestroy` executes during SSR for route render teardown, so direct `window` access there can throw `window is not defined`. Wrapping add/remove keyboard-listener calls with a `typeof window !== "undefined"` guard prevents 500s on `/table` SSR.
@@ -16,7 +16,7 @@
 - Treating formula evaluation errors as committed `#ERROR` values destroys the user's original expression and makes correction harder. Preserve the typed expression as the committed cell value when evaluation fails, so users can fix formulas in place.
 - After Enter commit, only clearing selection state left the cell input focused, so typing still edited the cell. Call `blur()` on the cell input in the Enter key handler (in both EntityGrid and BottomSheet) so focus leaves the input and Enter fully escapes edit mode.
 - When the selected cell displays the raw formula, a subsequent blur can fire with the displayed computed value and overwrite the stored formula. In `commitCell`, ignore commits when the cell is not active, has a stored formula, and the incoming value equals the already-committed computed value.
-- Bottom-sheet rows are user-added and not IFC entities; column C there must be editable. Only the top entity grid’s IfcClass/Global ID columns are protected; `resolveCellByRef` marks sheet cells as non-protected.
+- Bottom-sheet rows are user-added and not IFC entities; column C there must be editable. Only the top entity grid's IfcClass/Global ID columns are protected; `resolveCellByRef` marks sheet cells as non-protected.
 - Lock-rail rows drifted from table rows because rail buttons used a fixed height plus a border, yielding a different effective row height than table cells. Use shared CSS variables and, for rail segments, `calc(var(--table-row-height) + var(--table-grid-border-width))` (with `box-sizing: border-box`) so the rail and table share the same row height and stay aligned when variables change.
 
 ## Univer feasibility (timeboxed spike)

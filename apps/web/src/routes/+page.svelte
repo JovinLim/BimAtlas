@@ -33,6 +33,7 @@
   import {
     TABLE_CHANNEL,
     TABLE_PROTOCOL_VERSION,
+    ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
@@ -370,7 +371,10 @@
     tableChannel.onmessage = (e: MessageEvent<TableMessage>) => {
       if (e.data.type === "request-context") {
         sendTableContext();
-      } else if (e.data.type === "selection-changed") {
+      } else if (
+        ENABLE_TABLE_VIEWER_SELECTION_SYNC &&
+        e.data.type === "selection-changed"
+      ) {
         selection.activeGlobalId = e.data.globalId;
       }
     };
@@ -381,6 +385,16 @@
     attributesChannel?.close();
     graphChannel?.close();
     tableChannel?.close();
+  });
+
+  // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
+  $effect(() => {
+    if (!ENABLE_TABLE_VIEWER_SELECTION_SYNC) return;
+    const globalId = selection.activeGlobalId;
+    tableChannel?.postMessage({
+      type: "selection-sync",
+      globalId,
+    } satisfies TableMessage);
   });
 
   function sendBranchContext() {
@@ -461,7 +475,14 @@
       revision,
       products: plainProducts,
       version: TABLE_PROTOCOL_VERSION,
+      activeGlobalId: selection.activeGlobalId,
     } satisfies TableMessage);
+    if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) {
+      tableChannel?.postMessage({
+        type: "selection-sync",
+        globalId: selection.activeGlobalId,
+      } satisfies TableMessage);
+    }
   }
 
   function openGraphPopup() {

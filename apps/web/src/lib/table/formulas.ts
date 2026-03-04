@@ -2,6 +2,39 @@ import { parseCellRef } from "$lib/table/engine";
 
 type CellResolver = (ref: string) => string | null;
 
+/** Formula functions supported by the spreadsheet (for autocomplete dropdown). */
+export interface FormulaSuggestion {
+  name: string;
+  /** Inserted after "=", e.g. "SUM()" — cursor is placed inside the parens. */
+  template: string;
+  /** Display signature, e.g. "SUM(start:end)". */
+  signature: string;
+  description: string;
+}
+
+export const FORMULA_SUGGESTIONS: FormulaSuggestion[] = [
+  {
+    name: "SUM",
+    template: "SUM()",
+    signature: "SUM(start:end)",
+    description: "Sum a range of cells (e.g. =SUM(D2:D4))",
+  },
+  {
+    name: "AVERAGE",
+    template: "AVERAGE()",
+    signature: "AVERAGE(start:end)",
+    description: "Average of numeric cells in a range; skips empty/non-numeric (e.g. =AVERAGE(D2:D4))",
+  },
+];
+
+export function getFormulaSuggestions(prefix: string): FormulaSuggestion[] {
+  const lower = prefix.trim().toLowerCase();
+  if (lower === "") return [...FORMULA_SUGGESTIONS];
+  return FORMULA_SUGGESTIONS.filter((s) =>
+    s.name.toLowerCase().startsWith(lower),
+  );
+}
+
 export interface FormulaResult {
   ok: boolean;
   value: string;
@@ -79,6 +112,29 @@ export function evaluateFormula(input: string, resolver: CellResolver): FormulaR
       total += numeric;
     }
     return { ok: true, value: String(total) };
+  }
+
+  const averageRange = /^AVERAGE\(([A-Za-z]+\d+):([A-Za-z]+\d+)\)$/i.exec(body);
+  if (averageRange) {
+    const refs = eachRefInRange(averageRange[1], averageRange[2]);
+    if (refs.length === 0) return { ok: false, value: "#REF" };
+    const numbers: number[] = [];
+    for (const ref of refs) {
+      try {
+        const resolved = resolver(ref);
+        if (resolved == null || String(resolved).trim() === "") continue;
+        const numeric = toNumber(resolved);
+        if (numeric !== null) numbers.push(numeric);
+      } catch {
+        // Skip cells that fail to resolve (e.g. circular ref); don't fail the whole formula
+        continue;
+      }
+    }
+    if (numbers.length === 0) return { ok: false, value: "#DIV/0!" };
+    const sum = numbers.reduce((a, b) => a + b, 0);
+    const avg = sum / numbers.length;
+    if (!Number.isFinite(avg)) return { ok: false, value: "#ERROR" };
+    return { ok: true, value: String(avg) };
   }
 
   const refs = Array.from(body.matchAll(/[A-Za-z]+\d+/g)).map((m) =>

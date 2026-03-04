@@ -9,6 +9,9 @@ export const TABLE_CHANNEL = "bimatlas-table";
 
 export const TABLE_PROTOCOL_VERSION = 1;
 
+/** When true, table selection and viewer selection stay in sync (row highlight, cell focus). When false, use "Find selected element" to locate the viewer selection in the table. */
+export const ENABLE_TABLE_VIEWER_SELECTION_SYNC = false;
+
 export interface TableContextPayload {
   branchId: string | null;
   projectId: string | null;
@@ -17,9 +20,12 @@ export interface TableContextPayload {
   revision: number | null;
   products: ProductMeta[];
   version: number;
+  /** Current selection in the main viewer (for "Find selected element"). */
+  activeGlobalId?: string | null;
 }
 
 export type TableMessage =
   | { type: "request-context" }
   | ({ type: "context" } & TableContextPayload)
-  | { type: "selection-changed"; globalId: string | null };
+  | { type: "selection-changed"; globalId: string | null }
+  | { type: "selection-sync"; globalId: string | null };

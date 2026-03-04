@@ -49,6 +49,7 @@ export interface SpreadsheetSnapshot {
   }>;
   sheetFormulas: Record<string, string>;
   lockedIds: string[];
+  sheetLockedIds: string[];
 }
 
 const DEFAULT_ENGINE: TableEngine = {

@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { page } from "$app/stores";
   import {
     TABLE_CHANNEL,
     TABLE_PROTOCOL_VERSION,
+    ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
   import type { ProductMeta } from "$lib/search/protocol";
@@ -18,7 +19,7 @@
     type SpreadsheetCellState,
     type SpreadsheetSnapshot,
   } from "$lib/table/engine";
-  import { evaluateFormula } from "$lib/table/formulas";
+  import { evaluateFormula, getFormulaSuggestions, FORMULA_SUGGESTIONS } from "$lib/table/formulas";
 
   let branchId = $state<string | null>(null);
   let projectId = $state<string | null>(null);
@@ -30,6 +31,8 @@
   let useFixture = $state(false);
   /** Row lock state: locked rows are read-only for editable cells. */
   let lockedIds = $state<Set<string>>(new Set());
+  /** Bottom-sheet row lock state by entry id. */
+  let sheetLockedIds = $state<Set<string>>(new Set());
   /** Bottom sheet entries (notes / quantity surveying). Session-only for v1. */
   let sheetEntries = $state<SheetEntry[]>([]);
   let topEdits = $state<Record<string, string>>({});
@@ -39,6 +42,53 @@
   let activeCell = $state<SpreadsheetCellState | null>(null);
   let formulaInput = $state("");
   let formulaComposeSourceRef = $state<string | null>(null);
+  let formulaSuggestionIndex = $state(0);
+  let showFormulaGuideOverlay = $state(false);
+
+  $effect(() => {
+    if (!showFormulaGuideOverlay) return;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") showFormulaGuideOverlay = false;
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  });
+
+  $effect(() => {
+    const id = findHighlightGlobalId;
+    if (!id || !segmentTopRef) return;
+    tick().then(() => {
+      const row = segmentTopRef?.querySelector(
+        `tr.entity-row[data-global-id="${id}"]`,
+      );
+      row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  });
+
+  const formulaPrefix = $derived.by(() => {
+    const t = formulaInput.trim();
+    if (!t.startsWith("=")) return "";
+    const body = t.slice(1);
+    const match = body.match(/^[A-Za-z]*/);
+    return match ? match[0] : "";
+  });
+  const formulaSuggestionsList = $derived(getFormulaSuggestions(formulaPrefix));
+  const showFormulaDropdown = $derived(
+    formulaInput.trim().startsWith("=") &&
+      /^[A-Za-z]*$/.test(formulaInput.trim().slice(1)) &&
+      formulaSuggestionsList.length > 0 &&
+      activeCell != null &&
+      activeCell.editable,
+  );
+  /** GlobalId of the row to show as selected (from table focus or, when sync enabled, from viewer). */
+  const selectedRowGlobalId = $derived.by(() => {
+    if (activeCell && activeCell.surface === "entity") {
+      const product = getTopProductByRow(activeCell.row);
+      return product?.globalId ?? null;
+    }
+    if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) return viewerSelectedGlobalId;
+    return null;
+  });
   let selectionRange = $state<{ startRef: string; endRef: string } | null>(null);
   let isDraggingSelection = $state(false);
   let undoStack = $state<SpreadsheetSnapshot[]>([]);
@@ -48,7 +98,7 @@
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
   let hasChannelContext = $state(false);
-  const NAV_COLS = ["B", "C", "D", "E", "F", "G"] as const;
+  const NAV_COLS = ["A", "B", "C", "D", "E", "F"] as const;
 
   function colIndex(col: string): number {
     return NAV_COLS.indexOf(col as (typeof NAV_COLS)[number]);
@@ -69,6 +119,7 @@
     useFixture = fixtureParam === "1" || fixtureParam === "true";
     if (useFixture) {
       products = [...TABLE_FIXTURE_PRODUCTS];
+      lockedIds = new Set(products.map((p) => p.globalId));
     }
   }
 
@@ -87,10 +138,31 @@
     }
   }
 
+  /** When the main viewer selects an entity, we highlight that row (only when sync enabled). */
+  let viewerSelectedGlobalId = $state<string | null>(null);
+  /** Pending "Find selected element" request: after next context we'll highlight/scroll or toast. */
+  let findPending = $state(false);
+  /** Row to highlight in orange and scroll into view (from "Find selected element"). */
+  let findHighlightGlobalId = $state<string | null>(null);
+  let toastMessage = $state<string | null>(null);
+  let toastTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
+  let segmentTopRef = $state<HTMLElement | null>(null);
+
+  function showToast(message: string) {
+    if (toastTimeoutId != null) clearTimeout(toastTimeoutId);
+    toastMessage = message;
+    toastTimeoutId = setTimeout(() => {
+      toastMessage = null;
+      toastTimeoutId = null;
+    }, 3000);
+  }
+
   function handleIncomingMessage(e: MessageEvent<TableMessage>) {
     const msg = e.data;
     if (msg.type === "context" && msg.version === TABLE_PROTOCOL_VERSION) {
       if (useFixture) return;
+      const wasFindPending = findPending;
+      findPending = false;
       hasChannelContext = true;
       branchId = msg.branchId;
       projectId = msg.projectId;
@@ -98,6 +170,7 @@
       projectName = msg.projectName ?? null;
       revision = msg.revision;
       products = msg.products ?? [];
+      lockedIds = new Set(products.map((p) => p.globalId));
 
       const params = new URLSearchParams($page.url.searchParams);
       if (branchId != null) params.set("branchId", String(branchId));
@@ -116,11 +189,31 @@
         clearInterval(contextRetryInterval);
         contextRetryInterval = null;
       }
+
+      if (wasFindPending) {
+        const globalId = msg.activeGlobalId ?? null;
+        if (globalId == null || globalId === "") {
+          showToast("No element selected in viewer");
+          findHighlightGlobalId = null;
+        } else {
+          findHighlightGlobalId = globalId;
+        }
+      }
+    } else if (
+      ENABLE_TABLE_VIEWER_SELECTION_SYNC &&
+      msg.type === "selection-sync"
+    ) {
+      viewerSelectedGlobalId = msg.globalId;
     }
   }
 
   function requestContext() {
     channel?.postMessage({ type: "request-context" } satisfies TableMessage);
+  }
+
+  function findSelectedElement() {
+    findPending = true;
+    requestContext();
   }
 
   async function resolveNamesFromProjects() {
@@ -155,6 +248,35 @@
     lockedIds = next;
   }
 
+  const allEntitiesLocked = $derived(
+    products.length > 0 &&
+      products.every((p) => lockedIds.has(p.globalId)) &&
+      sheetEntries.every((entry) => sheetLockedIds.has(entry.id)),
+  );
+
+  function toggleLockAll() {
+    if (products.length === 0 && sheetEntries.length === 0) return;
+    pushHistory();
+    if (allEntitiesLocked) {
+      lockedIds = new Set();
+      sheetLockedIds = new Set();
+    } else {
+      lockedIds = new Set(products.map((p) => p.globalId));
+      sheetLockedIds = new Set(sheetEntries.map((entry) => entry.id));
+    }
+  }
+
+  function toggleSheetEntryLock(entryId: string) {
+    pushHistory();
+    const next = new Set(sheetLockedIds);
+    if (next.has(entryId)) {
+      next.delete(entryId);
+    } else {
+      next.add(entryId);
+    }
+    sheetLockedIds = next;
+  }
+
   function snapshot(): SpreadsheetSnapshot {
     return {
       topEdits: { ...topEdits },
@@ -162,6 +284,7 @@
       sheetEntries: sheetEntries.map((entry) => ({ ...entry })),
       sheetFormulas: { ...sheetFormulas },
       lockedIds: Array.from(lockedIds),
+      sheetLockedIds: Array.from(sheetLockedIds),
     };
   }
 
@@ -171,6 +294,7 @@
     sheetEntries = value.sheetEntries.map((entry) => ({ ...entry }));
     sheetFormulas = { ...value.sheetFormulas };
     lockedIds = new Set(value.lockedIds);
+    sheetLockedIds = new Set(value.sheetLockedIds ?? []);
     draftValues = {};
     if (activeCell != null) {
       const ref = activeCell.ref;
@@ -215,6 +339,12 @@
     return sheetEntries[index] ?? null;
   }
 
+  function isSheetRowLocked(row: number): boolean {
+    const entry = getSheetEntryByRow(row);
+    if (!entry) return false;
+    return sheetLockedIds.has(entry.id);
+  }
+
   function resolveCellByRef(ref: string): SpreadsheetCellState | null {
     const parsed = parseCellRef(ref);
     if (!parsed) return null;
@@ -224,11 +354,11 @@
     if (topProduct) {
       const editable =
         !lockedIds.has(topProduct.globalId) &&
-        (parsed.col === "D" ||
+        (parsed.col === "C" ||
+          parsed.col === "D" ||
           parsed.col === "E" ||
-          parsed.col === "F" ||
-          parsed.col === "G");
-      const isProtected = parsed.col === "B" || parsed.col === "C";
+          parsed.col === "F");
+      const isProtected = parsed.col === "A" || parsed.col === "B";
       return {
         surface: "entity",
         row: parsed.row,
@@ -247,7 +377,7 @@
         row: parsed.row,
         col: parsed.col,
         ref,
-        editable: !isProtected,
+        editable: !isProtected && !isSheetRowLocked(parsed.row),
         protected: isProtected,
       };
     }
@@ -257,22 +387,22 @@
   function getTopFallback(ref: string, product: ProductMeta): string {
     const parsed = parseCellRef(ref);
     if (!parsed) return "";
-    if (parsed.col === "B") return product.globalId ?? "";
-    if (parsed.col === "C") return product.ifcClass ?? "";
-    if (parsed.col === "D") return product.name ?? "";
-    if (parsed.col === "E") return product.description ?? "";
-    if (parsed.col === "F") return product.objectType ?? "";
-    if (parsed.col === "G") return product.tag ?? "";
+    if (parsed.col === "A") return product.globalId ?? "";
+    if (parsed.col === "B") return product.ifcClass ?? "";
+    if (parsed.col === "C") return product.name ?? "";
+    if (parsed.col === "D") return product.description ?? "";
+    if (parsed.col === "E") return product.objectType ?? "";
+    if (parsed.col === "F") return product.tag ?? "";
     return "";
   }
 
   function getSheetField(col: string): keyof Omit<SheetEntry, "id"> | null {
-    if (col === "B") return "entityGlobalId";
-    if (col === "C") return "category";
-    if (col === "D") return "label";
-    if (col === "E") return "value";
-    if (col === "F") return "notes";
-    if (col === "G") return "tag";
+    if (col === "A") return "entityGlobalId";
+    if (col === "B") return "category";
+    if (col === "C") return "label";
+    if (col === "D") return "value";
+    if (col === "E") return "notes";
+    if (col === "F") return "tag";
     return null;
   }
 
@@ -355,11 +485,22 @@
     updateSheetFormula(cell.ref, rawFormula);
   }
 
+  function syncSelectionToViewer(globalId: string | null) {
+    if (!ENABLE_TABLE_VIEWER_SELECTION_SYNC) return;
+    channel?.postMessage({ type: "selection-changed", globalId } satisfies TableMessage);
+  }
+
   function selectCell(cell: SpreadsheetCellState) {
     activeCell = cell;
     formulaInput = getFormulaForRef(cell.ref) ?? getCommittedValue(cell.ref);
     if (formulaComposeSourceRef !== cell.ref) {
       formulaComposeSourceRef = null;
+    }
+    if (cell.surface === "entity") {
+      const product = getTopProductByRow(cell.row);
+      syncSelectionToViewer(product?.globalId ?? null);
+    } else {
+      syncSelectionToViewer(null);
     }
   }
 
@@ -544,6 +685,7 @@
       formulaComposeSourceRef = null;
       formulaInput = "";
       isDraggingSelection = false;
+      if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) syncSelectionToViewer(null);
       return;
     }
 
@@ -569,8 +711,29 @@
     setTimeout(() => focusCell(nextRef), 0);
   }
 
+  function applyFormulaSuggestion(suggestion: { template: string }) {
+    const next = "=" + suggestion.template;
+    formulaInput = next;
+    if (activeCell != null) {
+      draftValues = { ...draftValues, [activeCell.ref]: next };
+      formulaComposeSourceRef = activeCell.ref;
+    }
+    const cursorPos = next.indexOf("(") + 1;
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLInputElement>(".formula-input");
+      el?.focus();
+      el?.setSelectionRange(cursorPos, cursorPos);
+    });
+  }
+
   function applyFormulaInput() {
     if (!activeCell) return;
+    if (showFormulaDropdown && formulaSuggestionsList.length > 0) {
+      const idx = Math.max(0, Math.min(formulaSuggestionIndex, formulaSuggestionsList.length - 1));
+      applyFormulaSuggestion(formulaSuggestionsList[idx]);
+      formulaSuggestionIndex = 0;
+      return;
+    }
     commitCell(activeCell, formulaInput);
   }
 
@@ -607,6 +770,10 @@
     if (nextEntries.length !== sheetEntries.length) {
       pushHistory();
     }
+    const nextIds = new Set(nextEntries.map((entry) => entry.id));
+    sheetLockedIds = new Set(
+      Array.from(sheetLockedIds).filter((id) => nextIds.has(id)),
+    );
     sheetEntries = nextEntries;
   }
 
@@ -679,6 +846,7 @@
     channel?.close();
     if (contextRetryTimeout != null) clearTimeout(contextRetryTimeout);
     if (contextRetryInterval != null) clearInterval(contextRetryInterval);
+    if (toastTimeoutId != null) clearTimeout(toastTimeoutId);
     if (typeof window !== "undefined") {
       window.removeEventListener("keydown", handleGlobalKeydown);
       window.removeEventListener("mouseup", handleGlobalPointerUp);
@@ -703,32 +871,86 @@
 
   <div class="formula-bar" aria-label="Formula bar">
     <span class="formula-cell-ref mono">{activeCell?.ref ?? "—"}</span>
-    <input
-      type="text"
-      class="formula-input"
-      value={formulaInput}
-      placeholder="Enter value or formula (e.g. =D2+E2, =SUM(D2:D4))"
-      disabled={activeCell == null}
-      readonly={activeCell != null && !activeCell.editable}
-      oninput={(e) => {
-        formulaInput = e.currentTarget.value;
-        if (activeCell != null) {
-          draftValues = { ...draftValues, [activeCell.ref]: formulaInput };
-          formulaComposeSourceRef = formulaInput.trim().startsWith("=")
-            ? activeCell.ref
-            : null;
-        }
-      }}
-      onkeydown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          applyFormulaInput();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          cancelFormulaInput();
-        }
-      }}
-    />
+    <div class="formula-input-wrap">
+      <input
+        type="text"
+        class="formula-input"
+        value={formulaInput}
+        placeholder="Enter value or formula (e.g. =D2+E2, =SUM(D2:D4))"
+        disabled={activeCell == null}
+        readonly={activeCell != null && !activeCell.editable}
+        autocomplete="off"
+        oninput={(e) => {
+          formulaInput = e.currentTarget.value;
+          formulaSuggestionIndex = 0;
+          if (activeCell != null) {
+            draftValues = { ...draftValues, [activeCell.ref]: formulaInput };
+            formulaComposeSourceRef = formulaInput.trim().startsWith("=")
+              ? activeCell.ref
+              : null;
+          }
+        }}
+        onkeydown={(e) => {
+          if (showFormulaDropdown && formulaSuggestionsList.length > 0) {
+            const len = formulaSuggestionsList.length;
+            const idx = Math.max(0, Math.min(formulaSuggestionIndex, len - 1));
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              formulaSuggestionIndex = (idx + 1) % len;
+              return;
+            }
+            if (e.key === "ArrowUp") {
+              e.preventDefault();
+              formulaSuggestionIndex = (idx - 1 + len) % len;
+              return;
+            }
+            if (e.key === "Enter" || e.key === "Tab") {
+              e.preventDefault();
+              applyFormulaSuggestion(formulaSuggestionsList[idx]);
+              formulaSuggestionIndex = 0;
+              return;
+            }
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyFormulaInput();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            if (showFormulaDropdown) {
+              formulaSuggestionIndex = 0;
+            } else {
+              cancelFormulaInput();
+            }
+          }
+        }}
+      />
+      {#if showFormulaDropdown}
+        <ul
+          id="formula-suggestions-list"
+          class="formula-suggestions"
+          role="listbox"
+          aria-label="Formula options"
+        >
+          {#each formulaSuggestionsList as suggestion, i}
+            <li
+              id="formula-suggestion-{i}"
+              role="option"
+              aria-selected={i === Math.max(0, Math.min(formulaSuggestionIndex, formulaSuggestionsList.length - 1))}
+              class="formula-suggestion-item"
+              class:selected={i === Math.max(0, Math.min(formulaSuggestionIndex, formulaSuggestionsList.length - 1))}
+              onmousedown={(e) => {
+                e.preventDefault();
+                applyFormulaSuggestion(suggestion);
+                formulaSuggestionIndex = 0;
+              }}
+            >
+              <span class="formula-suggestion-sig mono">{suggestion.signature}</span>
+              <span class="formula-suggestion-desc">{suggestion.description}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
     <button
       type="button"
       class="formula-btn"
@@ -775,13 +997,47 @@
   </div>
 
   <div class="table-split">
-    <section class="table-segment table-segment-top" aria-label="IFC entities">
-      <p class="segment-label">Entities ({products.length})</p>
+    <section
+      class="table-segment table-segment-top"
+      aria-label="IFC entities"
+      bind:this={segmentTopRef}
+    >
+      <div class="segment-toolbar">
+        <p class="segment-label">Total entities: {products.length}</p>
+        <button
+          type="button"
+          class="formula-guide-btn"
+          onclick={findSelectedElement}
+          disabled={!hasChannelContext}
+          aria-label="Find selected element in viewer"
+        >
+          Find selected element
+        </button>
+        <button
+          type="button"
+          class="formula-guide-btn"
+          onclick={toggleLockAll}
+          disabled={products.length === 0 && sheetEntries.length === 0}
+          aria-label={allEntitiesLocked ? "Unlock all rows" : "Lock all rows"}
+        >
+          {allEntitiesLocked ? "Unlock all" : "Lock all"}
+        </button>
+        <button
+          type="button"
+          class="formula-guide-btn"
+          onclick={() => (showFormulaGuideOverlay = true)}
+          aria-label="Open formula guide"
+        >
+          Formula guide
+        </button>
+      </div>
       <EntityGrid
         products={products}
         lockedIds={lockedIds}
         onToggleLock={toggleLock}
         activeCellRef={activeCell?.ref ?? null}
+        selectedRowGlobalId={selectedRowGlobalId}
+        findHighlightGlobalId={findHighlightGlobalId}
         getCellDisplayValue={getCellDisplayValue}
         onCellFocus={onCellFocus}
         onCellInput={onCellInput}
@@ -800,6 +1056,8 @@
         bind:entries={sheetEntries}
         rowStart={products.length + 2}
         onEntriesChange={onSheetEntriesChange}
+        lockedEntryIds={sheetLockedIds}
+        onToggleEntryLock={toggleSheetEntryLock}
         activeCellRef={activeCell?.ref ?? null}
         getCellDisplayValue={getCellDisplayValue}
         onCellFocus={onCellFocus}
@@ -815,10 +1073,63 @@
       />
     </section>
   </div>
+
+  {#if showFormulaGuideOverlay}
+    <div
+      class="formula-guide-backdrop"
+      role="presentation"
+      onclick={() => (showFormulaGuideOverlay = false)}
+      onkeydown={(e) => e.key === "Escape" && (showFormulaGuideOverlay = false)}
+    >
+      <div
+        class="formula-guide-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="formula-guide-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === "Escape" && (showFormulaGuideOverlay = false)}
+      >
+        <div class="formula-guide-header">
+          <h2 id="formula-guide-title">Formula guide</h2>
+          <button
+            type="button"
+            class="formula-guide-close"
+            onclick={() => (showFormulaGuideOverlay = false)}
+            aria-label="Close formula guide"
+          >
+            ×
+          </button>
+        </div>
+        <div class="formula-guide-body">
+          {#each FORMULA_SUGGESTIONS as formula}
+            <section class="formula-guide-section" aria-labelledby="formula-guide-{formula.name}">
+              <h3 id="formula-guide-{formula.name}" class="formula-guide-name mono">{formula.name}</h3>
+              <p class="formula-guide-usage mono">{formula.signature}</p>
+              <p class="formula-guide-desc">{formula.description}</p>
+            </section>
+          {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if toastMessage}
+    <div class="table-toast" role="status" aria-live="polite">
+      {toastMessage}
+    </div>
+  {/if}
 </div>
 
 <style>
   .table-page {
+    --table-grid-border-width: 1px;
+    --table-grid-border-color: rgba(255, 255, 255, 0.06);
+    --table-header-height: 28px;
+    --table-subheader-height: 34px;
+    --table-row-height: 34px;
+    --lock-rail-width: 3rem;
+
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -901,6 +1212,58 @@
     color: #e7e7f3;
   }
 
+  .formula-input-wrap {
+    position: relative;
+    min-width: 0;
+  }
+
+  .formula-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin: 0.15rem 0 0;
+    padding: 0.25rem 0;
+    list-style: none;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    max-height: 12rem;
+    overflow-y: auto;
+    z-index: 100;
+  }
+
+  .formula-suggestion-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .formula-suggestion-item:hover,
+  .formula-suggestion-item.selected {
+    background: rgba(255, 136, 102, 0.15);
+    color: #ffd8cf;
+  }
+
+  .formula-suggestion-sig {
+    color: #e7e7f3;
+    font-weight: 500;
+  }
+
+  .formula-suggestion-desc {
+    font-size: 0.72rem;
+    color: #a0a0b0;
+  }
+
+  .formula-suggestion-item:hover .formula-suggestion-desc,
+  .formula-suggestion-item.selected .formula-suggestion-desc {
+    color: #c8c8d8;
+  }
+
   .formula-input {
     height: 2rem;
     border-radius: 0.35rem;
@@ -952,6 +1315,136 @@
     border-top: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  .segment-toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .segment-label {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #a0a0b0;
+  }
+
+  .formula-guide-btn {
+    margin-left: auto;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.35rem;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    cursor: pointer;
+  }
+
+  .formula-guide-btn:hover {
+    background: rgba(255, 136, 102, 0.18);
+    border-color: rgba(255, 136, 102, 0.45);
+    color: #ffd8cf;
+  }
+
+  .formula-guide-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+
+  .formula-guide-overlay {
+    width: 75%;
+    height: 75%;
+    min-width: 18rem;
+    min-height: 12rem;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+
+  .formula-guide-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .formula-guide-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #ff8866;
+  }
+
+  .formula-guide-close {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    line-height: 1;
+    border: none;
+    border-radius: 0.35rem;
+    background: transparent;
+    color: #a0a0b0;
+    cursor: pointer;
+  }
+
+  .formula-guide-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #e0e0e0;
+  }
+
+  .formula-guide-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1rem;
+  }
+
+  .formula-guide-section {
+    margin-bottom: 1.25rem;
+  }
+
+  .formula-guide-section:last-child {
+    margin-bottom: 0;
+  }
+
+  .formula-guide-name {
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e7e7f3;
+  }
+
+  .formula-guide-usage {
+    margin: 0 0 0.35rem;
+    font-size: 0.82rem;
+    color: #ff8866;
+  }
+
+  .formula-guide-desc {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #a0a0b0;
+    line-height: 1.4;
+  }
+
   .table-segment-top {
     min-height: 0;
     overflow: auto;
@@ -962,4 +1455,18 @@
     overflow: auto;
   }
 
+  .table-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.6rem 1rem;
+    border-radius: 0.35rem;
+    background: #2d2d3d;
+    color: #e0e0e0;
+    font-size: 0.875rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 100;
+  }
 </style>
