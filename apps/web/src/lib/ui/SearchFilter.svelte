@@ -1,7 +1,33 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { flattenTree, IFC_RELATION_TYPES, type FlatEntry } from '$lib/ifc/schema';
-	import { FILTERABLE_ATTRIBUTES, type SearchFilter } from '$lib/search/protocol';
+	import {
+		CLASS_OPERATORS,
+		NUMERIC_OPERATORS,
+		STRING_OPERATORS,
+		type SearchFilter
+	} from '$lib/search/protocol';
+
+	const OPERATOR_LABELS: Record<string, string> = {
+		is: 'is',
+		inherits_from: 'inherits from',
+		contains: 'contains',
+		not_contains: 'does not contain',
+		starts_with: 'starts with',
+		ends_with: 'ends with',
+		is_empty: 'is empty',
+		is_not_empty: 'is not empty',
+		is_not: 'is not',
+		equals: 'equals',
+		not_equals: 'not equals',
+		gt: '>',
+		lt: '<',
+		gte: '≥',
+		lte: '≤'
+	};
+
+	const VALUE_OPTIONAL_OPERATORS = new Set(['is_empty', 'is_not_empty']);
+	const COMMON_ATTRIBUTE_SUGGESTIONS = ['IFC Global Id', 'ObjectType', 'Name', 'Tag'] as const;
 
 	let {
 		filter,
@@ -81,7 +107,15 @@
 	});
 
 	function handleModeChange(mode: 'class' | 'attribute' | 'relation') {
-		onupdate({ mode, ifcClass: undefined, attribute: undefined, value: undefined, relation: undefined });
+		onupdate({
+			mode,
+			ifcClass: undefined,
+			attribute: undefined,
+			value: undefined,
+			relation: undefined,
+			operator: undefined,
+			valueType: undefined
+		});
 	}
 
 	function openClassDropdown() {
@@ -159,6 +193,136 @@
 
 	function getClassInputValue() {
 		return classDropdownOpen ? classQuery : selectedClassLabel;
+	}
+
+	// ---- Attribute combobox state ----
+
+	let attrQuery = $state('');
+	let attrDropdownOpen = $state(false);
+	let attrHighlightIndex = $state(0);
+	let attrComboboxEl = $state<HTMLDivElement | null>(null);
+	let attrInputEl = $state<HTMLInputElement | null>(null);
+	let attrClosedBySelection = $state(false);
+	let attrDropdownRect = $state<{ top: number; left: number; width: number } | null>(null);
+
+	function updateAttrDropdownPosition() {
+		if (attrInputEl) {
+			const r = attrInputEl.getBoundingClientRect();
+			attrDropdownRect = { top: r.bottom + 4, left: r.left, width: r.width };
+		} else {
+			attrDropdownRect = null;
+		}
+	}
+
+	$effect(() => {
+		if (!attrDropdownOpen) {
+			attrDropdownRect = null;
+			return;
+		}
+		updateAttrDropdownPosition();
+		let raf = 0;
+		function scheduleUpdate() {
+			if (raf) cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				updateAttrDropdownPosition();
+			});
+		}
+		tick().then(scheduleUpdate);
+		const onResize = () => scheduleUpdate();
+		const onScroll = () => scheduleUpdate();
+		window.addEventListener('resize', onResize);
+		window.addEventListener('scroll', onScroll, true);
+		return () => {
+			if (raf) cancelAnimationFrame(raf);
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('scroll', onScroll, true);
+		};
+	});
+
+	const selectedAttrLabel = $derived(filter.attribute ?? '');
+
+	const filteredAttrSuggestions = $derived.by(() => {
+		const q = attrQuery.trim().toLowerCase();
+		if (!q) return COMMON_ATTRIBUTE_SUGGESTIONS;
+		return COMMON_ATTRIBUTE_SUGGESTIONS.filter((attr) => attr.toLowerCase().includes(q));
+	});
+
+	function openAttrDropdown() {
+		attrDropdownOpen = true;
+		attrHighlightIndex = 0;
+	}
+
+	function closeAttrDropdown() {
+		attrDropdownOpen = false;
+		attrQuery = '';
+		attrHighlightIndex = 0;
+	}
+
+	function selectAttribute(name: string) {
+		attrClosedBySelection = true;
+		onupdate({ attribute: name });
+		closeAttrDropdown();
+	}
+
+	function onAttrInputFocus() {
+		attrQuery = filter.attribute ?? '';
+		openAttrDropdown();
+	}
+
+	function onAttrInputInput(e: Event) {
+		const next = (e.currentTarget as HTMLInputElement).value;
+		attrQuery = next;
+		attrHighlightIndex = 0;
+		onupdate({ attribute: next.trim() === '' ? undefined : next });
+		if (!attrDropdownOpen) attrDropdownOpen = true;
+	}
+
+	function onAttrInputKeydown(e: KeyboardEvent) {
+		if (!attrDropdownOpen) {
+			if (e.key === 'ArrowDown' || e.key === 'Enter') {
+				e.preventDefault();
+				openAttrDropdown();
+			}
+			return;
+		}
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closeAttrDropdown();
+			attrInputEl?.blur();
+			return;
+		}
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			attrHighlightIndex = Math.min(attrHighlightIndex + 1, filteredAttrSuggestions.length - 1);
+			return;
+		}
+		if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			attrHighlightIndex = Math.max(attrHighlightIndex - 1, 0);
+			return;
+		}
+		if (e.key === 'Enter') {
+			const entry = filteredAttrSuggestions[attrHighlightIndex];
+			if (entry) {
+				e.preventDefault();
+				selectAttribute(entry);
+			}
+		}
+	}
+
+	function onAttrComboboxBlur() {
+		const hadEmptyQuery = attrQuery.trim() === '';
+		const closedBySelection = attrClosedBySelection;
+		setTimeout(() => {
+			attrClosedBySelection = false;
+			closeAttrDropdown();
+			if (hadEmptyQuery && !closedBySelection) onupdate({ attribute: undefined });
+		}, 150);
+	}
+
+	function getAttrInputValue() {
+		return attrDropdownOpen ? attrQuery : selectedAttrLabel;
 	}
 
 	// ---- Relation combobox state ----
@@ -320,8 +484,17 @@
 		</button>
 	</div>
 
-	<div class="filter-fields">
+	<div class="filter-fields" class:filter-fields--attribute={filter.mode === 'attribute'}>
 		{#if filter.mode === 'class'}
+			<select
+				class="filter-select filter-select--op"
+				value={filter.operator ?? 'is'}
+				onchange={(e) => onupdate({ operator: e.currentTarget.value || undefined })}
+			>
+				{#each CLASS_OPERATORS as op}
+					<option value={op}>{OPERATOR_LABELS[op] ?? op}</option>
+				{/each}
+			</select>
 			<div
 				class="filter-combobox"
 				bind:this={classComboboxEl}
@@ -385,23 +558,99 @@
 				{/if}
 			</div>
 		{:else if filter.mode === 'attribute'}
-			<select
-				class="filter-select filter-select--attr"
-				value={filter.attribute ?? ''}
-				onchange={(e) => onupdate({ attribute: e.currentTarget.value || undefined })}
+			<div
+				class="filter-combobox filter-combobox--attr"
+				bind:this={attrComboboxEl}
+				onfocusout={onAttrComboboxBlur}
 			>
-				<option value="">Attribute…</option>
-				{#each FILTERABLE_ATTRIBUTES as attr}
-					<option value={attr}>{attr}</option>
+				<input
+					bind:this={attrInputEl}
+					class="filter-select filter-input-combo"
+					type="text"
+					autocomplete="off"
+					role="combobox"
+					aria-expanded={attrDropdownOpen}
+					aria-haspopup="listbox"
+					aria-controls="ifc-attr-listbox"
+					aria-activedescendant={attrDropdownOpen && filteredAttrSuggestions[attrHighlightIndex]
+						? `ifc-attr-option-${attrHighlightIndex}`
+						: undefined}
+					id="ifc-attr-combobox"
+					placeholder="Enter attribute here..."
+					value={getAttrInputValue()}
+					onfocus={onAttrInputFocus}
+					oninput={onAttrInputInput}
+					onkeydown={onAttrInputKeydown}
+				/>
+				{#if attrDropdownOpen}
+					<ul
+						id="ifc-attr-listbox"
+						class="filter-combobox-list filter-combobox-list--fixed"
+						role="listbox"
+						aria-label="Common attributes"
+						style={attrDropdownRect
+							? `top: ${attrDropdownRect.top}px; left: ${attrDropdownRect.left}px; width: ${attrDropdownRect.width}px;`
+							: ''}
+					>
+						{#each filteredAttrSuggestions as attr, i}
+							<li
+								id="ifc-attr-option-{i}"
+								role="option"
+								tabindex="-1"
+								aria-selected={i === attrHighlightIndex}
+								class="filter-combobox-option"
+								class:highlighted={i === attrHighlightIndex}
+								onmousedown={(e) => e.preventDefault()}
+								onclick={() => selectAttribute(attr)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										selectAttribute(attr);
+									}
+								}}
+							>
+								{attr}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+			<select
+				class="filter-select filter-select--value-type"
+				value={filter.valueType ?? 'string'}
+				onchange={(e) =>
+					onupdate({
+						valueType: (e.currentTarget.value as 'string' | 'numeric') || undefined,
+						operator: undefined
+					})}
+			>
+				<option value="string">String</option>
+				<option value="numeric">Numeric</option>
+			</select>
+			<select
+				class="filter-select filter-select--op"
+				value={
+					filter.valueType === 'numeric'
+						? (NUMERIC_OPERATORS.includes(filter.operator as (typeof NUMERIC_OPERATORS)[number])
+								? filter.operator
+								: 'equals')
+						: (filter.operator ?? 'contains')
+				}
+				onchange={(e) => onupdate({ operator: e.currentTarget.value || undefined })}
+			>
+				{#each (filter.valueType === 'numeric' ? NUMERIC_OPERATORS : STRING_OPERATORS) as op}
+					<option value={op}>{OPERATOR_LABELS[op] ?? op}</option>
 				{/each}
 			</select>
-			<input
-				class="filter-input"
-				type="text"
-				placeholder="Value…"
-				value={filter.value ?? ''}
-				oninput={(e) => onupdate({ value: e.currentTarget.value })}
-			/>
+			{#if !VALUE_OPTIONAL_OPERATORS.has(filter.operator ?? '')}
+				<input
+					class="filter-input"
+					type={filter.valueType === 'numeric' ? 'number' : 'text'}
+					placeholder="Value…"
+					value={filter.value ?? ''}
+					oninput={(e) => onupdate({ value: e.currentTarget.value })}
+				/>
+			{/if}
 		{:else if filter.mode === 'relation'}
 			<div
 				class="filter-combobox"
@@ -482,6 +731,14 @@
 
 <style>
 	.filter-row {
+		--control-height: 28px;
+		--control-padding-x: 0.45rem;
+		--control-padding-y: 0.25rem;
+		--control-font-size: 0.78rem;
+		--control-border: 1px solid rgba(255, 255, 255, 0.1);
+		--control-radius: 0.3rem;
+		--control-bg: rgba(255, 255, 255, 0.06);
+		--control-focus-border: rgba(255, 136, 102, 0.4);
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -490,18 +747,20 @@
 
 	.mode-toggle {
 		display: flex;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 0.3rem;
+		height: var(--control-height);
+		border: var(--control-border);
+		border-radius: var(--control-radius);
 		overflow: hidden;
 		flex-shrink: 0;
 	}
 
 	.mode-btn {
+		height: 100%;
 		background: rgba(255, 255, 255, 0.04);
 		border: none;
 		color: #888;
-		padding: 0.3rem 0.55rem;
-		font-size: 0.7rem;
+		padding: 0 var(--control-padding-x);
+		font-size: var(--control-font-size);
 		cursor: pointer;
 		transition:
 			background 0.15s,
@@ -531,17 +790,24 @@
 		min-width: 0;
 	}
 
+	/* Shared control base for select, input, combobox */
+	.filter-select,
+	.filter-input-combo,
+	.filter-input {
+		height: var(--control-height);
+		box-sizing: border-box;
+		background: var(--control-bg);
+		border: var(--control-border);
+		border-radius: var(--control-radius);
+		color: #ddd;
+		padding: var(--control-padding-y) var(--control-padding-x);
+		font-size: var(--control-font-size);
+		outline: none;
+	}
+
 	.filter-select,
 	.filter-input-combo {
 		width: 100%;
-		box-sizing: border-box;
-		background: rgba(255, 255, 255, 0.06);
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 0.3rem;
-		color: #ddd;
-		padding: 0.3rem 0.45rem;
-		font-size: 0.78rem;
-		outline: none;
 	}
 
 	.filter-input-combo {
@@ -549,14 +815,19 @@
 	}
 
 	.filter-select:focus,
-	.filter-input-combo:focus {
-		border-color: rgba(255, 136, 102, 0.4);
+	.filter-input-combo:focus,
+	.filter-input:focus {
+		border-color: var(--control-focus-border);
 	}
 
 	.filter-select option {
 		background: #1e1e30;
 		color: #ddd;
 		white-space: pre;
+	}
+
+	.filter-input::placeholder {
+		color: #555;
 	}
 
 	.filter-combobox-list {
@@ -571,7 +842,7 @@
 		list-style: none;
 		background: #1e1e30;
 		border: 1px solid rgba(255, 255, 255, 0.12);
-		border-radius: 0.3rem;
+		border-radius: var(--control-radius);
 		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 		z-index: 20;
 	}
@@ -586,7 +857,7 @@
 
 	.filter-combobox-option {
 		padding: 0.3rem 0.45rem;
-		font-size: 0.78rem;
+		font-size: var(--control-font-size);
 		color: #ddd;
 		cursor: pointer;
 		white-space: pre;
@@ -608,29 +879,29 @@
 		color: #666;
 	}
 
-	.filter-select--attr {
+	.filter-combobox--attr {
+		flex: 1.35;
+		min-width: 220px;
+	}
+
+	.filter-select--op {
 		flex: 0 0 auto;
-		width: 110px;
+		width: 120px;
+	}
+
+	.filter-select--value-type {
+		flex: 0 0 auto;
+		width: 80px;
 	}
 
 	.filter-input {
 		flex: 1;
 		min-width: 0;
-		background: rgba(255, 255, 255, 0.06);
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 0.3rem;
-		color: #ddd;
-		padding: 0.3rem 0.45rem;
-		font-size: 0.78rem;
-		outline: none;
 	}
 
-	.filter-input:focus {
-		border-color: rgba(255, 136, 102, 0.4);
-	}
-
-	.filter-input::placeholder {
-		color: #555;
+	.filter-fields--attribute .filter-input {
+		flex: 2;
+		min-width: 240px;
 	}
 
 	.remove-btn {

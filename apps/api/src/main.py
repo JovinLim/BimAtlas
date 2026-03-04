@@ -22,7 +22,9 @@ from .db import (
     close_pool,
     delete_ifc_schema_with_rules,
     fetch_branch,
+    fetch_applied_filter_sets,
     fetch_entities_at_revision,
+    fetch_entities_with_filter_sets,
     fetch_entity_attributes_for_global_ids,
     fetch_shape_reps_for_products,
     get_latest_revision_seq,
@@ -139,19 +141,32 @@ def _stream_ifc_products_generator(
             yield f"data: {json.dumps({'type': 'error', 'message': 'No revisions on this branch'})}\n\n"
             return
 
-    rows = fetch_entities_at_revision(
-        rev,
-        branch_id,
-        ifc_class=ifc_class,
-        ifc_classes=ifc_classes,
-        contained_in=contained_in,
-        name=name,
-        object_type=object_type,
-        tag=tag,
-        description=description,
-        global_id=global_id,
-        relation_types=relation_types,
-    )
+    applied = fetch_applied_filter_sets(branch_id)
+    if applied["filter_sets"]:
+        filter_sets_data = [
+            {"logic": fs.get("logic", "AND"), "filters": fs.get("filters", [])}
+            for fs in applied["filter_sets"]
+        ]
+        rows = fetch_entities_with_filter_sets(
+            rev,
+            branch_id,
+            filter_sets_data,
+            combination_logic=applied["combination_logic"],
+        )
+    else:
+        rows = fetch_entities_at_revision(
+            rev,
+            branch_id,
+            ifc_class=ifc_class,
+            ifc_classes=ifc_classes,
+            contained_in=contained_in,
+            name=name,
+            object_type=object_type,
+            tag=tag,
+            description=description,
+            global_id=global_id,
+            relation_types=relation_types,
+        )
 
     yield f"data: {json.dumps({'type': 'start', 'total': len(rows)})}\n\n"
 

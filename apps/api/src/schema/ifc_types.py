@@ -211,6 +211,8 @@ class FilterSetFilter:
     attribute: Optional[str] = None
     value: Optional[str] = None
     relation: Optional[str] = None
+    operator: Optional[str] = None  # e.g. is, contains, inherits_from, gt
+    value_type: Optional[str] = None  # "string" | "numeric" for attribute mode
 
 
 @strawberry.type
@@ -243,6 +245,8 @@ class FilterInput:
     attribute: Optional[str] = None
     value: Optional[str] = None
     relation: Optional[str] = None
+    operator: Optional[str] = None  # e.g. is, contains, inherits_from, gt
+    value_type: Optional[str] = None  # "string" | "numeric" for attribute mode
 
 
 # -- Sheet template types (FEAT-003 table page bottom-sheet persistence) --

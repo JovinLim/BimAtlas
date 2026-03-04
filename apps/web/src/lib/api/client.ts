@@ -359,6 +359,8 @@ const FILTER_SET_FIELDS = `
 		attribute
 		value
 		relation
+		operator
+		valueType
 	}
 	createdAt
 	updatedAt

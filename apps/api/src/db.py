@@ -938,6 +938,243 @@ def fetch_applied_filter_sets(branch_id: str) -> dict:
 # Entity filtering with structured filter sets
 # ---------------------------------------------------------------------------
 
+def _escape_ilike(value: str) -> str:
+    """Escape % and _ for safe use in ILIKE patterns."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _is_global_id_attribute(attr: str) -> bool:
+    """Return True when the requested attribute should map to e.ifc_global_id."""
+    compact = "".join(ch for ch in attr.lower() if ch.isalnum())
+    return compact in {"globalid", "ifcglobalid"}
+
+
+def _build_attribute_value_source(attr: str, params: list) -> str:
+    """Return a SQL subquery (text_value column) for all matching nested key values."""
+    if _is_global_id_attribute(attr):
+        return "(SELECT e.ifc_global_id::text AS text_value)"
+
+    params.append(attr)
+    return """
+    (
+        WITH RECURSIVE walk(node, key_name, key_value) AS (
+            SELECT e.attributes, NULL::text, NULL::jsonb
+            UNION ALL
+            SELECT child.value, child.key_name, child.value
+            FROM walk
+            JOIN LATERAL (
+                SELECT kv.key AS key_name, kv.value
+                FROM jsonb_each(
+                    CASE
+                        WHEN jsonb_typeof(walk.node) = 'object' THEN walk.node
+                        ELSE '{}'::jsonb
+                    END
+                ) AS kv
+                UNION ALL
+                SELECT NULL::text AS key_name, arr.value
+                FROM jsonb_array_elements(
+                    CASE
+                        WHEN jsonb_typeof(walk.node) = 'array' THEN walk.node
+                        ELSE '[]'::jsonb
+                    END
+                ) AS arr(value)
+            ) AS child ON TRUE
+        )
+        SELECT
+            CASE
+                WHEN jsonb_typeof(walk.key_value) IN ('string', 'number', 'boolean', 'null')
+                    THEN walk.key_value #>> '{}'
+                ELSE walk.key_value::text
+            END AS text_value
+        FROM walk
+        WHERE walk.key_name IS NOT NULL
+          AND lower(walk.key_name) = lower(%s)
+    )
+    """
+
+
+def _build_class_clause(f: dict, params: list) -> str | None:
+    """Build SQL for class mode: exact match or inherits_from (class + descendants)."""
+    from .schema.filter_operators import (
+        CLASS_OPERATORS,
+        resolve_operator,
+    )
+    from .schema.ifc_schema_loader import get_descendants
+
+    ifc_class = f.get("ifcClass") or f.get("ifc_class")
+    if not ifc_class:
+        return None
+    op = resolve_operator(f)
+    if op not in CLASS_OPERATORS:
+        op = "is"
+    if op == "inherits_from":
+        classes = get_descendants(ifc_class, include_self=True, concrete_only=True)
+        if not classes:
+            return "FALSE"
+        params.append(classes)
+        return "e.ifc_class = ANY(%s)"
+    if op == "is_not":
+        params.append(ifc_class)
+        return "e.ifc_class != %s"
+    # is (exact)
+    params.append(ifc_class)
+    return "e.ifc_class = %s"
+
+
+def _build_attribute_clause(f: dict, params: list) -> str | None:
+    """Build SQL for attribute mode across nested attributes JSONB keys."""
+    from .schema.filter_operators import (
+        NUMERIC_OPERATORS,
+        STRING_OPERATORS,
+        resolve_operator,
+        value_required_for_operator,
+    )
+
+    attr = f.get("attribute")
+    if not attr:
+        return None
+    op = resolve_operator(f)
+    value = f.get("value")
+    value_type = (f.get("valueType") or f.get("value_type") or "string").lower()
+
+    needs_value = value_required_for_operator(op)
+    if needs_value and (value is None or (isinstance(value, str) and value.strip() == "")):
+        return None
+
+    attr = str(attr).strip()
+    if not attr:
+        return None
+    source_sql = _build_attribute_value_source(attr, params)
+
+    # Numeric operators
+    if value_type == "numeric" and op in NUMERIC_OPERATORS:
+        try:
+            num_val = float(value) if value else None
+        except (TypeError, ValueError):
+            return None
+        if num_val is None:
+            return None
+        # Safe numeric comparison: only compare when DB value parses as number.
+        # Applicability: key must exist somewhere in attributes.
+        num_regex = r"^-?[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?$"
+        numeric_exists = (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value ~ '{num_regex}')"
+        )
+        if op == "equals":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric = %s))"
+            )
+        if op == "not_equals":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric = %s))"
+            )
+        if op == "gt":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric > %s))"
+            )
+        if op == "lt":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric < %s))"
+            )
+        if op == "gte":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric >= %s))"
+            )
+        if op == "lte":
+            params.append(num_val)
+            return (
+                f"({numeric_exists} AND EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+                f"WHERE attr_values.text_value ~ '{num_regex}' "
+                f"AND (attr_values.text_value)::numeric <= %s))"
+            )
+
+    # String operators (default)
+    if op not in STRING_OPERATORS:
+        op = "contains"
+
+    if op == "is_empty":
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NULL OR attr_values.text_value = '')"
+        )
+    if op == "is_not_empty":
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value != '')"
+        )
+
+    if not value:
+        return None
+
+    if op == "is":
+        params.append(_escape_ilike(str(value)))
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
+        )
+    if op == "is_not":
+        params.append(_escape_ilike(str(value)))
+        return (
+            f"(EXISTS (SELECT 1 FROM {source_sql} AS attr_values) "
+            f"AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s))"
+        )
+    if op == "contains":
+        params.append(f"%{_escape_ilike(str(value))}%")
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
+        )
+    if op == "not_contains":
+        params.append(f"%{_escape_ilike(str(value))}%")
+        return (
+            f"(EXISTS (SELECT 1 FROM {source_sql} AS attr_values) "
+            f"AND NOT EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s))"
+        )
+    if op == "starts_with":
+        params.append(f"{_escape_ilike(str(value))}%")
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
+        )
+    if op == "ends_with":
+        params.append(f"%{_escape_ilike(str(value))}")
+        return (
+            f"EXISTS (SELECT 1 FROM {source_sql} AS attr_values "
+            f"WHERE attr_values.text_value IS NOT NULL AND attr_values.text_value ILIKE %s)"
+        )
+
+    return None
+
+
+def _build_relation_clause(f: dict, params: list, rev: int, branch_id: str) -> str | None:
+    """Build SQL for relation mode (AGE-resolved GID set)."""
+    relation = f.get("relation")
+    if not relation or not rev or not branch_id:
+        return None
+    gids = _resolve_relation_gids([relation], rev, branch_id)
+    if not gids:
+        return "FALSE"
+    params.append(gids)
+    return "e.ifc_global_id = ANY(%s)"
+
 
 def _build_filter_clause(
     f: dict, params: list, rev: int = 0, branch_id: str = "",
@@ -948,38 +1185,13 @@ def _build_filter_clause(
     ``->>`` operator, except ``globalId`` which maps to the ``ifc_global_id``
     column directly.  Class filters target ``ifc_class``.
     """
-    mode = f.get("mode")
+    mode = f.get("mode") or "class"
     if mode == "class":
-        ifc_class = f.get("ifcClass") or f.get("ifc_class")
-        if ifc_class:
-            params.append(ifc_class)
-            return "e.ifc_class = %s"
-    elif mode == "attribute":
-        attr = f.get("attribute")
-        value = f.get("value")
-        if not attr or not value:
-            return None
-        if attr == "globalId":
-            params.append(f"%{value}%")
-            return "e.ifc_global_id ILIKE %s"
-        jsonb_key_map = {
-            "name": "Name",
-            "objectType": "ObjectType",
-            "tag": "Tag",
-            "description": "Description",
-        }
-        jsonb_key = jsonb_key_map.get(attr)
-        if jsonb_key:
-            params.append(f"%{value}%")
-            return f"e.attributes->>'{jsonb_key}' ILIKE %s"
-    elif mode == "relation":
-        relation = f.get("relation")
-        if relation and rev and branch_id:
-            gids = _resolve_relation_gids([relation], rev, branch_id)
-            if gids:
-                params.append(gids)
-                return "e.ifc_global_id = ANY(%s)"
-            return "FALSE"
+        return _build_class_clause(f, params)
+    if mode == "attribute":
+        return _build_attribute_clause(f, params)
+    if mode == "relation":
+        return _build_relation_clause(f, params, rev, branch_id)
     return None
 
 
@@ -996,12 +1208,14 @@ def fetch_entities_with_filter_sets(
     joined by the set's ``logic``; the resulting groups are joined by
     *combination_logic*.
     """
+    from .schema.filter_operators import normalize_logic
+
     base_clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
     group_sqls: list[str] = []
     for fs in filter_sets_data:
-        fs_logic = fs.get("logic", "AND")
+        fs_logic = normalize_logic(fs.get("logic"))
         filter_clauses: list[str] = []
         for f in fs.get("filters", []):
             clause = _build_filter_clause(f, params, rev=rev, branch_id=branch_id)
@@ -1012,7 +1226,7 @@ def fetch_entities_with_filter_sets(
             group_sqls.append(f"({joiner.join(filter_clauses)})")
 
     if group_sqls:
-        set_joiner = f" {combination_logic} "
+        set_joiner = f" {normalize_logic(combination_logic)} "
         base_clauses.append(f"({set_joiner.join(group_sqls)})")
 
     where = " AND ".join(base_clauses)

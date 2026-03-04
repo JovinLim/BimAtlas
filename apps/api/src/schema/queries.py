@@ -40,6 +40,7 @@ from ..db import (
     fetch_distinct_ifc_classes_at_revision,
     fetch_entity_at_revision,
     fetch_entities_at_revision,
+    fetch_entities_with_filter_sets,
     fetch_project,
     fetch_projects,
     fetch_revision_diff,
@@ -356,6 +357,8 @@ def _row_to_filter_set(row: dict) -> FilterSet:
                 attribute=f.get("attribute"),
                 value=f.get("value"),
                 relation=f.get("relation"),
+                operator=f.get("operator") or f.get("op"),
+                value_type=f.get("valueType") or f.get("value_type"),
             )
             for f in filters_data
         ],
@@ -479,20 +482,40 @@ class Query:
         global_id: Optional[str] = None,
         revision: Optional[int] = None,
     ) -> list[IfcProduct]:
-        """List products visible at a revision on a branch, optionally filtered."""
+        """List products visible at a revision on a branch, optionally filtered.
+
+        When the branch has applied filter sets, those are used (multi-operator
+        engine). Otherwise direct filter args are used.
+        """
         rev = _resolve_revision(branch_id, revision)
-        rows = fetch_entities_at_revision(
-            rev,
-            branch_id,
-            ifc_class=ifc_class,
-            ifc_classes=ifc_classes,
-            contained_in=contained_in,
-            name=name,
-            object_type=object_type,
-            tag=tag,
-            description=description,
-            global_id=global_id,
-        )
+        applied = fetch_applied_filter_sets(branch_id)
+        if applied["filter_sets"]:
+            filter_sets_data = [
+                {
+                    "logic": fs.get("logic", "AND"),
+                    "filters": fs.get("filters", []),
+                }
+                for fs in applied["filter_sets"]
+            ]
+            rows = fetch_entities_with_filter_sets(
+                rev,
+                branch_id,
+                filter_sets_data,
+                combination_logic=applied["combination_logic"],
+            )
+        else:
+            rows = fetch_entities_at_revision(
+                rev,
+                branch_id,
+                ifc_class=ifc_class,
+                ifc_classes=ifc_classes,
+                contained_in=contained_in,
+                name=name,
+                object_type=object_type,
+                tag=tag,
+                description=description,
+                global_id=global_id,
+            )
         return [_row_to_product(r, rev, branch_id) for r in rows]
 
     @strawberry.field
@@ -791,6 +814,8 @@ class Mutation:
                 "attribute": f.attribute,
                 "value": f.value,
                 "relation": f.relation,
+                "operator": f.operator,
+                "valueType": f.value_type,
             }
             for f in filters
         ]
@@ -814,6 +839,8 @@ class Mutation:
                     "attribute": f.attribute,
                     "value": f.value,
                     "relation": f.relation,
+                    "operator": f.operator,
+                    "valueType": f.value_type,
                 }
                 for f in filters
             ]

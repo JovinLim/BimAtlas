@@ -15,6 +15,35 @@ export interface ProductMeta {
 	attributes?: Record<string, unknown> | null;
 }
 
+/** String operators for attribute mode. */
+export const STRING_OPERATORS = [
+	'is',
+	'is_not',
+	'contains',
+	'not_contains',
+	'starts_with',
+	'ends_with',
+	'is_empty',
+	'is_not_empty'
+] as const;
+
+/** Numeric operators for attribute mode (valueType: numeric). */
+export const NUMERIC_OPERATORS = [
+	'equals',
+	'not_equals',
+	'gt',
+	'lt',
+	'gte',
+	'lte'
+] as const;
+
+/** Class mode operators. */
+export const CLASS_OPERATORS = ['is', 'is_not', 'inherits_from'] as const;
+
+export type StringOperator = (typeof STRING_OPERATORS)[number];
+export type NumericOperator = (typeof NUMERIC_OPERATORS)[number];
+export type ClassOperator = (typeof CLASS_OPERATORS)[number];
+
 export interface SearchFilter {
 	id: string;
 	mode: 'class' | 'attribute' | 'relation';
@@ -22,6 +51,8 @@ export interface SearchFilter {
 	attribute?: string;
 	value?: string;
 	relation?: string;
+	operator?: string;
+	valueType?: 'string' | 'numeric';
 }
 
 export const FILTERABLE_ATTRIBUTES = [
@@ -29,7 +60,8 @@ export const FILTERABLE_ATTRIBUTES = [
 	'name',
 	'objectType',
 	'tag',
-	'description'
+	'description',
+	'height'
 ] as const;
 
 export type FilterableAttribute = (typeof FILTERABLE_ATTRIBUTES)[number];
