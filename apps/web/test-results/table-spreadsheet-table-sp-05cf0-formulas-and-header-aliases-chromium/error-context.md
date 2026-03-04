@@ -1,0 +1,216 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "Table" [level=2] [ref=e5]
+    - generic [ref=e6]: Fixture data
+  - generic "Formula bar" [ref=e7]:
+    - generic [ref=e8]: —
+    - textbox "Enter value or formula (e.g. =D2+E2, =SUM(D2:D4), =ENTITY.PropertySets.PsetWallCommon)" [disabled] [ref=e10]
+    - button "Undo" [disabled] [ref=e11]
+    - button "Redo" [disabled] [ref=e12]
+    - button "View full cell contents" [disabled] [ref=e13]: View full
+  - generic [ref=e14]:
+    - region "IFC entities" [ref=e15]:
+      - generic [ref=e16]:
+        - paragraph [ref=e17]: "Total entities: 5"
+        - button "Find selected element in viewer" [disabled] [ref=e18] [cursor=pointer]: Find selected element
+        - button "Unlock all rows" [ref=e19] [cursor=pointer]: Unlock all
+        - button "Add custom column" [ref=e20] [cursor=pointer]: Add column
+        - button "Open formula guide" [active] [ref=e21] [cursor=pointer]: Formula guide
+      - generic [ref=e23]:
+        - generic "Entity lock controls" [ref=e24]:
+          - generic [ref=e26]: LOCK
+          - button "Unlock row" [ref=e27] [cursor=pointer]:
+            - img [ref=e28]
+          - button "Unlock row" [ref=e31] [cursor=pointer]:
+            - img [ref=e32]
+          - button "Unlock row" [ref=e35] [cursor=pointer]:
+            - img [ref=e36]
+          - button "Unlock row" [ref=e39] [cursor=pointer]:
+            - img [ref=e40]
+          - button "Unlock row" [ref=e43] [cursor=pointer]:
+            - img [ref=e44]
+        - grid "IFC entities" [ref=e47]:
+          - rowgroup [ref=e57]:
+            - row "A Resize column A B Resize column B C Resize column C D Resize column D E Resize column E F Resize column F" [ref=e58]:
+              - columnheader [ref=e59]
+              - columnheader "A Resize column A" [ref=e60]:
+                - text: A
+                - button "Resize column A" [ref=e61]
+              - columnheader "B Resize column B" [ref=e62]:
+                - text: B
+                - button "Resize column B" [ref=e63]
+              - columnheader "C Resize column C" [ref=e64]:
+                - text: C
+                - button "Resize column C" [ref=e65]
+              - columnheader "D Resize column D" [ref=e66]:
+                - text: D
+                - button "Resize column D" [ref=e67]
+              - columnheader "E Resize column E" [ref=e68]:
+                - text: E
+                - button "Resize column E" [ref=e69]
+              - columnheader "F Resize column F" [ref=e70]:
+                - text: F
+                - button "Resize column F" [ref=e71]
+              - columnheader [ref=e72]
+            - row "1 Global ID Sort column Resize column A IFC CLASS Sort column Resize column B Name Sort column Resize column C Description Sort column Resize column D Object Type Sort column Resize column E Tag Sort column Resize column F Add custom column" [ref=e73]:
+              - rowheader "1" [ref=e74]
+              - columnheader "Global ID Sort column Resize column A" [ref=e75]:
+                - generic [ref=e76]:
+                  - generic [ref=e77]: Global ID
+                  - button "Sort column" [ref=e78] [cursor=pointer]:
+                    - img [ref=e79]
+                - button "Resize column A" [ref=e81]
+              - columnheader "IFC CLASS Sort column Resize column B" [ref=e82]:
+                - generic [ref=e83]:
+                  - generic [ref=e84]: IFC CLASS
+                  - button "Sort column" [ref=e85] [cursor=pointer]:
+                    - img [ref=e86]
+                - button "Resize column B" [ref=e88]
+              - columnheader "Name Sort column Resize column C" [ref=e89]:
+                - generic [ref=e90]:
+                  - generic [ref=e91]: Name
+                  - button "Sort column" [ref=e92] [cursor=pointer]:
+                    - img [ref=e93]
+                - button "Resize column C" [ref=e95]
+              - columnheader "Description Sort column Resize column D" [ref=e96]:
+                - generic [ref=e97]:
+                  - generic [ref=e98]: Description
+                  - button "Sort column" [ref=e99] [cursor=pointer]:
+                    - img [ref=e100]
+                - button "Resize column D" [ref=e102]
+              - columnheader "Object Type Sort column Resize column E" [ref=e103]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]: Object Type
+                  - button "Sort column" [ref=e106] [cursor=pointer]:
+                    - img [ref=e107]
+                - button "Resize column E" [ref=e109]
+              - columnheader "Tag Sort column Resize column F" [ref=e110]:
+                - generic [ref=e111]:
+                  - generic [ref=e112]: Tag
+                  - button "Sort column" [ref=e113] [cursor=pointer]:
+                    - img [ref=e114]
+                - button "Resize column F" [ref=e116]
+              - columnheader "Add custom column" [ref=e117]:
+                - button "Add custom column" [ref=e118] [cursor=pointer]: + Column
+          - rowgroup [ref=e119]:
+            - row "2 4Q4Ht$v6Z9Bh0PQ4N5dSrG IfcColumn Column-A1 Column C-01" [ref=e120]:
+              - rowheader "2" [ref=e121]
+              - gridcell "4Q4Ht$v6Z9Bh0PQ4N5dSrG" [ref=e122]:
+                - textbox [ref=e123]: 4Q4Ht$v6Z9Bh0PQ4N5dSrG
+              - gridcell "IfcColumn" [ref=e124]:
+                - textbox [ref=e125]: IfcColumn
+              - gridcell "Column-A1" [ref=e126]:
+                - textbox [ref=e127]: Column-A1
+              - gridcell [ref=e128]:
+                - textbox [ref=e129]
+              - gridcell "Column" [ref=e130]:
+                - textbox [ref=e131]: Column
+              - gridcell "C-01" [ref=e132]:
+                - textbox [ref=e133]: C-01
+              - gridcell [ref=e134]
+            - row "3 6S6Jv$x8B1Dj2RS6P7fUtI IfcDoor Door-Main Main entrance Door D-01" [ref=e135]:
+              - rowheader "3" [ref=e136]
+              - gridcell "6S6Jv$x8B1Dj2RS6P7fUtI" [ref=e137]:
+                - textbox [ref=e138]: 6S6Jv$x8B1Dj2RS6P7fUtI
+              - gridcell "IfcDoor" [ref=e139]:
+                - textbox [ref=e140]: IfcDoor
+              - gridcell "Door-Main" [ref=e141]:
+                - textbox [ref=e142]: Door-Main
+              - gridcell "Main entrance" [ref=e143]:
+                - textbox [ref=e144]: Main entrance
+              - gridcell "Door" [ref=e145]:
+                - textbox [ref=e146]: Door
+              - gridcell "D-01" [ref=e147]:
+                - textbox [ref=e148]: D-01
+              - gridcell [ref=e149]
+            - row "4 3P3Gs$u5Y8Ag9OP3M4cRqF IfcSlab Slab-Ground Ground floor slab Slab S-01" [ref=e150]:
+              - rowheader "4" [ref=e151]
+              - gridcell "3P3Gs$u5Y8Ag9OP3M4cRqF" [ref=e152]:
+                - textbox [ref=e153]: 3P3Gs$u5Y8Ag9OP3M4cRqF
+              - gridcell "IfcSlab" [ref=e154]:
+                - textbox [ref=e155]: IfcSlab
+              - gridcell "Slab-Ground" [ref=e156]:
+                - textbox [ref=e157]: Slab-Ground
+              - gridcell "Ground floor slab" [ref=e158]:
+                - textbox [ref=e159]: Ground floor slab
+              - gridcell "Slab" [ref=e160]:
+                - textbox [ref=e161]: Slab
+              - gridcell "S-01" [ref=e162]:
+                - textbox [ref=e163]: S-01
+              - gridcell [ref=e164]
+            - row "5 2O2Fr$t4X7Zf8NO2L3bQpE IfcWall Wall-001 Exterior wall segment Wall W-01" [ref=e165]:
+              - rowheader "5" [ref=e166]
+              - gridcell "2O2Fr$t4X7Zf8NO2L3bQpE" [ref=e167]:
+                - textbox [ref=e168]: 2O2Fr$t4X7Zf8NO2L3bQpE
+              - gridcell "IfcWall" [ref=e169]:
+                - textbox [ref=e170]: IfcWall
+              - gridcell "Wall-001" [ref=e171]:
+                - textbox [ref=e172]: Wall-001
+              - gridcell "Exterior wall segment" [ref=e173]:
+                - textbox [ref=e174]: Exterior wall segment
+              - gridcell "Wall" [ref=e175]:
+                - textbox [ref=e176]: Wall
+              - gridcell "W-01" [ref=e177]:
+                - textbox [ref=e178]: W-01
+              - gridcell [ref=e179]
+            - row "6 5R5Iu$w7A0Ci1QR5O6eTsH IfcWall Wall-002 Internal partition Partition W-02" [ref=e180]:
+              - rowheader "6" [ref=e181]
+              - gridcell "5R5Iu$w7A0Ci1QR5O6eTsH" [ref=e182]:
+                - textbox [ref=e183]: 5R5Iu$w7A0Ci1QR5O6eTsH
+              - gridcell "IfcWall" [ref=e184]:
+                - textbox [ref=e185]: IfcWall
+              - gridcell "Wall-002" [ref=e186]:
+                - textbox [ref=e187]: Wall-002
+              - gridcell "Internal partition" [ref=e188]:
+                - textbox [ref=e189]: Internal partition
+              - gridcell "Partition" [ref=e190]:
+                - textbox [ref=e191]: Partition
+              - gridcell "W-02" [ref=e192]:
+                - textbox [ref=e193]: W-02
+              - gridcell [ref=e194]
+    - separator "Resize top and bottom sections" [ref=e195]
+    - region "Sheet interactions" [ref=e196]:
+      - generic [ref=e197]:
+        - button "+ Add row" [ref=e199] [cursor=pointer]
+        - generic [ref=e201]:
+          - generic "Sheet row actions" [ref=e202]:
+            - generic [ref=e203]: LOCK
+          - grid "Sheet interactions" [ref=e204]:
+            - rowgroup [ref=e213]:
+              - row "A B C D E F" [ref=e214]:
+                - columnheader [ref=e215]
+                - columnheader "A" [ref=e216]
+                - columnheader "B" [ref=e217]
+                - columnheader "C" [ref=e218]
+                - columnheader "D" [ref=e219]
+                - columnheader "E" [ref=e220]
+                - columnheader "F" [ref=e221]
+            - rowgroup
+      - generic [ref=e222]:
+        - button "Switch to Sheet 1" [ref=e223] [cursor=pointer]: Sheet 1
+        - button "Add sheet" [ref=e224] [cursor=pointer]: + Sheet
+  - dialog "Formula guide" [ref=e225]:
+    - generic [ref=e226]:
+      - heading "Formula guide" [level=2] [ref=e227]
+      - button "Close formula guide" [ref=e228] [cursor=pointer]: ×
+    - generic [ref=e229]:
+      - region "SUM" [ref=e230]:
+        - heading "SUM" [level=3] [ref=e231]
+        - paragraph [ref=e232]: SUM(start:end)
+        - paragraph [ref=e233]: Sum a range of cells (e.g. =SUM(D2:D4))
+      - region "AVERAGE" [ref=e234]:
+        - heading "AVERAGE" [level=3] [ref=e235]
+        - paragraph [ref=e236]: AVERAGE(start:end)
+        - paragraph [ref=e237]: Average of numeric cells in a range; skips empty/non-numeric (e.g. =AVERAGE(D2:D4))
+      - region "ENTITY" [ref=e238]:
+        - heading "ENTITY" [level=3] [ref=e239]
+        - paragraph [ref=e240]: =ENTITY.Attribute
+        - paragraph [ref=e241]: Top header columns can pull an IFC entity attribute for every row.
+      - region "HEADER_ALIAS" [ref=e242]:
+        - heading "HEADER_ALIAS" [level=3] [ref=e243]
+        - paragraph [ref=e244]: "[Display Text](Formula)"
+        - paragraph [ref=e245]: "Top header-only alias syntax: show custom label while evaluating another formula."
+```

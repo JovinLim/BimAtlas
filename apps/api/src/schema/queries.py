@@ -26,6 +26,7 @@ from ..db import (
     create_branch,
     create_filter_set as db_create_filter_set,
     create_project,
+    create_sheet_template as db_create_sheet_template,
     delete_branch as db_delete_branch,
     delete_filter_set as db_delete_filter_set,
     delete_project as db_delete_project,
@@ -45,9 +46,13 @@ from ..db import (
     fetch_revisions_filtered,
     fetch_shape_representations_for_product,
     fetch_shape_reps_for_products,
+    fetch_sheet_template,
+    fetch_sheet_templates_for_project,
+    fetch_sheet_templates_opened,
     fetch_spatial_container,
     get_latest_revision_seq,
     search_filter_sets,
+    search_sheet_templates,
     update_filter_set as db_update_filter_set,
 )
 from ..services.graph.age_client import build_spatial_tree, get_element_relations, get_relations
@@ -60,6 +65,7 @@ from .ifc_types import (
     FilterInput,
     FilterSet,
     FilterSetFilter,
+    SheetTemplate,
     IfcMeshRepresentation,
     IfcProduct,
     IfcProductClassNode,
@@ -351,6 +357,22 @@ def _row_to_filter_set(row: dict) -> FilterSet:
             )
             for f in filters_data
         ],
+        created_at=_to_iso(row["created_at"]),
+        updated_at=_to_iso(row["updated_at"]),
+    )
+
+
+def _row_to_sheet_template(row: dict) -> SheetTemplate:
+    """Convert a db row dict into a :class:`SheetTemplate` GraphQL type."""
+    sheet = row.get("sheet") or {}
+    if isinstance(sheet, str):
+        sheet = json.loads(sheet) if sheet else {}
+    return SheetTemplate(
+        id=row["sheet_template_id"],
+        project_id=row["project_id"],
+        name=row["name"],
+        sheet=sheet,
+        open=row.get("open", False),
         created_at=_to_iso(row["created_at"]),
         updated_at=_to_iso(row["updated_at"]),
     )
@@ -664,6 +686,36 @@ class Query:
             combination_logic=data["combination_logic"],
         )
 
+    # ---- Sheet template queries --------------------------------------------
+
+    @strawberry.field
+    async def sheet_templates(self, project_id: str) -> list[SheetTemplate]:
+        """List all sheet templates for a project."""
+        rows = fetch_sheet_templates_for_project(project_id)
+        return [_row_to_sheet_template(r) for r in rows]
+
+    @strawberry.field
+    async def opened_sheet_templates(self, project_id: str) -> list[SheetTemplate]:
+        """List sheet templates with open=True for a project (for initial load)."""
+        rows = fetch_sheet_templates_opened(project_id)
+        return [_row_to_sheet_template(r) for r in rows]
+
+    @strawberry.field
+    async def search_sheet_templates(
+        self,
+        query: str,
+        project_id: str,
+    ) -> list[SheetTemplate]:
+        """Search sheet templates by name within a project."""
+        rows = search_sheet_templates(query, project_id)
+        return [_row_to_sheet_template(r) for r in rows]
+
+    @strawberry.field
+    async def sheet_template(self, id: str) -> Optional[SheetTemplate]:
+        """Fetch a single sheet template by id."""
+        row = fetch_sheet_template(id)
+        return _row_to_sheet_template(row) if row else None
+
 
 # ---------------------------------------------------------------------------
 # Mutations
@@ -788,3 +840,17 @@ class Mutation:
             filter_sets=[_row_to_filter_set(fs) for fs in data["filter_sets"]],
             combination_logic=data["combination_logic"],
         )
+
+    # ---- Sheet template mutations -----------------------------------------
+
+    @strawberry.mutation
+    async def create_sheet_template(
+        self,
+        project_id: str,
+        name: str,
+        sheet: strawberry.scalars.JSON,
+    ) -> SheetTemplate:
+        """Create a new sheet template for a project. Name is required."""
+        sheet_dict = sheet if isinstance(sheet, dict) else {}
+        row = db_create_sheet_template(project_id, name, sheet_dict)
+        return _row_to_sheet_template(row)

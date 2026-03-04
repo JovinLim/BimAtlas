@@ -23,7 +23,7 @@
   $effect(closeContextMenuOnOutsideClick);
 
   type Props = {
-    entries?: SheetEntry[];
+    entries: SheetEntry[];
     rowStart?: number;
     /** Column widths from the top grid’s calculated (rendered) widths; bottom sheet follows these only. */
     getColumnWidthPx: (col: string) => number;
@@ -49,10 +49,18 @@
     ) => boolean | void;
     onCellPointerEnter: (cell: SpreadsheetCellState, event: MouseEvent) => void;
     onCellPointerUp: (cell: SpreadsheetCellState, event: MouseEvent) => void;
+    /** Template save/load (optional). When projectId is set, toolbar shows template controls. */
+    projectId?: string | null;
+    templateSearchQuery?: string;
+    onTemplateSearchChange?: (query: string) => void;
+    templateResults?: { id: string; name: string }[];
+    loadingTemplates?: boolean;
+    onLoadTemplate?: (template: { id: string; name: string }) => void;
+    onSaveTemplate?: () => void;
   };
 
   let {
-    entries = $bindable([]),
+    entries,
     rowStart = 2,
     getColumnWidthPx,
     onEntriesChange,
@@ -70,7 +78,17 @@
     onCellPointerDown,
     onCellPointerEnter,
     onCellPointerUp,
+    projectId = null,
+    templateSearchQuery = "",
+    onTemplateSearchChange,
+    templateResults = [],
+    loadingTemplates = false,
+    onLoadTemplate,
+    onSaveTemplate,
   }: Props = $props();
+
+  let templateSearchFocused = $state(false);
+  let templateDropdownRef = $state<HTMLDivElement | null>(null);
 
   function newEntry(): SheetEntry {
     const id = crypto.randomUUID?.() ?? `sheet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -78,8 +96,7 @@
   }
 
   function addEntry() {
-    entries = [...entries, newEntry()];
-    onEntriesChange?.(entries);
+    onEntriesChange?.([...entries, newEntry()]);
   }
 
   let contextMenu = $state<{ x: number; y: number; rowIndex: number } | null>(null);
@@ -87,22 +104,19 @@
   function addRowAbove(rowIndex: number) {
     const idx = rowIndex;
     const entry = newEntry();
-    entries = [...entries.slice(0, idx), entry, ...entries.slice(idx)];
-    onEntriesChange?.(entries);
+    onEntriesChange?.([...entries.slice(0, idx), entry, ...entries.slice(idx)]);
     contextMenu = null;
   }
 
   function addRowBelow(rowIndex: number) {
     const idx = rowIndex + 1;
     const entry = newEntry();
-    entries = [...entries.slice(0, idx), entry, ...entries.slice(idx)];
-    onEntriesChange?.(entries);
+    onEntriesChange?.([...entries.slice(0, idx), entry, ...entries.slice(idx)]);
     contextMenu = null;
   }
 
   function deleteRow(rowIndex: number) {
-    entries = entries.filter((_, i) => i !== rowIndex);
-    onEntriesChange?.(entries);
+    onEntriesChange?.(entries.filter((_, i) => i !== rowIndex));
     contextMenu = null;
   }
 
@@ -189,6 +203,53 @@
 <div class="bottom-sheet">
   <div class="sheet-toolbar">
     <button type="button" class="sheet-add-btn" onclick={addEntry}>+ Add row</button>
+    {#if projectId}
+      <button
+        type="button"
+        class="sheet-save-btn"
+        onclick={onSaveTemplate}
+        disabled={!onSaveTemplate}
+        aria-label="Save as template"
+      >
+        Save template
+      </button>
+      <div class="template-search-wrap">
+        <input
+          type="text"
+          class="template-search-input"
+          placeholder="Search templates..."
+          value={templateSearchQuery}
+          oninput={(e) => onTemplateSearchChange?.(e.currentTarget.value)}
+          onfocus={() => (templateSearchFocused = true)}
+          onblur={() => setTimeout(() => (templateSearchFocused = false), 150)}
+          aria-label="Search sheet templates"
+        />
+        {#if templateSearchFocused || (templateSearchQuery && templateResults.length > 0)}
+          <div class="template-dropdown" bind:this={templateDropdownRef} role="listbox">
+            {#if loadingTemplates}
+              <div class="template-dropdown-item muted">Loading...</div>
+            {:else if templateResults.length === 0 && templateSearchQuery}
+              <div class="template-dropdown-item muted">No templates found</div>
+            {:else}
+              {#each templateResults as t (t.id)}
+                <button
+                  type="button"
+                  class="template-dropdown-item"
+                  role="option"
+                  aria-selected="false"
+                  onmousedown={(e) => {
+                    e.preventDefault();
+                    onLoadTemplate?.(t);
+                  }}
+                >
+                  {t.name}
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
   <div class="sheet-table-wrap">
     <div class="sheet-grid-content">
@@ -446,9 +507,19 @@
 
 <style>
   .bottom-sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; max-width: 100%; overflow: hidden; }
-  .sheet-toolbar { flex-shrink: 0; padding: 0.35rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
+  .sheet-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.35rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
   .sheet-add-btn { padding: 0.3rem 0.6rem; font-size: 0.78rem; background: rgba(255,136,102,0.15); border: 1px solid rgba(255,136,102,0.35); border-radius: 0.3rem; color: #ff8866; cursor: pointer; }
   .sheet-add-btn:hover { background: rgba(255,136,102,0.25); }
+  .sheet-save-btn { padding: 0.3rem 0.6rem; font-size: 0.78rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 0.3rem; color: #b0b0c0; cursor: pointer; }
+  .sheet-save-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: #e0e0f0; }
+  .sheet-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .template-search-wrap { position: relative; min-width: 10rem; width: 12rem; }
+  .template-search-input { width: 100%; box-sizing: border-box; padding: 0.25rem 0.5rem; font-size: 0.78rem; border-radius: 0.25rem; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: #e0e0f0; }
+  .template-search-input::placeholder { color: #888; }
+  .template-dropdown { position: absolute; top: 100%; left: 0; width: 100%; box-sizing: border-box; margin-top: 0.15rem; padding: 0.25rem 0; max-height: 12rem; overflow-y: auto; border-radius: 0.3rem; border: 1px solid rgba(255,255,255,0.18); background: #252538; box-shadow: 0 4px 12px rgba(0,0,0,0.35); z-index: 100; }
+  .template-dropdown-item { display: block; width: 100%; padding: 0.35rem 0.6rem; font-size: 0.8rem; text-align: left; border: none; background: transparent; color: #e0e0f0; cursor: pointer; }
+  .template-dropdown-item:hover { background: rgba(255,136,102,0.15); color: #ffd8cf; }
+  .template-dropdown-item.muted { color: #888; cursor: default; }
 
   .sheet-table-wrap { flex: 1; min-height: 0; width: 100%; max-width: 100%; overflow: auto; }
   .sheet-grid-content { display: grid; grid-template-columns: var(--lock-rail-width, 3rem) minmax(0, 1fr); width: max-content; min-width: 100%; }

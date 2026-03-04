@@ -133,6 +133,21 @@ Note: 'Junction table tracking which filter sets are currently active on a branc
 }
 
 // -----------------------------------------------------------------------------
+// SHEET TEMPLATES (FEAT-003 table page bottom-sheet persistence)
+// -----------------------------------------------------------------------------
+
+Table sheet_template {
+sheet_template_id UUID [pk]
+project_id UUID [note: "Project this template belongs to"]
+name varchar [note: "Required display name; unique per project"]
+sheet jsonb [note: "Active-sheet payload: entries, formulas, lockedIds"]
+open boolean [note: "Whether this template is open"]
+created_at timestamp
+updated_at timestamp
+Note: 'Project-scoped bottom-sheet table state for /table page save/load'
+}
+
+// -----------------------------------------------------------------------------
 // MERGE REQUESTS & CONFLICT RESOLUTION
 // -----------------------------------------------------------------------------
 
@@ -178,6 +193,8 @@ Ref: ifc_entity.obsoleted_in_revision_id > revision.revision_id
 Ref: filter_sets.branch_id > branch.branch_id
 Ref: branch_applied_filter_sets.branch_id > branch.branch_id
 Ref: branch_applied_filter_sets.filter_set_id > filter_sets.filter_set_id
+
+Ref: sheet_template.project_id > project.project_id
 
 Ref: merge_request.project_id > project.project_id
 Ref: merge_request.source_branch_id > branch.branch_id

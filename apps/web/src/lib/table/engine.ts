@@ -1,6 +1,6 @@
 /**
  * Table engine adapter boundary.
- * Default implementation is Svelte-native (EntityGrid + BottomSheet).
+ * Default implementation is Svelte-native (EntityGridDynamic + BottomSheet).
  * Optional Univer integration can be swapped in behind a feature flag or
  * dynamic import for phase-2 if spreadsheet requirements justify it.
  */
@@ -35,11 +35,11 @@ export interface SpreadsheetCellState extends SpreadsheetCellRef {
   protected: boolean;
 }
 
-export interface SpreadsheetSnapshot {
-  topEdits: Record<string, string>;
-  topFormulas: Record<string, string>;
-  topColumns?: TopTableColumn[];
-  sheetEntries: Array<{
+/** Serialized form of a single sheet for snapshot/undo. */
+export interface SheetSnapshot {
+  id: string;
+  name: string;
+  entries: Array<{
     id: string;
     entityGlobalId: string | null;
     category: string;
@@ -48,9 +48,19 @@ export interface SpreadsheetSnapshot {
     notes: string;
     tag: string;
   }>;
-  sheetFormulas: Record<string, string>;
+  formulas: Record<string, string>;
   lockedIds: string[];
-  sheetLockedIds: string[];
+}
+
+export interface SpreadsheetSnapshot {
+  topEdits: Record<string, string>;
+  topFormulas: Record<string, string>;
+  topColumns?: TopTableColumn[];
+  /** Multi-sheet: array of sheet snapshots. */
+  sheets: SheetSnapshot[];
+  /** ID of the active sheet. */
+  activeSheetId: string;
+  lockedIds: string[];
 }
 
 export type DefaultTopColumnKey =

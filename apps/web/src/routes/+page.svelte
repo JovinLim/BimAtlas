@@ -224,7 +224,6 @@
     const before = revisionFilterCreatedBefore.enabled
       ? revisionFilterCreatedBefore.text.trim()
       : "";
-    const hasFilter = !!(author || filename || message || after || before);
 
     if (revisionSearchDebounceId != null) {
       clearTimeout(revisionSearchDebounceId);
@@ -449,16 +448,6 @@
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const products = searchState.products;
-    // Ensure BroadcastChannel payload is plain cloneable data.
-    const plainProducts = products.map((p) => ({
-      globalId: p.globalId,
-      ifcClass: p.ifcClass,
-      name: p.name ?? null,
-      description: p.description ?? null,
-      objectType: p.objectType ?? null,
-      tag: p.tag ?? null,
-      attributes: p.attributes ?? null,
-    }));
 
     // Resolve human-readable names from loaded project list
     const project = projects.find((p) => p.id === projectId) ?? null;
@@ -480,7 +469,7 @@
 
     // Always send lean context first (small payload), then attributes in chunks.
     // This avoids postMessage size limits that cause ENTITY.* columns to show "—" when one big payload fails.
-    const leanProducts = plainProducts.map((p) => ({
+    const leanProducts = products.map((p) => ({
       globalId: p.globalId,
       ifcClass: p.ifcClass,
       name: p.name,

@@ -7,3 +7,12 @@ export interface SheetEntry {
   notes: string;
   tag: string;
 }
+
+/** State for a single bottom sheet (multi-sheet support). */
+export interface SheetState {
+  id: string;
+  name: string;
+  entries: SheetEntry[];
+  formulas: Record<string, string>;
+  lockedIds: Set<string>;
+}

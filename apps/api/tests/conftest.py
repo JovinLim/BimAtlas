@@ -90,6 +90,7 @@ DROP TABLE IF EXISTS merge_conflict_log CASCADE;
 DROP TABLE IF EXISTS merge_request CASCADE;
 DROP TABLE IF EXISTS validation_rule CASCADE;
 DROP TABLE IF EXISTS branch_applied_filter_sets CASCADE;
+DROP TABLE IF EXISTS sheet_template CASCADE;
 DROP TABLE IF EXISTS filter_sets CASCADE;
 DROP TABLE IF EXISTS ifc_entity CASCADE;
 DROP TABLE IF EXISTS revision CASCADE;
@@ -176,6 +177,18 @@ CREATE TABLE IF NOT EXISTS filter_sets (
     updated_at    TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_filter_sets_branch ON filter_sets(branch_id);
+
+CREATE TABLE IF NOT EXISTS sheet_template (
+    sheet_template_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id        UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    name              VARCHAR NOT NULL,
+    sheet             JSONB NOT NULL DEFAULT '{}',
+    open              BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_sheet_template_project ON sheet_template(project_id);
 
 CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
     branch_id         UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
@@ -310,7 +323,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     try:
                         cur.execute(
                             "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
-                            "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
+                            "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
                             "branch, project_schema, project, ifc_schema CASCADE;"
                         )
                         print("  ✅ Truncated test tables")
@@ -340,7 +353,7 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
         # Truncate tables (order matters due to FK constraints)
         cur.execute(
             "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
-            "ifc_entity, branch_applied_filter_sets, filter_sets, revision, "
+            "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
             "branch, project_schema, project, ifc_schema CASCADE;"
         )
         
@@ -404,14 +417,19 @@ def age_graph(clean_db, monkeypatch):
 
 
 @pytest.fixture(scope="function")
-def test_branch(db_pool) -> str:
+def test_project(db_pool) -> dict:
+    """Create a test project and return the project dict (project_id, name, etc.)."""
+    return db.create_project("Test Project", "Test project for unit tests")
+
+
+@pytest.fixture(scope="function")
+def test_branch(db_pool, test_project) -> str:
     """Create a test project with a 'main' branch and return the branch_id (UUID string).
     
     Most tests need a branch_id to work with. This fixture creates a project
     named 'Test Project' with a default 'main' branch and returns the branch_id.
     """
-    project = db.create_project("Test Project", "Test project for unit tests")
-    branches = db.fetch_branches(project["project_id"])
+    branches = db.fetch_branches(test_project["project_id"])
     return str(branches[0]["branch_id"])
 
 

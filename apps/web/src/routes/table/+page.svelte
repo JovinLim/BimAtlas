@@ -10,16 +10,25 @@
   import type { ProductMeta } from "$lib/search/protocol";
   import { TABLE_FIXTURE_PRODUCTS } from "$lib/table/fixtures";
   import { loadSettings } from "$lib/state/persistence";
-  import { client, PROJECTS_QUERY } from "$lib/api/client";
+  import {
+    client,
+    PROJECTS_QUERY,
+    OPENED_SHEET_TEMPLATES_QUERY,
+    SEARCH_SHEET_TEMPLATES_QUERY,
+    SHEET_TEMPLATES_QUERY,
+    SHEET_TEMPLATE_QUERY,
+    CREATE_SHEET_TEMPLATE_MUTATION,
+  } from "$lib/api/client";
   import EntityGridDynamic from "$lib/table/EntityGridDynamic.svelte";
   import BottomSheet from "$lib/table/BottomSheet.svelte";
-  import type { SheetEntry } from "$lib/table/types";
+  import type { SheetEntry, SheetState } from "$lib/table/types";
   import {
     colToIndex,
     indexToCol,
     parseCellRef,
     type DefaultTopColumnKey,
     type SpreadsheetCellState,
+    type SheetSnapshot,
     type SpreadsheetSnapshot,
     type TopTableColumn,
   } from "$lib/table/engine";
@@ -153,13 +162,81 @@
   let sortDir = $state<"asc" | "desc">("asc");
   /** Row lock state: locked rows are read-only for editable cells. */
   let lockedIds = $state<Set<string>>(new Set());
-  /** Bottom-sheet row lock state by entry id. */
-  let sheetLockedIds = $state<Set<string>>(new Set());
-  /** Bottom sheet entries (notes / quantity surveying). Session-only for v1. */
-  let sheetEntries = $state<SheetEntry[]>([]);
+  /** Multi-sheet: bottom sheet state per tab. */
+  const _initialSheetId = crypto.randomUUID();
+  let sheets = $state<SheetState[]>([
+    {
+      id: _initialSheetId,
+      name: "Sheet 1",
+      entries: [],
+      formulas: {},
+      lockedIds: new Set<string>(),
+    },
+  ]);
+  let activeSheetId = $state<string>(_initialSheetId);
+  const activeSheet = $derived(sheets.find((s) => s.id === activeSheetId) ?? sheets[0]!);
+
+  function updateActiveSheet(updates: {
+    entries?: SheetEntry[];
+    formulas?: Record<string, string>;
+    lockedIds?: Set<string>;
+  }) {
+    sheets = sheets.map((s) =>
+      s.id === activeSheetId
+        ? {
+            ...s,
+            ...(updates.entries !== undefined && { entries: updates.entries }),
+            ...(updates.formulas !== undefined && { formulas: updates.formulas }),
+            ...(updates.lockedIds !== undefined && { lockedIds: updates.lockedIds }),
+          }
+        : s,
+    );
+  }
+
+  function addSheet() {
+    pushHistory();
+    const id = crypto.randomUUID();
+    const nextIndex = sheets.length + 1;
+    sheets = [
+      ...sheets,
+      {
+        id,
+        name: `Sheet ${nextIndex}`,
+        entries: [],
+        formulas: {},
+        lockedIds: new Set<string>(),
+      },
+    ];
+    activeSheetId = id;
+  }
+
+  function setActiveSheet(id: string) {
+    if (sheets.some((s) => s.id === id)) activeSheetId = id;
+  }
+
+  let editingSheetId = $state<string | null>(null);
+  let editingSheetName = $state("");
+  let editingSheetInputRef = $state<HTMLInputElement | null>(null);
+
+  function startEditingSheet(sheet: SheetState) {
+    pushHistory();
+    editingSheetId = sheet.id;
+    editingSheetName = sheet.name;
+    tick().then(() => editingSheetInputRef?.focus());
+  }
+
+  function commitSheetRename() {
+    if (editingSheetId == null) return;
+    const name = editingSheetName.trim() || "Sheet";
+    sheets = sheets.map((s) =>
+      s.id === editingSheetId ? { ...s, name } : s,
+    );
+    editingSheetId = null;
+    editingSheetName = "";
+  }
+
   let topEdits = $state<Record<string, string>>({});
   let topFormulas = $state<Record<string, string>>({});
-  let sheetFormulas = $state<Record<string, string>>({});
   let draftValues = $state<Record<string, string>>({});
   let activeCell = $state<SpreadsheetCellState | null>(null);
   let formulaInput = $state("");
@@ -167,20 +244,144 @@
   let formulaSuggestionIndex = $state(0);
   let showFormulaGuideOverlay = $state(false);
   let showCellContentOverlay = $state(false);
+  let templateSearchQuery = $state("");
+  let templateResults = $state<{ id: string; name: string }[]>([]);
+  let loadingTemplates = $state(false);
+  let lastOpenedLoadProjectId = $state<string | null>(null);
+
+  async function loadOpenedTemplates() {
+    if (!projectId || lastOpenedLoadProjectId === projectId) return;
+    try {
+      const result = await client
+        .query(OPENED_SHEET_TEMPLATES_QUERY, { projectId })
+        .toPromise();
+      const list = result.data?.openedSheetTemplates ?? [];
+      lastOpenedLoadProjectId = projectId;
+      if (list.length === 0) return;
+      const newSheets: SheetState[] = list.map(
+        (t: { id: string; name: string; sheet: { entries?: SheetEntry[]; formulas?: Record<string, string>; lockedIds?: string[] } }) => {
+          const sheet = t.sheet ?? {};
+          const entries = (sheet.entries ?? []).map((e) => ({
+            ...e,
+            id: e.id ?? crypto.randomUUID(),
+          }));
+          const formulas = sheet.formulas ?? {};
+          const lockedIds = new Set<string>(sheet.lockedIds ?? []);
+          return {
+            id: t.id,
+            name: t.name,
+            entries,
+            formulas,
+            lockedIds,
+          };
+        },
+      );
+      sheets = newSheets;
+      activeSheetId = newSheets[0]!.id;
+    } catch (err) {
+      console.error("Failed to load opened templates:", err);
+    }
+  }
+
+  async function loadTemplateSearch() {
+    if (!projectId) return;
+    loadingTemplates = true;
+    try {
+      const query = templateSearchQuery.trim();
+      const result = query
+        ? await client
+            .query(SEARCH_SHEET_TEMPLATES_QUERY, { query, projectId })
+            .toPromise()
+        : await client
+            .query(SHEET_TEMPLATES_QUERY, { projectId })
+            .toPromise();
+      const list = query
+        ? (result.data?.searchSheetTemplates ?? [])
+        : (result.data?.sheetTemplates ?? []);
+      templateResults = list.map((t: { id: string; name: string }) => ({ id: t.id, name: t.name }));
+    } catch (err) {
+      console.error("Failed to search templates:", err);
+      templateResults = [];
+    } finally {
+      loadingTemplates = false;
+    }
+  }
 
   $effect(() => {
-    if (!showCellContentOverlay) return;
-    const onEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") showCellContentOverlay = false;
-    };
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
+    const pid = projectId;
+    if (!pid) return;
+    void loadOpenedTemplates();
   });
 
   $effect(() => {
-    if (!showFormulaGuideOverlay) return;
+    const q = templateSearchQuery;
+    const pid = projectId;
+    if (!pid) return;
+    const t = setTimeout(() => {
+      void loadTemplateSearch();
+    }, 200);
+    return () => clearTimeout(t);
+  });
+
+  async function handleSaveTemplate() {
+    if (!projectId) return;
+    const name = prompt("Template name (required):", activeSheet.name);
+    if (!name || !name.trim()) {
+      showToast("Template name is required");
+      return;
+    }
+    const sheet = {
+      entries: activeSheet.entries.map((e) => ({ ...e })),
+      formulas: { ...activeSheet.formulas },
+      lockedIds: Array.from(activeSheet.lockedIds),
+    };
+    try {
+      await client
+        .mutation(CREATE_SHEET_TEMPLATE_MUTATION, {
+          projectId,
+          name: name.trim(),
+          sheet,
+        })
+        .toPromise();
+      templateSearchQuery = "";
+      loadTemplateSearch();
+    } catch (err) {
+      console.error("Failed to save template:", err);
+      alert("Failed to save template. See console for details.");
+    }
+  }
+
+  async function handleLoadTemplate(template: { id: string; name: string }) {
+    try {
+      const result = await client
+        .query(SHEET_TEMPLATE_QUERY, { id: template.id })
+        .toPromise();
+      const data = result.data?.sheetTemplate;
+      if (!data?.sheet) return;
+      const sheet = data.sheet as {
+        entries?: SheetEntry[];
+        formulas?: Record<string, string>;
+        lockedIds?: string[];
+      };
+      const entries = (sheet.entries ?? []).map((e) => ({ ...e, id: e.id || crypto.randomUUID() }));
+      const formulas = sheet.formulas ?? {};
+      const lockedIds = new Set<string>(sheet.lockedIds ?? []);
+      pushHistory();
+      updateActiveSheet({ entries, formulas, lockedIds });
+    } catch (err) {
+      console.error("Failed to load template:", err);
+      alert("Failed to load template. See console for details.");
+    }
+  }
+
+  $effect(() => {
+    const visible = showCellContentOverlay || showFormulaGuideOverlay;
+    if (!visible) return;
     const onEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") showFormulaGuideOverlay = false;
+      if (e.key === "Escape") {
+        showCellContentOverlay = false;
+        showFormulaGuideOverlay = false;
+      }
     };
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
@@ -204,7 +405,11 @@
     const match = body.match(/^[A-Za-z]*/);
     return match ? match[0] : "";
   });
-  const formulaSuggestionsList = $derived(getFormulaSuggestions(formulaPrefix));
+  const formulaSuggestionsList = $derived(
+    getFormulaSuggestions(formulaPrefix, {
+      allowEntityFormulas: activeCell?.surface !== "sheet",
+    }),
+  );
   const showFormulaDropdown = $derived(
     formulaInput.trim().startsWith("=") &&
       /^[A-Za-z]*$/.test(formulaInput.trim().slice(1)) &&
@@ -234,9 +439,8 @@
     return topColumns.map((column) => column.col);
   }
 
-  function colIndex(col: string): number {
-    return colToIndex(col);
-  }
+  /** Sheet area always uses columns A–F. */
+  const SHEET_COLUMNS = ["A", "B", "C", "D", "E", "F"];
 
   function applyContextFromUrl() {
     const url = $page.url;
@@ -281,6 +485,59 @@
   let toastMessage = $state<string | null>(null);
   let toastTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
   let segmentTopRef = $state<HTMLElement | null>(null);
+  let tableSplitRef = $state<HTMLElement | null>(null);
+
+  const TABLE_TOP_HEIGHT_KEY = "bimatlas-table-top-height";
+  const MIN_TOP_PX = 120;
+  const MIN_BOTTOM_PX = 190;
+
+  /** Top segment height in px; null = use default grid. Persisted to localStorage. */
+  let topSegmentHeightPx = $state<number | null>(null);
+  let isResizingSplit = $state(false);
+
+  function loadTopSegmentHeight(): number | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const v = localStorage.getItem(TABLE_TOP_HEIGHT_KEY);
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n >= MIN_TOP_PX ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveTopSegmentHeight(px: number) {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(TABLE_TOP_HEIGHT_KEY, String(px));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function startResizeSplit(e: MouseEvent) {
+    e.preventDefault();
+    if (topSegmentHeightPx == null && segmentTopRef) {
+      topSegmentHeightPx = segmentTopRef.getBoundingClientRect().height;
+    }
+    isResizingSplit = true;
+  }
+
+  function onResizeSplitMove(e: MouseEvent) {
+    if (!isResizingSplit || !tableSplitRef) return;
+    const rect = tableSplitRef.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const maxTop = rect.height - MIN_BOTTOM_PX;
+    const clamped = Math.max(MIN_TOP_PX, Math.min(maxTop, y));
+    topSegmentHeightPx = clamped;
+  }
+
+  function endResizeSplit() {
+    if (!isResizingSplit) return;
+    if (topSegmentHeightPx != null) saveTopSegmentHeight(topSegmentHeightPx);
+    isResizingSplit = false;
+  }
 
   function showToast(message: string) {
     if (toastTimeoutId != null) clearTimeout(toastTimeoutId);
@@ -385,30 +642,32 @@
   const allEntitiesLocked = $derived(
     products.length > 0 &&
       products.every((p) => lockedIds.has(p.globalId)) &&
-      sheetEntries.every((entry) => sheetLockedIds.has(entry.id)),
+      activeSheet.entries.every((entry) => activeSheet.lockedIds.has(entry.id)),
   );
 
   function toggleLockAll() {
-    if (products.length === 0 && sheetEntries.length === 0) return;
+    if (products.length === 0 && activeSheet.entries.length === 0) return;
     pushHistory();
     if (allEntitiesLocked) {
       lockedIds = new Set();
-      sheetLockedIds = new Set();
+      updateActiveSheet({ lockedIds: new Set() });
     } else {
       lockedIds = new Set(products.map((p) => p.globalId));
-      sheetLockedIds = new Set(sheetEntries.map((entry) => entry.id));
+      updateActiveSheet({
+        lockedIds: new Set(activeSheet.entries.map((entry) => entry.id)),
+      });
     }
   }
 
   function toggleSheetEntryLock(entryId: string) {
     pushHistory();
-    const next = new Set(sheetLockedIds);
+    const next = new Set(activeSheet.lockedIds);
     if (next.has(entryId)) {
       next.delete(entryId);
     } else {
       next.add(entryId);
     }
-    sheetLockedIds = next;
+    updateActiveSheet({ lockedIds: next });
   }
 
   function snapshot(): SpreadsheetSnapshot {
@@ -416,10 +675,15 @@
       topEdits: { ...topEdits },
       topFormulas: { ...topFormulas },
       topColumns: topColumns.map((column) => ({ ...column })),
-      sheetEntries: sheetEntries.map((entry) => ({ ...entry })),
-      sheetFormulas: { ...sheetFormulas },
+      sheets: sheets.map((s) => ({
+        id: s.id,
+        name: s.name,
+        entries: s.entries.map((e) => ({ ...e })),
+        formulas: { ...s.formulas },
+        lockedIds: Array.from(s.lockedIds),
+      })),
+      activeSheetId,
       lockedIds: Array.from(lockedIds),
-      sheetLockedIds: Array.from(sheetLockedIds),
     };
   }
 
@@ -428,10 +692,34 @@
     topFormulas = { ...value.topFormulas };
     topColumns = value.topColumns?.map((column) => ({ ...column })) ?? [...DEFAULT_TOP_COLUMNS];
     headerDrafts = {};
-    sheetEntries = value.sheetEntries.map((entry) => ({ ...entry }));
-    sheetFormulas = { ...value.sheetFormulas };
+    const legacy = value as SpreadsheetSnapshot & {
+      sheetEntries?: SheetEntry[];
+      sheetFormulas?: Record<string, string>;
+      sheetLockedIds?: string[];
+    };
+    if (legacy.sheetEntries != null && !value.sheets?.length) {
+      const id = activeSheetId || crypto.randomUUID();
+      sheets = [
+        {
+          id,
+          name: "Sheet 1",
+          entries: legacy.sheetEntries.map((e) => ({ ...e })),
+          formulas: { ...(legacy.sheetFormulas ?? {}) },
+          lockedIds: new Set(legacy.sheetLockedIds ?? []),
+        },
+      ];
+      activeSheetId = id;
+    } else if (value.sheets?.length) {
+      sheets = value.sheets.map((s) => ({
+        id: s.id,
+        name: s.name,
+        entries: s.entries.map((e) => ({ ...e })),
+        formulas: { ...s.formulas },
+        lockedIds: new Set(s.lockedIds ?? []),
+      }));
+      activeSheetId = value.activeSheetId ?? value.sheets[0]!.id;
+    }
     lockedIds = new Set(value.lockedIds);
-    sheetLockedIds = new Set(value.sheetLockedIds ?? []);
     draftValues = {};
     if (activeCell != null) {
       const ref = activeCell.ref;
@@ -483,14 +771,14 @@
 
   function getSheetEntryByRow(row: number): SheetEntry | null {
     const index = row - sheetRowStart();
-    if (index < 0 || index >= sheetEntries.length) return null;
-    return sheetEntries[index] ?? null;
+    if (index < 0 || index >= activeSheet.entries.length) return null;
+    return activeSheet.entries[index] ?? null;
   }
 
   function isSheetRowLocked(row: number): boolean {
     const entry = getSheetEntryByRow(row);
     if (!entry) return false;
-    return sheetLockedIds.has(entry.id);
+    return activeSheet.lockedIds.has(entry.id);
   }
 
   function getTopColumnByCol(col: string): TopTableColumn | null {
@@ -501,7 +789,7 @@
     const parsed = parseCellRef(ref);
     if (!parsed) return null;
     const navCols = getNavCols();
-    if (!navCols.includes(parsed.col) && !["A", "B", "C", "D", "E", "F"].includes(parsed.col)) {
+    if (!navCols.includes(parsed.col) && !SHEET_COLUMNS.includes(parsed.col)) {
       return null;
     }
 
@@ -809,7 +1097,7 @@
   }
 
   function getFormulaForRef(ref: string): string | null {
-    return topFormulas[ref] ?? sheetFormulas[ref] ?? null;
+    return topFormulas[ref] ?? activeSheet.formulas[ref] ?? null;
   }
 
   function getCellDisplayValue(ref: string, fallback: string): string {
@@ -825,7 +1113,7 @@
     }
     const parsed = parseCellRef(ref);
     if (!parsed) return fallback;
-    if (parsed.row >= sheetRowStart() && sheetFormulas[ref] !== undefined) {
+    if (parsed.row >= sheetRowStart() && activeSheet.formulas[ref] !== undefined) {
       return getCommittedValue(ref);
     }
     return fallback;
@@ -844,13 +1132,13 @@
 
   function updateSheetFormula(ref: string, raw: string | null) {
     if (raw == null) {
-      if (sheetFormulas[ref] === undefined) return;
-      const next = { ...sheetFormulas };
+      if (activeSheet.formulas[ref] === undefined) return;
+      const next = { ...activeSheet.formulas };
       delete next[ref];
-      sheetFormulas = next;
+      updateActiveSheet({ formulas: next });
       return;
     }
-    sheetFormulas = { ...sheetFormulas, [ref]: raw };
+    updateActiveSheet({ formulas: { ...activeSheet.formulas, [ref]: raw } });
   }
 
   function setCommittedCellValue(cell: SpreadsheetCellState, value: string, rawFormula: string | null) {
@@ -862,14 +1150,15 @@
     const field = getSheetField(cell.col);
     if (!field) return;
     const index = cell.row - sheetRowStart();
-    if (index < 0 || index >= sheetEntries.length) return;
-    sheetEntries = sheetEntries.map((entry, idx) => {
+    if (index < 0 || index >= activeSheet.entries.length) return;
+    const nextEntries = activeSheet.entries.map((entry, idx) => {
       if (idx !== index) return entry;
       return {
         ...entry,
         [field]: field === "entityGlobalId" && value.trim() === "" ? null : value,
       };
     });
+    updateActiveSheet({ entries: nextEntries });
     updateSheetFormula(cell.ref, rawFormula);
   }
 
@@ -992,9 +1281,9 @@
     if (!start || !end || !target) return false;
     const minRow = Math.min(start.row, end.row);
     const maxRow = Math.max(start.row, end.row);
-    const minCol = Math.min(colIndex(start.col), colIndex(end.col));
-    const maxCol = Math.max(colIndex(start.col), colIndex(end.col));
-    const targetCol = colIndex(target.col);
+    const minCol = Math.min(colToIndex(start.col), colToIndex(end.col));
+    const maxCol = Math.max(colToIndex(start.col), colToIndex(end.col));
+    const targetCol = colToIndex(target.col);
     if (targetCol < 0 || minCol < 0 || maxCol < 0) return false;
     return target.row >= minRow && target.row <= maxRow && targetCol >= minCol && targetCol <= maxCol;
   }
@@ -1085,12 +1374,12 @@
     if (direction === "right") deltaCol = 1;
     if (direction === "tab") deltaCol = shift ? -1 : 1;
 
-    const navCols = cell.surface === "sheet" ? ["A", "B", "C", "D", "E", "F"] : getNavCols();
+    const navCols = cell.surface === "sheet" ? SHEET_COLUMNS : getNavCols();
     const currentColIndex = navCols.indexOf(cell.col);
     if (currentColIndex < 0) return;
     const targetColIndex = Math.max(0, Math.min(navCols.length - 1, currentColIndex + deltaCol));
     const minRow = 2;
-    const maxRow = Math.max(sheetRowStart() + sheetEntries.length - 1, products.length + 1);
+    const maxRow = Math.max(sheetRowStart() + activeSheet.entries.length - 1, products.length + 1);
     const targetRow = Math.max(minRow, Math.min(maxRow, cell.row + deltaRow));
     const nextRef = `${navCols[targetColIndex]}${targetRow}`;
     const nextCell = resolveCellByRef(nextRef);
@@ -1162,14 +1451,14 @@
   }
 
   function onSheetEntriesChange(nextEntries: SheetEntry[]) {
-    if (nextEntries.length !== sheetEntries.length) {
+    if (nextEntries.length !== activeSheet.entries.length) {
       pushHistory();
     }
     const nextIds = new Set(nextEntries.map((entry) => entry.id));
-    sheetLockedIds = new Set(
-      Array.from(sheetLockedIds).filter((id) => nextIds.has(id)),
+    const nextLockedIds = new Set(
+      Array.from(activeSheet.lockedIds).filter((id) => nextIds.has(id)),
     );
-    sheetEntries = nextEntries;
+    updateActiveSheet({ entries: nextEntries, lockedIds: nextLockedIds });
   }
 
   function handleGlobalKeydown(e: KeyboardEvent) {
@@ -1234,6 +1523,10 @@
     if (typeof window !== "undefined") {
       window.addEventListener("keydown", handleGlobalKeydown);
       window.addEventListener("mouseup", handleGlobalPointerUp);
+      window.addEventListener("mousemove", onResizeSplitMove);
+      window.addEventListener("mouseup", endResizeSplit);
+      const h = loadTopSegmentHeight();
+      if (h != null) topSegmentHeightPx = h;
     }
   });
 
@@ -1245,6 +1538,8 @@
     if (typeof window !== "undefined") {
       window.removeEventListener("keydown", handleGlobalKeydown);
       window.removeEventListener("mouseup", handleGlobalPointerUp);
+      window.removeEventListener("mousemove", onResizeSplitMove);
+      window.removeEventListener("mouseup", endResizeSplit);
     }
   });
 </script>
@@ -1375,7 +1670,12 @@
     </button>
   </div>
 
-  <div class="table-split">
+  <div
+    class="table-split"
+    class:resizing={isResizingSplit}
+    style={topSegmentHeightPx != null ? `--top-height: ${topSegmentHeightPx}px` : undefined}
+    bind:this={tableSplitRef}
+  >
     <section
       class="table-segment table-segment-top"
       aria-label="IFC entities"
@@ -1396,7 +1696,7 @@
           type="button"
           class="formula-guide-btn"
           onclick={toggleLockAll}
-          disabled={products.length === 0 && sheetEntries.length === 0}
+          disabled={products.length === 0 && activeSheet.entries.length === 0}
           aria-label={allEntitiesLocked ? "Unlock all rows" : "Lock all rows"}
         >
           {allEntitiesLocked ? "Unlock all" : "Lock all"}
@@ -1450,14 +1750,28 @@
         onCellPointerUp={onCellPointerUp}
       />
     </section>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="split-resize-handle"
+      role="separator"
+      aria-label="Resize top and bottom sections"
+      onmousedown={startResizeSplit}
+    ></div>
     <section class="table-segment table-segment-bottom" aria-label="Sheet interactions">
       <BottomSheet
-        bind:entries={sheetEntries}
+        entries={activeSheet.entries}
         rowStart={products.length + 2}
         getColumnWidthPx={getColumnWidthPx}
         onEntriesChange={onSheetEntriesChange}
-        lockedEntryIds={sheetLockedIds}
+        lockedEntryIds={activeSheet.lockedIds}
         onToggleEntryLock={toggleSheetEntryLock}
+        projectId={projectId}
+        templateSearchQuery={templateSearchQuery}
+        onTemplateSearchChange={(q) => (templateSearchQuery = q)}
+        templateResults={templateResults}
+        loadingTemplates={loadingTemplates}
+        onLoadTemplate={handleLoadTemplate}
+        onSaveTemplate={handleSaveTemplate}
         activeCellRef={activeCell?.ref ?? null}
         getCellDisplayValue={getCellDisplayValue}
         onCellFocus={onCellFocus}
@@ -1471,6 +1785,49 @@
         onCellPointerEnter={onCellPointerEnter}
         onCellPointerUp={onCellPointerUp}
       />
+      <div class="sheet-tabs">
+        {#each sheets as sheet (sheet.id)}
+          {#if editingSheetId === sheet.id}
+            <input
+              type="text"
+              class="sheet-tab-edit"
+              value={editingSheetName}
+              onblur={commitSheetRename}
+              onkeydown={(e) => {
+                if (e.key === "Enter") commitSheetRename();
+                if (e.key === "Escape") {
+                  editingSheetId = null;
+                  editingSheetName = "";
+                }
+              }}
+              oninput={(e) => (editingSheetName = e.currentTarget.value)}
+              bind:this={editingSheetInputRef}
+            />
+          {:else}
+            <button
+              type="button"
+              class="sheet-tab"
+              class:active={sheet.id === activeSheetId}
+              onclick={() => setActiveSheet(sheet.id)}
+              ondblclick={(e) => {
+                e.preventDefault();
+                startEditingSheet(sheet);
+              }}
+              aria-label="Switch to {sheet.name}"
+            >
+              {sheet.name}
+            </button>
+          {/if}
+        {/each}
+        <button
+          type="button"
+          class="sheet-tab-add"
+          onclick={addSheet}
+          aria-label="Add sheet"
+        >
+          + Sheet
+        </button>
+      </div>
     </section>
   </div>
 
@@ -1634,7 +1991,27 @@
     flex: 1 1 0;
     min-height: 0;
     display: grid;
-    grid-template-rows: minmax(0, 1fr) minmax(190px, 38%);
+    grid-template-rows: var(--top-height, minmax(0, 1fr)) 6px minmax(190px, 1fr);
+  }
+
+  .table-split.resizing {
+    user-select: none;
+  }
+
+  .split-resize-handle {
+    grid-column: 1;
+    cursor: row-resize;
+    background: rgba(255, 255, 255, 0.06);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .split-resize-handle:hover {
+    background: rgba(255, 136, 102, 0.15);
+    border-top-color: rgba(255, 136, 102, 0.35);
+  }
+
+  .table-split.resizing .split-resize-handle {
+    background: rgba(255, 136, 102, 0.2);
   }
 
   .formula-bar {
@@ -1960,6 +2337,73 @@
   .table-segment-bottom {
     min-height: 0;
     overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sheet-tabs {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .sheet-tab {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #999;
+    cursor: pointer;
+  }
+
+  .sheet-tab:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .sheet-tab.active {
+    color: #ff8866;
+    background: rgba(255, 136, 102, 0.12);
+    border-color: rgba(255, 136, 102, 0.3);
+  }
+
+  .sheet-tab-add {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+    border-radius: 0.25rem;
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    background: transparent;
+    color: #888;
+    cursor: pointer;
+    margin-left: 0.25rem;
+  }
+
+  .sheet-tab-add:hover {
+    color: #ff8866;
+    border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .sheet-tab-edit {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.78rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(255, 136, 102, 0.4);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e0e0f0;
+    min-width: 4rem;
+  }
+
+  .table-segment-bottom :global(.bottom-sheet) {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .table-toast {

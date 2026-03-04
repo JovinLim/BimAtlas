@@ -448,3 +448,64 @@ export const APPLY_FILTER_SETS_MUTATION = gql`
 		}
 	}
 `;
+
+// ---- Sheet template queries / mutations (FEAT-003 table page) ----
+
+const SHEET_TEMPLATE_FIELDS = `
+	id
+	projectId
+	name
+	sheet
+	open
+	createdAt
+	updatedAt
+`;
+
+/** List all sheet templates for a project. */
+export const SHEET_TEMPLATES_QUERY = gql`
+	query SheetTemplates($projectId: String!) {
+		sheetTemplates(projectId: $projectId) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;
+
+/** List opened sheet templates for a project (for initial page load). */
+export const OPENED_SHEET_TEMPLATES_QUERY = gql`
+	query OpenedSheetTemplates($projectId: String!) {
+		openedSheetTemplates(projectId: $projectId) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;
+
+/** Search sheet templates by name within a project. */
+export const SEARCH_SHEET_TEMPLATES_QUERY = gql`
+	query SearchSheetTemplates($query: String!, $projectId: String!) {
+		searchSheetTemplates(query: $query, projectId: $projectId) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;
+
+/** Fetch a single sheet template by id. */
+export const SHEET_TEMPLATE_QUERY = gql`
+	query SheetTemplate($id: String!) {
+		sheetTemplate(id: $id) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;
+
+/** Create a new sheet template. Name is required. */
+export const CREATE_SHEET_TEMPLATE_MUTATION = gql`
+	mutation CreateSheetTemplate(
+		$projectId: String!
+		$name: String!
+		$sheet: JSON!
+	) {
+		createSheetTemplate(projectId: $projectId, name: $name, sheet: $sheet) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;

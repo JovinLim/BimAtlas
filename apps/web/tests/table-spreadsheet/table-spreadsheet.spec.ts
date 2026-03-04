@@ -263,6 +263,27 @@ test.describe("Table view (fixture data)", () => {
     ).toBeVisible();
   });
 
+  test("multi-sheet: sheet tabs and add sheet", async ({ page }) => {
+    await expect(page.locator(".sheet-tab").filter({ hasText: "Sheet 1" })).toBeVisible();
+    const addSheetBtn = page.getByRole("button", { name: /add sheet/i });
+    await addSheetBtn.scrollIntoViewIfNeeded();
+
+    let attempts = 0;
+    while (attempts < 4) {
+      await addSheetBtn.click();
+      const sheet2Tab = page.locator(".sheet-tab").filter({ hasText: "Sheet 2" });
+      if (await sheet2Tab.isVisible().catch(() => false)) {
+        await expect(sheet2Tab).toHaveClass(/active/);
+        await page.locator(".sheet-tab").filter({ hasText: "Sheet 1" }).click();
+        await expect(page.locator(".sheet-tab").filter({ hasText: "Sheet 1" })).toHaveClass(/active/);
+        return;
+      }
+      attempts += 1;
+      await page.waitForTimeout(200);
+    }
+    throw new Error("Sheet 2 tab did not appear after clicking Add sheet");
+  });
+
   test("can add and remove sheet row", async ({ page }) => {
     const addBtn = page.getByRole("button", { name: /add row/i });
     await addBtn.scrollIntoViewIfNeeded();

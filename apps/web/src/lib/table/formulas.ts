@@ -32,12 +32,6 @@ export const FORMULA_SUGGESTIONS: FormulaSuggestion[] = [
     description: "Top header columns can pull an IFC entity attribute for every row.",
   },
   {
-    name: "ENTITY_NESTED",
-    template: "ENTITY.PropertySets.PsetWallCommon",
-    signature: "=ENTITY.PropertySets.PsetWallCommon",
-    description: "Nested attribute access through attributes JSON. Missing path resolves to NULL/empty.",
-  },
-  {
     name: "HEADER_ALIAS",
     template: "[Display Text](=ENTITY.Attribute)",
     signature: "[Display Text](Formula)",
@@ -45,12 +39,21 @@ export const FORMULA_SUGGESTIONS: FormulaSuggestion[] = [
   },
 ];
 
-export function getFormulaSuggestions(prefix: string): FormulaSuggestion[] {
+/** ENTITY and HEADER_ALIAS are top-header-only; exclude when editing bottom sheet cells. */
+const ENTITY_SUGGESTION_NAMES = new Set(["ENTITY", "HEADER_ALIAS"]);
+
+export function getFormulaSuggestions(
+  prefix: string,
+  options?: { allowEntityFormulas?: boolean },
+): FormulaSuggestion[] {
+  const allowEntity = options?.allowEntityFormulas ?? true;
+  let list = FORMULA_SUGGESTIONS;
+  if (!allowEntity) {
+    list = list.filter((s) => !ENTITY_SUGGESTION_NAMES.has(s.name));
+  }
   const lower = prefix.trim().toLowerCase();
-  if (lower === "") return [...FORMULA_SUGGESTIONS];
-  return FORMULA_SUGGESTIONS.filter((s) =>
-    s.name.toLowerCase().startsWith(lower),
-  );
+  if (lower === "") return [...list];
+  return list.filter((s) => s.name.toLowerCase().startsWith(lower));
 }
 
 export interface FormulaResult {

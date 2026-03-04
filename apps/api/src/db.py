@@ -711,6 +711,94 @@ def fetch_filter_sets_for_branch(branch_id: str) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+# ---------------------------------------------------------------------------
+# Sheet template CRUD (project-scoped bottom-sheet state)
+# ---------------------------------------------------------------------------
+
+_SHEET_TEMPLATE_COLS = (
+    "sheet_template_id, project_id, name, sheet, open, created_at, updated_at"
+)
+
+
+def create_sheet_template(
+    project_id: str, name: str, sheet_json: dict,
+) -> dict:
+    """Create a new sheet template for a project. Returns the new row."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"INSERT INTO sheet_template (project_id, name, sheet) "
+            f"VALUES (%s, %s, %s) RETURNING {_SHEET_TEMPLATE_COLS}",
+            (project_id, name, json.dumps(sheet_json)),
+        )
+        row = cur.fetchone()
+        r = dict(row)
+        if isinstance(r.get("sheet"), str):
+            r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
+        return r
+
+
+def fetch_sheet_template(sheet_template_id: str) -> dict | None:
+    """Fetch a single sheet template by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template "
+            "WHERE sheet_template_id = %s",
+            (sheet_template_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        r = dict(row)
+        if isinstance(r.get("sheet"), str):
+            r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
+        return r
+
+
+def fetch_sheet_templates_opened(project_id: str) -> list[dict]:
+    """Return sheet templates with open=True for a project, by updated_at."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template "
+            "WHERE project_id = %s AND open = TRUE ORDER BY updated_at ASC",
+            (project_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if isinstance(r.get("sheet"), str):
+            r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
+    return rows
+
+
+def fetch_sheet_templates_for_project(project_id: str) -> list[dict]:
+    """Return all sheet templates for a project, newest first."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template "
+            "WHERE project_id = %s ORDER BY updated_at DESC",
+            (project_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if isinstance(r.get("sheet"), str):
+            r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
+    return rows
+
+
+def search_sheet_templates(query: str, project_id: str) -> list[dict]:
+    """Search sheet templates by name within a project."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template "
+            "WHERE project_id = %s AND name ILIKE %s ORDER BY updated_at DESC",
+            (project_id, f"%{query}%"),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if isinstance(r.get("sheet"), str):
+            r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
+    return rows
+
+
 def search_filter_sets(
     query: str,
     branch_id: str | None = None,
