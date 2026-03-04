@@ -5,49 +5,49 @@ overview: |
 todos:
   - id: step-01-mcp-tool-schemas
     content: "Define JSON-RPC schemas for the four MCP tools and create the MCP tool registry module."
-    status: pending
+    status: completed
   - id: step-02-get-project-schema-tool
     content: "Implement get_project_schema MCP tool that returns IFC classes, attribute keys, and relationship types for a branch/revision."
-    status: pending
+    status: completed
   - id: step-03-create-filter-set-tool
     content: "Implement create_filter_set MCP tool wrapping existing db.create_filter_set."
-    status: pending
+    status: completed
   - id: step-04-add-filter-condition-tool
     content: "Implement add_filter_condition MCP tool that appends a filter condition to an existing filter set."
-    status: pending
+    status: completed
   - id: step-05-apply-filter-set-tool
     content: "Implement apply_filter_set_to_context MCP tool wrapping db.apply_filter_sets with event emission."
-    status: pending
+    status: completed
   - id: step-06-llamaindex-agent-workflow
     content: "Implement LlamaIndex Workflow with Discovery, Validation, Creation, Application steps and tool bindings."
-    status: pending
+    status: completed
   - id: step-07-agent-api-endpoint
     content: "Create POST /agent/chat FastAPI endpoint with SSE streaming response for agent interaction."
-    status: pending
+    status: completed
   - id: step-08-agent-events-sse
     content: "Create GET /stream/agent-events SSE endpoint for pushing filter-applied notifications to the frontend."
-    status: pending
+    status: completed
   - id: step-09-frontend-chat-component
     content: "Build Svelte chat panel component with message list, input, and tool-call activity display."
-    status: pending
+    status: completed
   - id: step-10-frontend-model-config
     content: "Build Svelte model configuration panel (Provider, Model, API Key) with localStorage persistence."
-    status: pending
+    status: completed
   - id: step-11-frontend-state-sync
     content: "Wire agent-events SSE to Svelte search state to trigger view refresh on filter application."
-    status: pending
+    status: completed
   - id: step-12-frontend-chat-route
     content: "Create /agent route or integrate chat panel into main page sidebar following existing popup conventions."
-    status: pending
+    status: completed
   - id: step-13-backend-tests
     content: "Add pytest tests for MCP tools, agent workflow, and agent API endpoint."
-    status: pending
+    status: completed
   - id: step-14-integration-test
     content: "End-to-end test: natural language query → agent → filter creation → application → frontend refresh."
-    status: pending
+    status: completed
   - id: step-15-verification
     content: "Run full API test suite, frontend type checks, and validate end-to-end scenario."
-    status: pending
+    status: completed
 isProject: true
 ---
 
