@@ -503,9 +503,26 @@ export const CREATE_SHEET_TEMPLATE_MUTATION = gql`
 		$projectId: String!
 		$name: String!
 		$sheet: JSON!
+		$open: Boolean
 	) {
-		createSheetTemplate(projectId: $projectId, name: $name, sheet: $sheet) {
+		createSheetTemplate(projectId: $projectId, name: $name, sheet: $sheet, open: $open) {
 			${SHEET_TEMPLATE_FIELDS}
 		}
+	}
+`;
+
+/** Update a sheet template (open, name, or sheet content). */
+export const UPDATE_SHEET_TEMPLATE_MUTATION = gql`
+	mutation UpdateSheetTemplate($id: String!, $open: Boolean, $name: String, $sheet: JSON) {
+		updateSheetTemplate(id: $id, open: $open, name: $name, sheet: $sheet) {
+			${SHEET_TEMPLATE_FIELDS}
+		}
+	}
+`;
+
+/** Delete a sheet template by id. */
+export const DELETE_SHEET_TEMPLATE_MUTATION = gql`
+	mutation DeleteSheetTemplate($id: String!) {
+		deleteSheetTemplate(id: $id)
 	}
 `;

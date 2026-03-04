@@ -22,6 +22,7 @@
 - Playwright can click toolbar/header buttons before Svelte hydration wires handlers, which looks like a successful click but leaves state unchanged. Use short retry loops in fixture tests for newly added UI controls (for example Add custom column and Formula guide) and verify the expected post-click element appears before continuing.
 - Sending full product attributes via BroadcastChannel (e.g. context-attributes messages) can fail to reach the table or hit size limits. Requesting attributes only when the user applies an ENTITY formula and fetching them from the backend (POST /table/entity-attributes) ensures the table gets the data it needs and keeps the context payload small.
 - BottomSheet previously used entries as $bindable for two-way binding. When refactoring to multi-sheet state (derived activeSheet), the parent cannot bind to a derived value. Switching to a controlled pattern (entries prop + onEntriesChange) lets the parent own the state and update the active sheet.
+- Persisting sheet rows as domain-shaped objects (`entityGlobalId`, `category`, etc.) locks storage to current UI semantics and makes schema evolution painful. Serializing to a sparse Excel-like `cells` map (`A1` refs with value/formula) plus row metadata keeps payloads compact and lets frontend hydration stay stable while still supporting legacy payload migration on read.
 
 ## Univer feasibility (timeboxed spike)
 

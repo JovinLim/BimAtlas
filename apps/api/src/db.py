@@ -721,14 +721,14 @@ _SHEET_TEMPLATE_COLS = (
 
 
 def create_sheet_template(
-    project_id: str, name: str, sheet_json: dict,
+    project_id: str, name: str, sheet_json: dict, *, open: bool = False,
 ) -> dict:
     """Create a new sheet template for a project. Returns the new row."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"INSERT INTO sheet_template (project_id, name, sheet) "
-            f"VALUES (%s, %s, %s) RETURNING {_SHEET_TEMPLATE_COLS}",
-            (project_id, name, json.dumps(sheet_json)),
+            "INSERT INTO sheet_template (project_id, name, sheet, open) "
+            f"VALUES (%s, %s, %s, %s) RETURNING {_SHEET_TEMPLATE_COLS}",
+            (project_id, name, json.dumps(sheet_json), open),
         )
         row = cur.fetchone()
         r = dict(row)
@@ -752,6 +752,38 @@ def fetch_sheet_template(sheet_template_id: str) -> dict | None:
         if isinstance(r.get("sheet"), str):
             r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
         return r
+
+
+def update_sheet_template(
+    sheet_template_id: str,
+    *,
+    open: bool | None = None,
+    name: str | None = None,
+    sheet: dict | None = None,
+) -> dict | None:
+    """Update a sheet template. Returns the updated row or None if not found."""
+    updates: list[str] = []
+    params: list = []
+    if open is not None:
+        updates.append("open = %s")
+        params.append(open)
+    if name is not None:
+        updates.append("name = %s")
+        params.append(name)
+    if sheet is not None:
+        updates.append("sheet = %s")
+        params.append(json.dumps(sheet))
+    if not updates:
+        return fetch_sheet_template(sheet_template_id)
+    updates.append("updated_at = now()")
+    params.append(sheet_template_id)
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"UPDATE sheet_template SET {', '.join(updates)} "
+            "WHERE sheet_template_id = %s",
+            params,
+        )
+    return fetch_sheet_template(sheet_template_id)
 
 
 def fetch_sheet_templates_opened(project_id: str) -> list[dict]:
@@ -797,6 +829,16 @@ def search_sheet_templates(query: str, project_id: str) -> list[dict]:
         if isinstance(r.get("sheet"), str):
             r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
     return rows
+
+
+def delete_sheet_template(sheet_template_id: str) -> bool:
+    """Delete a sheet template by id. Returns True if a row was deleted."""
+    with get_cursor() as cur:
+        cur.execute(
+            "DELETE FROM sheet_template WHERE sheet_template_id = %s",
+            (sheet_template_id,),
+        )
+        return cur.rowcount > 0
 
 
 def search_filter_sets(

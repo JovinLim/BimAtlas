@@ -28,6 +28,7 @@ from ..db import (
     create_project,
     create_sheet_template as db_create_sheet_template,
     delete_branch as db_delete_branch,
+    delete_sheet_template as db_delete_sheet_template,
     delete_filter_set as db_delete_filter_set,
     delete_project as db_delete_project,
     delete_revision as db_delete_revision,
@@ -50,6 +51,7 @@ from ..db import (
     fetch_sheet_templates_for_project,
     fetch_sheet_templates_opened,
     fetch_spatial_container,
+    update_sheet_template as db_update_sheet_template,
     get_latest_revision_seq,
     search_filter_sets,
     search_sheet_templates,
@@ -849,8 +851,27 @@ class Mutation:
         project_id: str,
         name: str,
         sheet: strawberry.scalars.JSON,
+        open: bool = False,
     ) -> SheetTemplate:
         """Create a new sheet template for a project. Name is required."""
         sheet_dict = sheet if isinstance(sheet, dict) else {}
-        row = db_create_sheet_template(project_id, name, sheet_dict)
+        row = db_create_sheet_template(project_id, name, sheet_dict, open=open)
         return _row_to_sheet_template(row)
+
+    @strawberry.mutation
+    async def update_sheet_template(
+        self,
+        id: str,
+        open: Optional[bool] = None,
+        name: Optional[str] = None,
+        sheet: Optional[strawberry.scalars.JSON] = None,
+    ) -> Optional[SheetTemplate]:
+        """Update a sheet template (open, name, or sheet content)."""
+        sheet_dict = sheet if isinstance(sheet, dict) else None
+        row = db_update_sheet_template(id, open=open, name=name, sheet=sheet_dict)
+        return _row_to_sheet_template(row) if row else None
+
+    @strawberry.mutation
+    async def delete_sheet_template(self, id: str) -> bool:
+        """Delete a sheet template by id."""
+        return db_delete_sheet_template(id)

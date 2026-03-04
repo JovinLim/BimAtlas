@@ -44,6 +44,19 @@ class TestSheetTemplateCRUD:
         rows = db.fetch_sheet_templates_for_project(str(test_project["project_id"]))
         assert rows == []
 
+    def test_delete_sheet_template(self, db_pool, test_project):
+        project_id = str(test_project["project_id"])
+        created = db.create_sheet_template(project_id, "To Delete", {})
+        tid = str(created["sheet_template_id"])
+        assert db.fetch_sheet_template(tid) is not None
+        deleted = db.delete_sheet_template(tid)
+        assert deleted is True
+        assert db.fetch_sheet_template(tid) is None
+
+    def test_delete_sheet_template_not_found(self, db_pool):
+        deleted = db.delete_sheet_template("00000000-0000-0000-0000-000000000000")
+        assert deleted is False
+
 
 class TestSheetTemplateSearch:
     """Test search_sheet_templates with project scope."""

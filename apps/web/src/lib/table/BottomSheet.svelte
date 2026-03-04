@@ -209,20 +209,20 @@
         class="sheet-save-btn"
         onclick={onSaveTemplate}
         disabled={!onSaveTemplate}
-        aria-label="Save as template"
+        aria-label="Save Sheet Template"
       >
-        Save template
+        Save Sheet Template
       </button>
       <div class="template-search-wrap">
         <input
           type="text"
           class="template-search-input"
-          placeholder="Search templates..."
+          placeholder="Search Sheet Templates"
           value={templateSearchQuery}
           oninput={(e) => onTemplateSearchChange?.(e.currentTarget.value)}
           onfocus={() => (templateSearchFocused = true)}
           onblur={() => setTimeout(() => (templateSearchFocused = false), 150)}
-          aria-label="Search sheet templates"
+          aria-label="Search Sheet Templates"
         />
         {#if templateSearchFocused || (templateSearchQuery && templateResults.length > 0)}
           <div class="template-dropdown" bind:this={templateDropdownRef} role="listbox">

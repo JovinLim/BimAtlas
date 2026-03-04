@@ -15,4 +15,6 @@ export interface SheetState {
   entries: SheetEntry[];
   formulas: Record<string, string>;
   lockedIds: Set<string>;
+  /** Template id in DB when saved; null when unsaved. */
+  templateId?: string | null;
 }

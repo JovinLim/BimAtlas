@@ -404,4 +404,93 @@ test.describe("Table view (fixture data)", () => {
     await expect(page.getByText(/ENTITY\.PropertySets\.PsetWallCommon/)).toBeVisible();
     await expect(page.getByText(/\[Display Text\]\(Formula\)/)).toBeVisible();
   });
+
+  test("Export CSV button renders in top segment toolbar and is enabled when data is present", async ({
+    page,
+  }) => {
+    await expect(page.getByText(/Total entities:\s*5/i)).toBeVisible();
+    const exportBtn = page.getByTestId("export-csv-btn");
+    await expect(exportBtn).toBeVisible();
+    await expect(exportBtn).toBeEnabled();
+  });
+
+  test("Export CSV download includes entity columns and IFC entity data", async ({
+    page,
+  }) => {
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("export-csv-btn").click();
+    const download = await downloadPromise;
+
+    expect(download.suggestedFilename()).toMatch(/^filtered-entities-.*\.csv$/);
+    const path = await download.path();
+    expect(path).toBeTruthy();
+    const { readFileSync } = await import("node:fs");
+    const content = readFileSync(path!, "utf-8");
+
+    expect(content).toContain("Global ID");
+    expect(content).toContain("IFC CLASS");
+    expect(content).toContain("Name");
+    expect(content).not.toContain("Sheet Category");
+
+    expect(content).toContain("IfcColumn");
+    expect(content).toContain("2O2Fr$t4X7Zf8NO2L3bQpE");
+  });
+
+  test("Export CSV with bottom sheet row includes both entity and sheet data", async ({
+    page,
+  }) => {
+    const addBtn = page.getByRole("button", { name: /add row/i });
+    await addBtn.scrollIntoViewIfNeeded();
+    let attempts = 0;
+    while (attempts < 3) {
+      await addBtn.click();
+      const sheetRows = page
+        .getByRole("grid", { name: /sheet interactions/i })
+        .locator("tbody tr");
+      if ((await sheetRows.count()) > 0) break;
+      attempts += 1;
+      await page.waitForTimeout(200);
+    }
+
+    const sheetGrid = page.getByRole("grid", { name: /sheet interactions/i });
+    const categoryCell = sheetGrid.locator("tbody .col-ifcClass input").first();
+    await categoryCell.fill("QS-Category");
+    await categoryCell.press("Enter");
+    const valueCell = sheetGrid.locator("tbody .col-description input").first();
+    await valueCell.fill("42");
+    await valueCell.press("Enter");
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("export-csv-btn").click();
+    const download = await downloadPromise;
+    const path = await download.path();
+    expect(path).toBeTruthy();
+    const { readFileSync } = await import("node:fs");
+    const content = readFileSync(path!, "utf-8");
+
+    expect(content).toContain("QS-Category");
+    expect(content).toContain("42");
+  });
+
+  test("CSV export escapes commas, quotes, and newlines correctly", async ({
+    page,
+  }) => {
+    await unlockEntityRows(page, 1);
+    const table = page.getByRole("grid", { name: /IFC entities/i });
+    const nameInput = table.locator("tbody .col-name input").first();
+    await nameInput.click();
+    const formulaInput = page.locator(".formula-input");
+    await formulaInput.fill('Value with "quotes" and, comma');
+    await formulaInput.press("Enter");
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("export-csv-btn").click();
+    const download = await downloadPromise;
+    const path = await download.path();
+    expect(path).toBeTruthy();
+    const { readFileSync } = await import("node:fs");
+    const content = readFileSync(path!, "utf-8");
+
+    expect(content).toContain('"Value with ""quotes"" and, comma"');
+  });
 });

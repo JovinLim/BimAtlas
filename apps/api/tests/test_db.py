@@ -254,8 +254,8 @@ class TestRevisionHelpers:
         # Search "alice" matches author_id and ifc_filename
         rows = db.fetch_revisions_filtered(branch_id, search="alice")
         assert len(rows) == 2
-        seqs = {r["revision_seq"] for r in rows}
-        assert 1 in seqs and 3 in seqs
+        filenames = {r["ifc_filename"] for r in rows}
+        assert filenames == {"model-a.ifc", "alice-v2.ifc"}
         # Search "Second" matches only commit_message
         rows = db.fetch_revisions_filtered(branch_id, search="Second")
         assert len(rows) == 1

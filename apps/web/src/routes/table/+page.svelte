@@ -18,6 +18,8 @@
     SHEET_TEMPLATES_QUERY,
     SHEET_TEMPLATE_QUERY,
     CREATE_SHEET_TEMPLATE_MUTATION,
+    UPDATE_SHEET_TEMPLATE_MUTATION,
+    DELETE_SHEET_TEMPLATE_MUTATION,
   } from "$lib/api/client";
   import EntityGridDynamic from "$lib/table/EntityGridDynamic.svelte";
   import BottomSheet from "$lib/table/BottomSheet.svelte";
@@ -40,6 +42,11 @@
     parseHeaderAliasFormula,
     resolveEntityPath,
   } from "$lib/table/formulas";
+  import {
+    buildMergedCsv,
+    csvFilename,
+    downloadCsv,
+  } from "$lib/table/csv";
 
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
@@ -217,6 +224,90 @@
   let editingSheetId = $state<string | null>(null);
   let editingSheetName = $state("");
   let editingSheetInputRef = $state<HTMLInputElement | null>(null);
+  let closeSheetConfirmDialog = $state<SheetState | null>(null);
+  let sheetTabContextMenu = $state<{ x: number; y: number; sheet: SheetState } | null>(null);
+
+  function requestCloseSheet(sheet: SheetState, e?: MouseEvent) {
+    e?.stopPropagation();
+    if (sheets.length <= 1) return;
+    if (sheet.templateId) {
+      performCloseSheet(sheet);
+    } else {
+      closeSheetConfirmDialog = sheet;
+    }
+  }
+
+  async function performCloseSheet(sheet: SheetState) {
+    if (sheet.templateId && projectId) {
+      try {
+        await client
+          .mutation(UPDATE_SHEET_TEMPLATE_MUTATION, {
+            id: sheet.templateId,
+            open: false,
+          })
+          .toPromise();
+      } catch (err) {
+        console.error("Failed to update template open state:", err);
+      }
+    }
+    const next = sheets.filter((s) => s.id !== sheet.id);
+    const wasActive = activeSheetId === sheet.id;
+    sheets = next;
+    if (wasActive && next.length > 0) activeSheetId = next[0]!.id;
+    pushHistory();
+  }
+
+  async function performDeleteSheet(sheet: SheetState) {
+    if (sheet.templateId && projectId) {
+      try {
+        await client
+          .mutation(DELETE_SHEET_TEMPLATE_MUTATION, { id: sheet.templateId })
+          .toPromise();
+      } catch (err) {
+        console.error("Failed to delete sheet template:", err);
+        showToast("Failed to delete sheet");
+        return;
+      }
+    }
+    const next = sheets.filter((s) => s.id !== sheet.id);
+    const wasActive = activeSheetId === sheet.id;
+    sheets = next;
+    if (wasActive && next.length > 0) activeSheetId = next[0]!.id;
+    pushHistory();
+  }
+
+  function handleCloseSheetCancel() {
+    closeSheetConfirmDialog = null;
+  }
+
+  async function handleCloseSheetSaveAndClose() {
+    const sheet = closeSheetConfirmDialog;
+    if (!sheet || !projectId) {
+      closeSheetConfirmDialog = null;
+      return;
+    }
+    const name = prompt("Template name (required):", sheet.name);
+    if (!name || !name.trim()) {
+      showToast("Template name is required");
+      return;
+    }
+    try {
+      const result = await client
+        .mutation(CREATE_SHEET_TEMPLATE_MUTATION, {
+          projectId,
+          name: name.trim(),
+          sheet: serializeSheetForStorage(sheet, name.trim()),
+        })
+        .toPromise();
+      if (result.data?.createSheetTemplate) {
+        closeSheetConfirmDialog = null;
+        await performCloseSheet(sheet);
+      }
+    } catch (err) {
+      console.error("Failed to save template:", err);
+      alert("Failed to save template. See console for details.");
+    }
+  }
 
   function startEditingSheet(sheet: SheetState) {
     pushHistory();
@@ -239,6 +330,7 @@
   let topFormulas = $state<Record<string, string>>({});
   let draftValues = $state<Record<string, string>>({});
   let activeCell = $state<SpreadsheetCellState | null>(null);
+  let activeHeaderColumnId = $state<string | null>(null);
   let formulaInput = $state("");
   let formulaComposeSourceRef = $state<string | null>(null);
   let formulaSuggestionIndex = $state(0);
@@ -249,35 +341,278 @@
   let loadingTemplates = $state(false);
   let lastOpenedLoadProjectId = $state<string | null>(null);
 
+  type StoredSheetCell = { value?: string; formula?: string };
+  type StoredSheetV2 = {
+    v: 2;
+    sheet: {
+      name?: string;
+      cols?: string[];
+      rowCount: number;
+      cells: Record<string, StoredSheetCell>;
+      lockedRows?: number[];
+    };
+    entity?: {
+      topEdits?: Record<string, string>;
+      topFormulas?: Record<string, string>;
+      topColumns?: TopTableColumn[];
+      lockedEntityIds?: string[];
+    };
+  };
+  type LegacyStoredSheet = {
+    entries?: SheetEntry[];
+    formulas?: Record<string, string>;
+    lockedIds?: string[];
+  };
+
+  type DeserializedStoredTemplate = {
+    sheet: SheetState;
+    entity?: {
+      topEdits: Record<string, string>;
+      topFormulas: Record<string, string>;
+      topColumns: TopTableColumn[];
+      lockedEntityIds: Set<string>;
+    };
+  };
+
+  function createEmptySheetEntry(): SheetEntry {
+    return {
+      id: crypto.randomUUID(),
+      entityGlobalId: null,
+      category: "",
+      label: "",
+      value: "",
+      notes: "",
+      tag: "",
+    };
+  }
+
+  function isStoredSheetV2(input: unknown): input is StoredSheetV2 {
+    if (!input || typeof input !== "object") return false;
+    const maybe = input as { v?: unknown; sheet?: { cells?: unknown } };
+    return maybe.v === 2 && typeof maybe.sheet?.cells === "object" && maybe.sheet?.cells != null;
+  }
+
+  function mapSheetColToField(col: string): keyof Omit<SheetEntry, "id"> | null {
+    if (col === "A") return "entityGlobalId";
+    if (col === "B") return "category";
+    if (col === "C") return "label";
+    if (col === "D") return "value";
+    if (col === "E") return "notes";
+    if (col === "F") return "tag";
+    return null;
+  }
+
+  function toStoredSheetRef(ref: string, rowCount: number): string | null {
+    const parsed = parseCellRef(ref);
+    if (!parsed) return null;
+    const start = sheetRowStart();
+    if (parsed.row >= start) return `${parsed.col}${parsed.row - start + 1}`;
+    if (parsed.row >= 1 && parsed.row <= rowCount) return ref;
+    return null;
+  }
+
+  function localSheetRefToAbsolute(localRef: string): string | null {
+    const parsed = parseCellRef(localRef);
+    if (!parsed) return null;
+    const start = sheetRowStart();
+    return `${parsed.col}${start + parsed.row - 1}`;
+  }
+
+  function serializeSheetForStorage(sheet: SheetState, name?: string): StoredSheetV2 {
+    const cells: Record<string, StoredSheetCell> = {};
+    const rowCount = sheet.entries.length;
+    for (let idx = 0; idx < rowCount; idx += 1) {
+      const row = idx + 1;
+      const entry = sheet.entries[idx]!;
+      for (const col of SHEET_COLUMNS) {
+        const field = mapSheetColToField(col);
+        if (!field) continue;
+        const raw = entry[field];
+        const value = raw == null ? "" : String(raw);
+        if (value === "") continue;
+        cells[`${col}${row}`] = { ...(cells[`${col}${row}`] ?? {}), value };
+      }
+    }
+    for (const [ref, formula] of Object.entries(sheet.formulas)) {
+      const storedRef = toStoredSheetRef(ref, rowCount);
+      if (!storedRef || !formula) continue;
+      cells[storedRef] = { ...(cells[storedRef] ?? {}), formula };
+    }
+    const lockedRows = sheet.entries
+      .map((entry, idx) => (sheet.lockedIds.has(entry.id) ? idx + 1 : null))
+      .filter((row): row is number => row != null);
+    return {
+      v: 2,
+      sheet: {
+        name: name ?? sheet.name,
+        cols: [...SHEET_COLUMNS],
+        rowCount,
+        cells,
+        lockedRows,
+      },
+      entity: {
+        topEdits: { ...topEdits },
+        topFormulas: { ...topFormulas },
+        topColumns: topColumns.map((c) => ({ ...c })),
+        lockedEntityIds: Array.from(lockedIds),
+      },
+    };
+  }
+
+  function deserializeStoredSheet(
+    data: unknown,
+    fallbackName: string,
+    templateId: string | null = null,
+  ): DeserializedStoredTemplate {
+    if (isStoredSheetV2(data)) {
+      const v2 = data;
+      const v2Sheet = v2.sheet;
+      const parsedRows = Object.keys(v2Sheet.cells)
+        .map((ref) => parseCellRef(ref)?.row ?? 0)
+        .filter((row) => row > 0);
+      const maxCellRow = parsedRows.length > 0 ? Math.max(...parsedRows) : 0;
+      const maxLockedRow = v2Sheet.lockedRows && v2Sheet.lockedRows.length > 0
+        ? Math.max(...v2Sheet.lockedRows)
+        : 0;
+      const rowCount = Math.max(v2Sheet.rowCount ?? 0, maxCellRow, maxLockedRow);
+      const entries = Array.from({ length: rowCount }, () => createEmptySheetEntry());
+      const formulas: Record<string, string> = {};
+      for (const [localRef, cell] of Object.entries(v2Sheet.cells)) {
+        const parsed = parseCellRef(localRef);
+        if (!parsed || parsed.row < 1 || parsed.row > entries.length) continue;
+        const field = mapSheetColToField(parsed.col);
+        if (!field) continue;
+        const entry = entries[parsed.row - 1]!;
+        if (cell.value !== undefined) {
+          const nextValue = String(cell.value);
+          if (field === "entityGlobalId") {
+            entry.entityGlobalId = nextValue.trim() === "" ? null : nextValue;
+          } else {
+            entry[field] = nextValue;
+          }
+        }
+        if (cell.formula) {
+          const absoluteRef = localSheetRefToAbsolute(localRef);
+          if (absoluteRef) formulas[absoluteRef] = cell.formula;
+        }
+      }
+      const lockedIds = new Set<string>();
+      for (const localRow of v2Sheet.lockedRows ?? []) {
+        const entry = entries[localRow - 1];
+        if (entry) lockedIds.add(entry.id);
+      }
+      return {
+        sheet: {
+          id: templateId ?? crypto.randomUUID(),
+          name: v2Sheet.name ?? fallbackName,
+          entries,
+          formulas,
+          lockedIds,
+          templateId,
+        },
+        entity: v2.entity
+          ? {
+              topEdits: { ...(v2.entity.topEdits ?? {}) },
+              topFormulas: { ...(v2.entity.topFormulas ?? {}) },
+              topColumns:
+                v2.entity.topColumns?.map((c: TopTableColumn) => ({ ...c })) ??
+                [...DEFAULT_TOP_COLUMNS],
+              lockedEntityIds: new Set(v2.entity.lockedEntityIds ?? []),
+            }
+          : undefined,
+      };
+    }
+
+    const legacy = (data ?? {}) as LegacyStoredSheet;
+    const entries = (legacy.entries ?? []).map((e) => ({
+      ...e,
+      id: e.id ?? crypto.randomUUID(),
+    }));
+    const formulas = legacy.formulas ?? {};
+    const lockedIds = new Set<string>(legacy.lockedIds ?? []);
+    return {
+      sheet: {
+        id: templateId ?? crypto.randomUUID(),
+        name: fallbackName,
+        entries,
+        formulas,
+        lockedIds,
+        templateId,
+      },
+    };
+  }
+
+  const projectIdFromUrl = $derived($page.url.searchParams.get("projectId"));
+  const mayNeedSheetLoad = $derived(
+    (projectId != null || projectIdFromUrl != null) && !useFixture,
+  );
+  const sheetsReady = $derived(
+    useFixture ||
+      !mayNeedSheetLoad ||
+      (projectId != null && lastOpenedLoadProjectId === projectId),
+  );
+
   async function loadOpenedTemplates() {
-    if (!projectId || lastOpenedLoadProjectId === projectId) return;
+    if (!projectId || useFixture || lastOpenedLoadProjectId === projectId) return;
     try {
-      const result = await client
+      const openedResult = await client
         .query(OPENED_SHEET_TEMPLATES_QUERY, { projectId })
         .toPromise();
-      const list = result.data?.openedSheetTemplates ?? [];
+      const list = openedResult.data?.openedSheetTemplates ?? [];
       lastOpenedLoadProjectId = projectId;
-      if (list.length === 0) return;
-      const newSheets: SheetState[] = list.map(
-        (t: { id: string; name: string; sheet: { entries?: SheetEntry[]; formulas?: Record<string, string>; lockedIds?: string[] } }) => {
-          const sheet = t.sheet ?? {};
-          const entries = (sheet.entries ?? []).map((e) => ({
-            ...e,
-            id: e.id ?? crypto.randomUUID(),
-          }));
-          const formulas = sheet.formulas ?? {};
-          const lockedIds = new Set<string>(sheet.lockedIds ?? []);
-          return {
-            id: t.id,
-            name: t.name,
-            entries,
-            formulas,
-            lockedIds,
-          };
-        },
+      if (list.length === 0) {
+        const allResult = await client
+          .query(SHEET_TEMPLATES_QUERY, { projectId })
+          .toPromise();
+        const allTemplates = allResult.data?.sheetTemplates ?? [];
+        if (allTemplates.length > 0) return;
+        const defaultState: SheetState = {
+          id: crypto.randomUUID(),
+          name: "Sheet 1",
+          entries: [],
+          formulas: {},
+          lockedIds: new Set<string>(),
+          templateId: null,
+        };
+        const createResult = await client
+          .mutation(CREATE_SHEET_TEMPLATE_MUTATION, {
+            projectId,
+            name: "Sheet 1",
+            sheet: serializeSheetForStorage(defaultState, "Sheet 1"),
+            open: true,
+          })
+          .toPromise();
+        const created = createResult.data?.createSheetTemplate;
+        if (created) {
+          sheets = [
+            {
+              id: created.id,
+              name: created.name,
+              entries: [],
+              formulas: {},
+              lockedIds: new Set<string>(),
+              templateId: created.id,
+            },
+          ];
+          activeSheetId = created.id;
+        }
+        return;
+      }
+      const parsed: DeserializedStoredTemplate[] = list.map(
+        (t: { id: string; name: string; sheet: unknown }) =>
+          deserializeStoredSheet(t.sheet, t.name, t.id),
       );
+      const newSheets: SheetState[] = parsed.map((p: DeserializedStoredTemplate) => p.sheet);
       sheets = newSheets;
       activeSheetId = newSheets[0]!.id;
+      const firstEntity = parsed.find((p: DeserializedStoredTemplate) => p.entity)?.entity;
+      if (firstEntity) {
+        topEdits = firstEntity.topEdits;
+        topFormulas = firstEntity.topFormulas;
+        topColumns = firstEntity.topColumns;
+        lockedIds = firstEntity.lockedEntityIds;
+        fetchEntityAttributesIfNeeded(topColumns);
+      }
     } catch (err) {
       console.error("Failed to load opened templates:", err);
     }
@@ -325,24 +660,44 @@
 
   async function handleSaveTemplate() {
     if (!projectId) return;
-    const name = prompt("Template name (required):", activeSheet.name);
-    if (!name || !name.trim()) {
-      showToast("Template name is required");
-      return;
-    }
-    const sheet = {
-      entries: activeSheet.entries.map((e) => ({ ...e })),
-      formulas: { ...activeSheet.formulas },
-      lockedIds: Array.from(activeSheet.lockedIds),
-    };
+    const payload = serializeSheetForStorage(activeSheet);
     try {
-      await client
-        .mutation(CREATE_SHEET_TEMPLATE_MUTATION, {
-          projectId,
-          name: name.trim(),
-          sheet,
-        })
-        .toPromise();
+      if (activeSheet.templateId) {
+        const result = await client
+          .mutation(UPDATE_SHEET_TEMPLATE_MUTATION, {
+            id: activeSheet.templateId,
+            name: activeSheet.name,
+            sheet: payload,
+          })
+          .toPromise();
+        if (result.data?.updateSheetTemplate) {
+          showToast("Template updated");
+        }
+      } else {
+        const name = prompt("Template name (required):", activeSheet.name);
+        if (!name || !name.trim()) {
+          showToast("Template name is required");
+          return;
+        }
+        const createPayload = serializeSheetForStorage(activeSheet, name.trim());
+        const result = await client
+          .mutation(CREATE_SHEET_TEMPLATE_MUTATION, {
+            projectId,
+            name: name.trim(),
+            sheet: createPayload,
+          })
+          .toPromise();
+        const created = result.data?.createSheetTemplate;
+        if (created) {
+          sheets = sheets.map((s) =>
+            s.id === activeSheetId
+              ? { ...s, id: created.id, name: created.name, templateId: created.id }
+              : s,
+          );
+          activeSheetId = created.id;
+          showToast("Template saved");
+        }
+      }
       templateSearchQuery = "";
       loadTemplateSearch();
     } catch (err) {
@@ -358,21 +713,44 @@
         .toPromise();
       const data = result.data?.sheetTemplate;
       if (!data?.sheet) return;
-      const sheet = data.sheet as {
-        entries?: SheetEntry[];
-        formulas?: Record<string, string>;
-        lockedIds?: string[];
-      };
-      const entries = (sheet.entries ?? []).map((e) => ({ ...e, id: e.id || crypto.randomUUID() }));
-      const formulas = sheet.formulas ?? {};
-      const lockedIds = new Set<string>(sheet.lockedIds ?? []);
+      const loaded = deserializeStoredSheet(data.sheet, template.name, template.id);
       pushHistory();
-      updateActiveSheet({ entries, formulas, lockedIds });
+      updateActiveSheet({
+        entries: loaded.sheet.entries,
+        formulas: loaded.sheet.formulas,
+        lockedIds: loaded.sheet.lockedIds,
+      });
+      if (loaded.entity) {
+        topEdits = loaded.entity.topEdits;
+        topFormulas = loaded.entity.topFormulas;
+        topColumns = loaded.entity.topColumns;
+        lockedIds = loaded.entity.lockedEntityIds;
+        fetchEntityAttributesIfNeeded(topColumns);
+      }
     } catch (err) {
       console.error("Failed to load template:", err);
       alert("Failed to load template. See console for details.");
     }
   }
+
+  $effect(() => {
+    const menu = sheetTabContextMenu;
+    if (!menu) return;
+    const el = document.querySelector("[data-sheet-tab-context-menu]");
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (el && !el.contains(target)) sheetTabContextMenu = null;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") sheetTabContextMenu = null;
+    };
+    document.addEventListener("mousedown", onMouseDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  });
 
   $effect(() => {
     const visible = showCellContentOverlay || showFormulaGuideOverlay;
@@ -407,15 +785,14 @@
   });
   const formulaSuggestionsList = $derived(
     getFormulaSuggestions(formulaPrefix, {
-      allowEntityFormulas: activeCell?.surface !== "sheet",
+      allowEntityFormulas: activeCell?.surface !== "sheet" || activeHeaderColumnId != null,
     }),
   );
   const showFormulaDropdown = $derived(
     formulaInput.trim().startsWith("=") &&
       /^[A-Za-z]*$/.test(formulaInput.trim().slice(1)) &&
       formulaSuggestionsList.length > 0 &&
-      activeCell != null &&
-      activeCell.editable,
+      ((activeCell != null && activeCell.editable) || activeHeaderColumnId != null),
   );
   /** GlobalId of the row to show as selected (from table focus or, when sync enabled, from viewer). */
   const selectedRowGlobalId = $derived.by(() => {
@@ -548,6 +925,40 @@
     }, 3000);
   }
 
+  function exportCsv() {
+    const headers = topColumns.map((c) => c.label);
+    const entityRows: string[][] = [];
+    for (let i = 0; i < displayProducts.length; i += 1) {
+      const product = displayProducts[i];
+      const row = 2 + i;
+      const rowValues: string[] = [];
+      for (const col of topColumns) {
+        const ref = `${col.col}${row}`;
+        const v = getCommittedValue(ref);
+        rowValues.push(
+          v !== "" ? v : product ? getTopFallback(ref, product) : "",
+        );
+      }
+      entityRows.push(rowValues);
+    }
+    const sheetRows = activeSheet.entries.map((e) => ({
+      entityGlobalId: e.entityGlobalId,
+      category: e.category ?? "",
+      label: e.label ?? "",
+      value: e.value ?? "",
+      notes: e.notes ?? "",
+      tag: e.tag ?? "",
+    }));
+    const csvText = buildMergedCsv({
+      headers,
+      entityRows,
+      sheetRows,
+    });
+    const filename = csvFilename(revision);
+    downloadCsv(csvText, filename);
+    showToast("CSV exported");
+  }
+
   function handleIncomingMessage(e: MessageEvent<TableMessage>) {
     const msg = e.data;
     if (msg.type === "context" && msg.version === TABLE_PROTOCOL_VERSION) {
@@ -562,6 +973,7 @@
       revision = msg.revision;
       products = msg.products ?? [];
       lockedIds = new Set(products.map((p) => p.globalId));
+      fetchEntityAttributesIfNeeded(topColumns);
 
       const params = new URLSearchParams($page.url.searchParams);
       if (branchId != null) params.set("branchId", String(branchId));
@@ -681,6 +1093,7 @@
         entries: s.entries.map((e) => ({ ...e })),
         formulas: { ...s.formulas },
         lockedIds: Array.from(s.lockedIds),
+        templateId: s.templateId ?? undefined,
       })),
       activeSheetId,
       lockedIds: Array.from(lockedIds),
@@ -716,6 +1129,7 @@
         entries: s.entries.map((e) => ({ ...e })),
         formulas: { ...s.formulas },
         lockedIds: new Set(s.lockedIds ?? []),
+        templateId: (s as { templateId?: string }).templateId ?? null,
       }));
       activeSheetId = value.activeSheetId ?? value.sheets[0]!.id;
     }
@@ -919,12 +1333,15 @@
     };
   }
 
+  let headerFormulaFocusedColumnId = $state<string | null>(null);
+
   function getHeaderFormulaInput(columnId: string): string {
     const draft = headerDrafts[columnId];
     if (draft !== undefined) return draft;
     const column = topColumns.find((c) => c.id === columnId);
     if (!column) return "";
     if (column.headerFormula.trim() === "") return "";
+    if (headerFormulaFocusedColumnId !== columnId) return column.label;
     return `[${column.label}](${column.headerFormula})`;
   }
 
@@ -1045,17 +1462,16 @@
     headerDrafts = nextDrafts;
     clearColumnRefs(column.col);
 
-    // When user applies an ENTITY formula, request only required properties from the backend and fill rows.
+    fetchEntityAttributesIfNeeded(nextColumns);
+  }
+
+  function fetchEntityAttributesIfNeeded(columns: TopTableColumn[]) {
     if (useFixture || !branchId || !revision || products.length === 0) return;
-    const paths = getRequiredEntityPathKeys(nextColumns);
+    const paths = getRequiredEntityPathKeys(columns);
     if (paths.length === 0) return;
     const globalIds = products.map((p) => p.globalId);
     fetchEntityAttributesFromBackend(branchId, revision, globalIds, paths)
       .then((attributesByGlobalId) => {
-        console.log(
-          "[Table] entity attributes stream (data to fill ENTITY rows):",
-          attributesByGlobalId,
-        );
         products = products.map((p) => {
           const attrs = attributesByGlobalId[p.globalId];
           if (attrs == null) return p;
@@ -1069,13 +1485,7 @@
   }
 
   function getSheetField(col: string): keyof Omit<SheetEntry, "id"> | null {
-    if (col === "A") return "entityGlobalId";
-    if (col === "B") return "category";
-    if (col === "C") return "label";
-    if (col === "D") return "value";
-    if (col === "E") return "notes";
-    if (col === "F") return "tag";
-    return null;
+    return mapSheetColToField(col);
   }
 
   function getCommittedValue(ref: string): string {
@@ -1182,6 +1592,7 @@
   }
 
   function onCellFocus(cell: SpreadsheetCellState) {
+    activeHeaderColumnId = null;
     selectCell(cell);
   }
 
@@ -1406,6 +1817,17 @@
   }
 
   function applyFormulaInput() {
+    if (activeHeaderColumnId != null) {
+      if (showFormulaDropdown && formulaSuggestionsList.length > 0) {
+        const idx = Math.max(0, Math.min(formulaSuggestionIndex, formulaSuggestionsList.length - 1));
+        applyFormulaSuggestion(formulaSuggestionsList[idx]);
+        formulaSuggestionIndex = 0;
+        return;
+      }
+      commitHeaderFormula(activeHeaderColumnId, formulaInput);
+      activeHeaderColumnId = null;
+      return;
+    }
     if (!activeCell) return;
     if (showFormulaDropdown && formulaSuggestionsList.length > 0) {
       const idx = Math.max(0, Math.min(formulaSuggestionIndex, formulaSuggestionsList.length - 1));
@@ -1417,6 +1839,20 @@
   }
 
   function cancelFormulaInput() {
+    if (activeHeaderColumnId != null) {
+      const col = topColumns.find((c) => c.id === activeHeaderColumnId);
+      const id = activeHeaderColumnId;
+      activeHeaderColumnId = null;
+      formulaInput = col
+        ? col.headerFormula.trim()
+          ? `[${col.label}](${col.headerFormula})`
+          : ""
+        : "";
+      const nextDrafts = { ...headerDrafts };
+      delete nextDrafts[id];
+      headerDrafts = nextDrafts;
+      return;
+    }
     if (!activeCell) return;
     const cell = activeCell;
     clearDraft(cell.ref);
@@ -1560,20 +1996,26 @@
   </header>
 
   <div class="formula-bar" aria-label="Formula bar">
-    <span class="formula-cell-ref mono">{activeCell?.ref ?? "—"}</span>
+    <span class="formula-cell-ref mono">
+      {activeHeaderColumnId
+        ? (topColumns.find((c) => c.id === activeHeaderColumnId)?.col ?? "—")
+        : activeCell?.ref ?? "—"}
+    </span>
     <div class="formula-input-wrap">
       <input
         type="text"
         class="formula-input"
         value={formulaInput}
         placeholder="Enter value or formula (e.g. =D2+E2, =SUM(D2:D4), =ENTITY.PropertySets.PsetWallCommon)"
-        disabled={activeCell == null}
-        readonly={activeCell != null && !activeCell.editable}
+        disabled={activeCell == null && activeHeaderColumnId == null}
+        readonly={activeCell != null && !activeCell.editable && activeHeaderColumnId == null}
         autocomplete="off"
         oninput={(e) => {
           formulaInput = e.currentTarget.value;
           formulaSuggestionIndex = 0;
-          if (activeCell != null) {
+          if (activeHeaderColumnId != null) {
+            headerDrafts = { ...headerDrafts, [activeHeaderColumnId]: formulaInput };
+          } else if (activeCell != null) {
             draftValues = { ...draftValues, [activeCell.ref]: formulaInput };
             formulaComposeSourceRef = formulaInput.trim().startsWith("=")
               ? activeCell.ref
@@ -1717,6 +2159,16 @@
         >
           Formula guide
         </button>
+        <button
+          type="button"
+          class="formula-guide-btn"
+          data-testid="export-csv-btn"
+          onclick={exportCsv}
+          disabled={products.length === 0 && activeSheet.entries.length === 0}
+          aria-label="Export full table as CSV"
+        >
+          Export CSV
+        </button>
       </div>
       <EntityGridDynamic
         products={displayProducts}
@@ -1731,6 +2183,19 @@
         onHeaderFormulaInput={onHeaderFormulaInput}
         onHeaderFormulaCommit={commitHeaderFormula}
         onHeaderFormulaCancel={onHeaderFormulaCancel}
+        onHeaderFormulaFocus={(id) => {
+          headerFormulaFocusedColumnId = id;
+          activeHeaderColumnId = id;
+          activeCell = null;
+          const col = topColumns.find((c) => c.id === id);
+          formulaInput = col
+            ? col.headerFormula.trim()
+              ? `[${col.label}](${col.headerFormula})`
+              : ""
+            : "";
+          tick().then(() => document.querySelector<HTMLInputElement>(".formula-input")?.focus());
+        }}
+        onHeaderFormulaBlur={() => (headerFormulaFocusedColumnId = null)}
         activeCellRef={activeCell?.ref ?? null}
         selectedRowGlobalId={selectedRowGlobalId}
         findHighlightGlobalId={findHighlightGlobalId}
@@ -1758,6 +2223,11 @@
       onmousedown={startResizeSplit}
     ></div>
     <section class="table-segment table-segment-bottom" aria-label="Sheet interactions">
+      {#if !sheetsReady}
+        <div class="sheets-loading-overlay">
+          <span class="sheets-loading-text">Loading sheets…</span>
+        </div>
+      {:else}
       <BottomSheet
         entries={activeSheet.entries}
         rowStart={products.length + 2}
@@ -1804,19 +2274,41 @@
               bind:this={editingSheetInputRef}
             />
           {:else}
-            <button
-              type="button"
+            <div
+              role="tab"
               class="sheet-tab"
               class:active={sheet.id === activeSheetId}
+              tabindex="0"
               onclick={() => setActiveSheet(sheet.id)}
               ondblclick={(e) => {
                 e.preventDefault();
                 startEditingSheet(sheet);
               }}
+              oncontextmenu={(e) => {
+                e.preventDefault();
+                if (sheets.length <= 1) return;
+                sheetTabContextMenu = { x: e.clientX, y: e.clientY, sheet };
+              }}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setActiveSheet(sheet.id);
+                }
+              }}
               aria-label="Switch to {sheet.name}"
             >
-              {sheet.name}
-            </button>
+              <span class="sheet-tab-label">{sheet.name}</span>
+              {#if sheets.length > 1}
+                <button
+                  type="button"
+                  class="sheet-tab-close"
+                  onclick={(e) => requestCloseSheet(sheet, e)}
+                  aria-label="Close {sheet.name}"
+                >
+                  ×
+                </button>
+              {/if}
+            </div>
           {/if}
         {/each}
         <button
@@ -1828,8 +2320,73 @@
           + Sheet
         </button>
       </div>
+      {/if}
     </section>
   </div>
+
+  {#if sheetTabContextMenu}
+    <div
+      data-sheet-tab-context-menu
+      class="sheet-tab-context-menu"
+      style="left: {sheetTabContextMenu.x}px; top: {sheetTabContextMenu.y}px;"
+      role="menu"
+    >
+      <button
+        type="button"
+        role="menuitem"
+        class="sheet-tab-context-item"
+        onclick={() => {
+          performCloseSheet(sheetTabContextMenu!.sheet);
+          sheetTabContextMenu = null;
+        }}
+      >
+        Close sheet
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="sheet-tab-context-item sheet-tab-context-item-danger"
+        onclick={() => {
+          performDeleteSheet(sheetTabContextMenu!.sheet);
+          sheetTabContextMenu = null;
+        }}
+      >
+        Delete sheet
+      </button>
+    </div>
+  {/if}
+
+  {#if closeSheetConfirmDialog}
+    <div
+      class="formula-guide-backdrop"
+      role="presentation"
+      onclick={handleCloseSheetCancel}
+      onkeydown={(e) => e.key === "Escape" && handleCloseSheetCancel()}
+    >
+      <div
+        class="close-sheet-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="close-sheet-dialog-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === "Escape" && handleCloseSheetCancel()}
+      >
+        <h2 id="close-sheet-dialog-title">Unsaved sheet</h2>
+        <p>
+          <strong>{closeSheetConfirmDialog.name}</strong> has not been saved. Save before closing?
+        </p>
+        <div class="close-sheet-dialog-actions">
+          <button type="button" onclick={handleCloseSheetCancel}>
+            Cancel closing
+          </button>
+          <button type="button" onclick={() => handleCloseSheetSaveAndClose()}>
+            Save and Close
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if showFormulaGuideOverlay}
     <div
@@ -2301,6 +2858,58 @@
     word-break: break-word;
   }
 
+  .close-sheet-dialog {
+    padding: 1.25rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    min-width: 18rem;
+  }
+
+  .close-sheet-dialog h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #ff8866;
+  }
+
+  .close-sheet-dialog p {
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+    color: #c0c0d0;
+  }
+
+  .close-sheet-dialog-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+  }
+
+  .close-sheet-dialog-actions button {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    border-radius: 0.3rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e0e0e0;
+    cursor: pointer;
+  }
+
+  .close-sheet-dialog-actions button:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .close-sheet-dialog-actions button:last-child {
+    background: rgba(255, 136, 102, 0.2);
+    border-color: rgba(255, 136, 102, 0.4);
+    color: #ff8866;
+  }
+
+  .close-sheet-dialog-actions button:last-child:hover {
+    background: rgba(255, 136, 102, 0.3);
+  }
+
   .formula-guide-section {
     margin-bottom: 1.25rem;
   }
@@ -2341,6 +2950,20 @@
     flex-direction: column;
   }
 
+  .sheets-loading-overlay {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .sheets-loading-text {
+    font-size: 0.9rem;
+    color: #888;
+  }
+
   .sheet-tabs {
     flex-shrink: 0;
     display: flex;
@@ -2352,6 +2975,9 @@
   }
 
   .sheet-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     padding: 0.25rem 0.6rem;
     font-size: 0.78rem;
     border-radius: 0.25rem;
@@ -2359,6 +2985,28 @@
     background: transparent;
     color: #999;
     cursor: pointer;
+  }
+
+  .sheet-tab-label {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .sheet-tab-close {
+    flex-shrink: 0;
+    padding: 0 0.15rem;
+    font-size: 1rem;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: #777;
+    cursor: pointer;
+    border-radius: 0.15rem;
+  }
+
+  .sheet-tab-close:hover {
+    color: #e66;
+    background: rgba(255, 100, 100, 0.15);
   }
 
   .sheet-tab:hover {
@@ -2386,6 +3034,36 @@
   .sheet-tab-add:hover {
     color: #ff8866;
     border-color: rgba(255, 136, 102, 0.4);
+  }
+
+  .sheet-tab-context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 10rem;
+    padding: 0.25rem 0;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #252538;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+  .sheet-tab-context-item {
+    display: block;
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .sheet-tab-context-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .sheet-tab-context-item-danger:hover {
+    background: rgba(220, 80, 60, 0.2);
+    color: #ffaa99;
   }
 
   .sheet-tab-edit {

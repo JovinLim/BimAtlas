@@ -31,6 +31,8 @@
     onHeaderFormulaInput: (columnId: string, value: string) => void;
     onHeaderFormulaCommit: (columnId: string, value: string) => void;
     onHeaderFormulaCancel: (columnId: string) => void;
+    onHeaderFormulaFocus?: (columnId: string) => void;
+    onHeaderFormulaBlur?: () => void;
     activeCellRef: string | null;
     selectedRowGlobalId: string | null;
     findHighlightGlobalId: string | null;
@@ -70,6 +72,8 @@
     onHeaderFormulaInput,
     onHeaderFormulaCommit,
     onHeaderFormulaCancel,
+    onHeaderFormulaFocus,
+    onHeaderFormulaBlur,
     activeCellRef,
     selectedRowGlobalId,
     findHighlightGlobalId,
@@ -352,7 +356,11 @@
                     aria-label={`Custom column formula for ${column.col}`}
                     value={getHeaderFormulaInput(column.id)}
                     oninput={(e) => onHeaderFormulaInput(column.id, e.currentTarget.value)}
-                    onblur={(e) => onHeaderFormulaCommit(column.id, e.currentTarget.value)}
+                    onfocus={() => onHeaderFormulaFocus?.(column.id)}
+                    onblur={(e) => {
+                      onHeaderFormulaCommit(column.id, e.currentTarget.value);
+                      onHeaderFormulaBlur?.();
+                    }}
                     onkeydown={(e) => onHeaderKeydown(e, column.id, e.currentTarget.value)}
                   />
                   <button

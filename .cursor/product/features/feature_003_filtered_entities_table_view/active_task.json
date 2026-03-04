@@ -234,5 +234,44 @@
       { "step": "Added test_sheet_templates.py, multi-sheet Playwright test, updated feature artifacts.", "status": "complete" }
     ],
     "handoff_notes": "Sheet templates persisted per project. Save requires name; load applies to active sheet only. Template controls hidden when projectId is null (fixture mode)."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/table-sheet-templates_721dc920.plan.md",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-04T09:37:15Z",
+      "feature_description": "Migrate sheet template payload from row-domain objects to sparse spreadsheet-style cells map while keeping legacy templates readable."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Implemented v2 JSON sheet payload with sparse cell map serialization/deserialization and backward compatibility."
+    },
+    "execution_log": [
+      { "step": "Added v2 storage adapter in /table route: serializeSheetForStorage() emits { v:2, sheet:{ rowCount, cells, lockedRows } }.", "status": "complete" },
+      { "step": "Added deserializeStoredSheet() to read both v2 sparse payload and legacy entries/formulas/lockedIds payloads.", "status": "complete" },
+      { "step": "Updated template create/load flows (default open sheet, save template, load template, save-and-close) to use v2 serialization.", "status": "complete" }
+    ],
+    "handoff_notes": "Sheet JSONB now stores sparse Excel-like cells; legacy template rows still load via compatibility path. Runtime UI model remains unchanged."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/filtered-entities-table-view_d1b27ff6.plan.md#export-full-csv",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-04T10:15:00Z",
+      "feature_description": "Toolbar CSV export that outputs the full merged table (top grid entities + bottom sheet interaction columns/rows)."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "CSV export implemented and verified in Playwright spreadsheet tests."
+    },
+    "execution_log": [
+      { "step": "Added $lib/table/csv.ts: escapeCsvCell, buildMergedCsv, csvFilename, downloadCsv.", "status": "complete" },
+      { "step": "Added Export CSV button in segment-toolbar; exportCsv() builds merged table from entity rows + sheet rows.", "status": "complete" },
+      { "step": "Filename format: filtered-entities-<revisionId>-<yyyyMMdd-HHmm>.csv; UTF-8 BOM for Excel.", "status": "complete" },
+      { "step": "Added 4 Playwright tests: button visibility/enabled, download columns, sheet data in export, CSV escaping.", "status": "complete" }
+    ],
+    "handoff_notes": "Export CSV in top segment toolbar. Merged export includes entity columns + Sheet Category/Label/Value/Notes/Tag. All CSV tests passing."
   }
 ]
