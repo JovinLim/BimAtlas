@@ -619,6 +619,7 @@
 
     const extraVars = filters.length > 0 ? filtersToQueryVars(filters) : {};
     await loadGeometry(mgr, rev, branchId, extraVars);
+    await ensureTotalProductCount(branchId, rev);
 
     searchChannel?.postMessage({
       type: "filter-result-count",
@@ -665,6 +666,7 @@
         ? filterSetsToQueryVars(filterSets, combinationLogic)
         : {};
     await loadGeometry(mgr, rev, branchId, extraVars);
+    await ensureTotalProductCount(branchId, rev);
 
     searchChannel?.postMessage({
       type: "filter-result-count",

@@ -52,7 +52,7 @@ export interface SearchFilter {
 	value?: string;
 	relation?: string;
 	operator?: string;
-	valueType?: 'string' | 'numeric';
+	valueType?: 'string' | 'numeric' | 'object';
 }
 
 export const FILTERABLE_ATTRIBUTES = [
