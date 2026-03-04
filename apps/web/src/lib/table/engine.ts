@@ -21,6 +21,36 @@ export interface TableEngine {
   capabilities: TableEngineCapabilities;
 }
 
+export type SpreadsheetSurface = "entity" | "sheet";
+
+export interface SpreadsheetCellRef {
+  surface: SpreadsheetSurface;
+  row: number;
+  col: string;
+}
+
+export interface SpreadsheetCellState extends SpreadsheetCellRef {
+  ref: string;
+  editable: boolean;
+  protected: boolean;
+}
+
+export interface SpreadsheetSnapshot {
+  topEdits: Record<string, string>;
+  topFormulas: Record<string, string>;
+  sheetEntries: Array<{
+    id: string;
+    entityGlobalId: string | null;
+    category: string;
+    label: string;
+    value: string;
+    notes: string;
+    tag: string;
+  }>;
+  sheetFormulas: Record<string, string>;
+  lockedIds: string[];
+}
+
 const DEFAULT_ENGINE: TableEngine = {
   id: "svelte-native",
   capabilities: {
@@ -53,8 +83,8 @@ export async function loadUniverEngine(): Promise<TableEngine> {
   }
   try {
     // Optional dependency: not installed by default; reserved for phase-2.
-    // @ts-expect-error - @univerjs/core is not in package.json
-    await import(/* webpackIgnore: true */ "@univerjs/core");
+    const univerPackage = "@univerjs/core";
+    await import(/* @vite-ignore */ univerPackage);
     currentEngine = {
       id: "univer",
       capabilities: {
@@ -67,4 +97,17 @@ export async function loadUniverEngine(): Promise<TableEngine> {
   } catch {
     return currentEngine;
   }
+}
+
+export function toCellRef(col: string, row: number): string {
+  return `${col.toUpperCase()}${row}`;
+}
+
+export function parseCellRef(value: string): { col: string; row: number } | null {
+  const match = /^([A-Za-z]+)(\d+)$/.exec(value.trim());
+  if (!match) return null;
+  return {
+    col: match[1].toUpperCase(),
+    row: Number(match[2]),
+  };
 }

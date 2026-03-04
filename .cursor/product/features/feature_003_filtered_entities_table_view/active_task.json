@@ -26,5 +26,77 @@
       }
     ],
     "handoff_notes": "All plan todos are satisfied. Table popup opens from the main page; fixture mode ?fixture=1 is used by Playwright. Commands: pnpm run test:spreadsheet (headless), pnpm run test:spreadsheet:headed (headed Chromium)."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/table-spreadsheet-utilities_292084ba.plan.md#implementation-steps",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-03T14:18:52Z",
+      "feature_description": "Spreadsheet utilities for the table popup: a Google-Sheets-style formula bar tied to the active cell, intermediate formula support, keyboard navigation, fill-down, and undo/redo across top entity grid and bottom sheet while keeping protected columns read-only."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Spreadsheet utility plan implemented and verified in headless + headed spreadsheet suites."
+    },
+    "execution_log": [
+      {
+        "step": "Added shared spreadsheet interaction model (active cell refs, snapshots/history types) and formula evaluation utility with cell refs, ranges, and arithmetic.",
+        "status": "complete"
+      },
+      {
+        "step": "Implemented top formula bar UI + global selection semantics across EntityGrid and BottomSheet, including protected-cell behavior.",
+        "status": "complete"
+      },
+      {
+        "step": "Implemented keyboard navigation, formula commit/cancel, fill-down action, and undo/redo in table route session state.",
+        "status": "complete"
+      },
+      {
+        "step": "Expanded spreadsheet Playwright tests for formula bar, protected cells, fill-down, and undo/redo; updated selectors for input-backed cell values.",
+        "status": "complete"
+      },
+      {
+        "step": "Validated with pnpm run check, CI= pnpm run test:spreadsheet, and CI= pnpm run test:spreadsheet:headed.",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": "All spreadsheet-utility todos complete. Formula bar now reflects selected cell across both surfaces; Apply/Cancel/Fill Down/Undo/Redo are available in the table popup."
+  },
+  {
+    "metadata": {
+      "feature_id": "feature_003_filtered_entities_table_view",
+      "plan_reference": ".cursor/plans/table-spreadsheet-utilities_292084ba.plan.md#implementation-steps",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-03T14:30:28Z",
+      "feature_description": "Spreadsheet UX refinements: formula reference insertion by clicking cells while composing formulas, drag-range selection, and preserving invalid formula input text instead of replacing with #ERROR."
+    },
+    "state": {
+      "status": "complete",
+      "current_objective": "Implemented requested spreadsheet interaction fixes and verified all spreadsheet tests."
+    },
+    "execution_log": [
+      {
+        "step": "Added pointer-driven cell hooks so the route can intercept mousedown/hover/up for spreadsheet-like selection and formula reference picking.",
+        "status": "complete"
+      },
+      {
+        "step": "Implemented '= then click cell' formula composition flow so clicked refs are inserted into the current formula expression (e.g., =D2).",
+        "status": "complete"
+      },
+      {
+        "step": "Implemented drag multi-cell selection state and range highlighting across both top grid and bottom sheet.",
+        "status": "complete"
+      },
+      {
+        "step": "Fixed invalid formula commit behavior to preserve the user's expression rather than replacing with literal #ERROR.",
+        "status": "complete"
+      },
+      {
+        "step": "Extended Playwright spreadsheet tests and validated with pnpm run check + CI= pnpm run test:spreadsheet.",
+        "status": "complete"
+      }
+    ],
+    "handoff_notes": "User-requested follow-up behaviors are implemented: click-to-insert formula refs, drag selection, and error-input preservation."
   }
 ]

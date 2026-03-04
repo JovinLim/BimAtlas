@@ -1,37 +1,131 @@
 <script lang="ts">
   import type { ProductMeta } from "$lib/search/protocol";
+  import type { SpreadsheetCellState } from "$lib/table/engine";
 
   type EditableKey = "name" | "description" | "objectType" | "tag";
   const EDITABLE_KEYS: EditableKey[] = ["name", "description", "objectType", "tag"];
+  const EDITABLE_COL: Record<EditableKey, string> = {
+    name: "D",
+    description: "E",
+    objectType: "F",
+    tag: "G",
+  };
+  const COLUMN_KEYS = {
+    B: "globalId",
+    C: "ifcClass",
+  } as const;
 
   type Props = {
     products: ProductMeta[];
     lockedIds: Set<string>;
     onToggleLock: (globalId: string) => void;
+    activeCellRef: string | null;
+    getCellDisplayValue: (ref: string, fallback: string) => string;
+    onCellFocus: (cell: SpreadsheetCellState) => void;
+    onCellInput: (cell: SpreadsheetCellState, value: string) => void;
+    onCellCommit: (cell: SpreadsheetCellState, value: string) => void;
+    onCellCancel: (cell: SpreadsheetCellState) => void;
+    onCellNavigate: (
+      cell: SpreadsheetCellState,
+      direction: "up" | "down" | "left" | "right" | "enter" | "tab",
+      shift: boolean,
+    ) => void;
+    onFillDown: (cell: SpreadsheetCellState) => void;
+    isCellInSelection: (ref: string) => boolean;
+    onCellPointerDown: (
+      cell: SpreadsheetCellState,
+      event: MouseEvent,
+    ) => boolean | void;
+    onCellPointerEnter: (cell: SpreadsheetCellState, event: MouseEvent) => void;
+    onCellPointerUp: (cell: SpreadsheetCellState, event: MouseEvent) => void;
   };
 
-  let { products, lockedIds, onToggleLock }: Props = $props();
-
-  let edits = $state<Record<string, Partial<Record<EditableKey, string | null>>>>({});
-
-  function getValue(product: ProductMeta, key: EditableKey): string {
-    const local = edits[product.globalId]?.[key];
-    if (local !== undefined) return local ?? "";
-    return product[key] ?? "";
-  }
-
-  function setValue(globalId: string, key: EditableKey, value: string) {
-    edits = {
-      ...edits,
-      [globalId]: {
-        ...edits[globalId],
-        [key]: value.trim() === "" ? null : value,
-      },
-    };
-  }
+  let {
+    products,
+    lockedIds,
+    onToggleLock,
+    activeCellRef,
+    getCellDisplayValue,
+    onCellFocus,
+    onCellInput,
+    onCellCommit,
+    onCellCancel,
+    onCellNavigate,
+    onFillDown,
+    isCellInSelection,
+    onCellPointerDown,
+    onCellPointerEnter,
+    onCellPointerUp,
+  }: Props = $props();
 
   function isLocked(globalId: string): boolean {
     return lockedIds.has(globalId);
+  }
+
+  function buildCell(
+    row: number,
+    col: string,
+    editable: boolean,
+    isProtected: boolean,
+  ): SpreadsheetCellState {
+    return {
+      surface: "entity",
+      row,
+      col,
+      ref: `${col}${row}`,
+      editable,
+      protected: isProtected,
+    };
+  }
+
+  function onCellKeydown(
+    e: KeyboardEvent,
+    cell: SpreadsheetCellState,
+    value: string,
+  ) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      onFillDown(cell);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      onCellNavigate(cell, "up", e.shiftKey);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      onCellNavigate(cell, "down", e.shiftKey);
+      return;
+    }
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      onCellNavigate(cell, "left", e.shiftKey);
+      return;
+    }
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      onCellNavigate(cell, "right", e.shiftKey);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onCellCommit(cell, value);
+      onCellNavigate(cell, "enter", e.shiftKey);
+      (e.currentTarget as HTMLInputElement).blur();
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      onCellCommit(cell, value);
+      onCellNavigate(cell, "tab", e.shiftKey);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onCellCancel(cell);
+      (e.currentTarget as HTMLInputElement).blur();
+    }
   }
 </script>
 
@@ -72,6 +166,7 @@
     <tbody>
       {#each products as product, idx (product.globalId)}
         {@const locked = isLocked(product.globalId)}
+        {@const row = idx + 2}
         <tr class="entity-row" data-global-id={product.globalId} data-locked={locked}>
           <th class="row-index" scope="row">{idx + 2}</th>
           <td class="col-lock">
@@ -96,19 +191,76 @@
             </button>
           </td>
           <td class="col-globalId">
-            <input class="cell-input readonly-cell" type="text" value={product.globalId} readonly />
+            <input
+              class="cell-input readonly-cell"
+              class:active-cell={activeCellRef === `B${row}`}
+              class:selected-range={isCellInSelection(`B${row}`)}
+              type="text"
+              data-cell-ref={`B${row}`}
+              value={getCellDisplayValue(`B${row}`, product[COLUMN_KEYS.B] ?? "")}
+              readonly
+              onmousedown={(e) => {
+                if (onCellPointerDown(buildCell(row, "B", false, true), e)) return;
+              }}
+              onmouseenter={(e) => onCellPointerEnter(buildCell(row, "B", false, true), e)}
+              onmouseup={(e) => onCellPointerUp(buildCell(row, "B", false, true), e)}
+              onfocus={() => onCellFocus(buildCell(row, "B", false, true))}
+              onkeydown={(e) =>
+                onCellKeydown(
+                  e,
+                  buildCell(row, "B", false, true),
+                  getCellDisplayValue(`B${row}`, product[COLUMN_KEYS.B] ?? ""),
+                )}
+            />
           </td>
           <td class="col-ifcClass">
-            <input class="cell-input readonly-cell" type="text" value={product.ifcClass} readonly />
+            <input
+              class="cell-input readonly-cell"
+              class:active-cell={activeCellRef === `C${row}`}
+              class:selected-range={isCellInSelection(`C${row}`)}
+              type="text"
+              data-cell-ref={`C${row}`}
+              value={getCellDisplayValue(`C${row}`, product[COLUMN_KEYS.C] ?? "")}
+              readonly
+              onmousedown={(e) => {
+                if (onCellPointerDown(buildCell(row, "C", false, true), e)) return;
+              }}
+              onmouseenter={(e) => onCellPointerEnter(buildCell(row, "C", false, true), e)}
+              onmouseup={(e) => onCellPointerUp(buildCell(row, "C", false, true), e)}
+              onfocus={() => onCellFocus(buildCell(row, "C", false, true))}
+              onkeydown={(e) =>
+                onCellKeydown(
+                  e,
+                  buildCell(row, "C", false, true),
+                  getCellDisplayValue(`C${row}`, product[COLUMN_KEYS.C] ?? ""),
+                )}
+            />
           </td>
           {#each EDITABLE_KEYS as key}
+            {@const col = EDITABLE_COL[key]}
             <td class={"col-" + key}>
               <input
                 class="cell-input"
                 type="text"
-                value={getValue(product, key)}
+                class:active-cell={activeCellRef === `${col}${row}`}
+                class:selected-range={isCellInSelection(`${col}${row}`)}
+                data-cell-ref={`${col}${row}`}
+                value={getCellDisplayValue(`${col}${row}`, product[key] ?? "")}
                 readonly={locked}
-                oninput={(e) => setValue(product.globalId, key, e.currentTarget.value)}
+                onmousedown={(e) => {
+                  if (onCellPointerDown(buildCell(row, col, !locked, false), e)) return;
+                }}
+                onmouseenter={(e) => onCellPointerEnter(buildCell(row, col, !locked, false), e)}
+                onmouseup={(e) => onCellPointerUp(buildCell(row, col, !locked, false), e)}
+                onfocus={() => onCellFocus(buildCell(row, col, !locked, false))}
+                oninput={(e) => onCellInput(buildCell(row, col, !locked, false), e.currentTarget.value)}
+                onblur={(e) => onCellCommit(buildCell(row, col, !locked, false), e.currentTarget.value)}
+                onkeydown={(e) =>
+                  onCellKeydown(
+                    e,
+                    buildCell(row, col, !locked, false),
+                    (e.currentTarget as HTMLInputElement).value,
+                  )}
               />
             </td>
           {/each}
@@ -166,6 +318,8 @@
 
   .cell-input { box-sizing: border-box; width: 100%; height: 100%; border: none; background: transparent; color: #e0e0e0; font-size: 0.78rem; padding: 0 0.5rem; font-family: inherit; }
   .cell-input:focus { outline: none; background: rgba(255,136,102,0.08); box-shadow: inset 0 0 0 1px rgba(255,136,102,0.45); }
+  .cell-input.active-cell { box-shadow: inset 0 0 0 1px rgba(102, 171, 255, 0.65); background: rgba(102, 171, 255, 0.09); }
+  .cell-input.selected-range { background: rgba(102, 171, 255, 0.12); }
   .cell-input[readonly] { color: #b9b9c5; }
   .readonly-cell { background: rgba(255,255,255,0.02); }
 
