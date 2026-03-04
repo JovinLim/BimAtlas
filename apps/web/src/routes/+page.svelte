@@ -33,6 +33,7 @@
   import {
     TABLE_CHANNEL,
     TABLE_PROTOCOL_VERSION,
+    ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
@@ -223,7 +224,6 @@
     const before = revisionFilterCreatedBefore.enabled
       ? revisionFilterCreatedBefore.text.trim()
       : "";
-    const hasFilter = !!(author || filename || message || after || before);
 
     if (revisionSearchDebounceId != null) {
       clearTimeout(revisionSearchDebounceId);
@@ -370,7 +370,10 @@
     tableChannel.onmessage = (e: MessageEvent<TableMessage>) => {
       if (e.data.type === "request-context") {
         sendTableContext();
-      } else if (e.data.type === "selection-changed") {
+      } else if (
+        ENABLE_TABLE_VIEWER_SELECTION_SYNC &&
+        e.data.type === "selection-changed"
+      ) {
         selection.activeGlobalId = e.data.globalId;
       }
     };
@@ -381,6 +384,16 @@
     attributesChannel?.close();
     graphChannel?.close();
     tableChannel?.close();
+  });
+
+  // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
+  $effect(() => {
+    if (!ENABLE_TABLE_VIEWER_SELECTION_SYNC) return;
+    const globalId = selection.activeGlobalId;
+    tableChannel?.postMessage({
+      type: "selection-sync",
+      globalId,
+    } satisfies TableMessage);
   });
 
   function sendBranchContext() {
@@ -435,15 +448,6 @@
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const products = searchState.products;
-    // Ensure BroadcastChannel payload is plain cloneable data.
-    const plainProducts = products.map((p) => ({
-      globalId: p.globalId,
-      ifcClass: p.ifcClass,
-      name: p.name ?? null,
-      description: p.description ?? null,
-      objectType: p.objectType ?? null,
-      tag: p.tag ?? null,
-    }));
 
     // Resolve human-readable names from loaded project list
     const project = projects.find((p) => p.id === projectId) ?? null;
@@ -452,16 +456,40 @@
       projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
       null;
 
-    tableChannel?.postMessage({
-      type: "context",
+    const contextBase = {
+      type: "context" as const,
       branchId,
       projectId,
       branchName: branch?.name ?? null,
       projectName: project?.name ?? null,
       revision,
-      products: plainProducts,
       version: TABLE_PROTOCOL_VERSION,
+      activeGlobalId: selection.activeGlobalId,
+    };
+
+    // Always send lean context first (small payload), then attributes in chunks.
+    // This avoids postMessage size limits that cause ENTITY.* columns to show "—" when one big payload fails.
+    const leanProducts = products.map((p) => ({
+      globalId: p.globalId,
+      ifcClass: p.ifcClass,
+      name: p.name,
+      description: p.description,
+      objectType: p.objectType,
+      tag: p.tag,
+      attributes: null,
+    }));
+    tableChannel?.postMessage({
+      ...contextBase,
+      products: leanProducts,
     } satisfies TableMessage);
+    // Do not send attribute chunks here; table will request them after receiving context
+    // so it is guaranteed to be listening when chunks arrive (fixes chunks not reaching table).
+    if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) {
+      tableChannel?.postMessage({
+        type: "selection-sync",
+        globalId: selection.activeGlobalId,
+      } satisfies TableMessage);
+    }
   }
 
   function openGraphPopup() {
@@ -1075,14 +1103,9 @@
                 description: product.description ?? null,
                 objectType: product.objectType ?? null,
                 tag: product.tag ?? null,
+                attributes: product.attributes ?? null,
               });
-              console.log("[geometry load] product received:", product);
               if (product.mesh?.vertices && product.mesh?.faces) {
-                console.log(
-                  "[geometry load] adding geometry for:",
-                  product.globalId,
-                  product.mesh,
-                );
                 try {
                   const geometry = createBufferGeometry(
                     product.mesh as RawMeshData,
@@ -1127,6 +1150,7 @@
                   description: product.description ?? null,
                   objectType: product.objectType ?? null,
                   tag: product.tag ?? null,
+                  attributes: product.attributes ?? null,
                 });
                 if (product.mesh?.vertices && product.mesh?.faces) {
                   try {
@@ -1143,22 +1167,7 @@
         }
       }
 
-      if (import.meta.env.DEV && (startTotal > 0 || metaList.length > 0)) {
-        console.debug("[geometry] stream done:", {
-          startTotal,
-          productMetaCount: metaList.length,
-          productEventsWithMesh,
-          sceneElementCount: mgr.elementCount,
-        });
-      }
-
       searchState.setProducts(metaList);
-
-      console.log(
-        "[geometry load] geometries received:",
-        metaList.length,
-        metaList,
-      );
 
       // If the Table popup is open, push updated context so it sees
       // the latest filtered entities instead of only the initial snapshot.

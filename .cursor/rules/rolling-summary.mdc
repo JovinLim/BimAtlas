@@ -9,44 +9,41 @@ When assigned a task from a central `plan.md` that contains multiple TODOs:
 
 1. **Locate Target:** Determine the relevant feature directory for your assigned TODO.
 2. **Find or Create:** Look for `active_task.md` (or `.json`) in that feature directory. If it does not exist, create it.
-3. **Claim the Task:** Update `active_task` to reflect your current objective. You MUST explicitly reference the exact TODO and line number/section from `plan.md` so other agents know this task is claimed. Append to the active tasks.
+3. **Claim the Task:** Update `active_task` to reflect your current objective. You MUST explicitly reference the exact TODO and line number/section from `plan.md` so other agents know this task is claimed. Append to the active tasks (do not overwrite existing entries).
 
 # 2. Execution & State Updates
 
-As you work, keep the `active_task` file updated with your current step and status (`in_progress`, `blocked`, `complete`).
+As you work, keep the `active_task` file updated with your current step and status (`in_progress`, `blocked`, `complete`). Use the same status values consistently so the Orchestrator can route correctly.
 
 # 3. Lessons Learned (Post-Execution)
 
-When completing your claimed task or failing an execution loop, you must update `lessons_learned.md` in the feature directory.
-Follow these strict rules:
+When completing your claimed task or failing an execution loop, you must update `lessons_learned.md` in the feature directory. Follow these strict rules:
 
 1. **No Bloat:** DO NOT append raw logs or full code snippets.
 2. **Pitfalls:** If you encountered a blocker and solved it, add a 2-sentence summary to "Resolved Pitfalls" detailing the trap and the solution.
 3. **Constraints:** If you discover a system-level constraint, add it to "Hard Constraints".
 4. **Pruning Rule:** If `lessons_learned.md` exceeds 50 lines, proactively summarize older "Resolved Pitfalls" into broader concepts. Never delete "Hard Constraints".
 
-# Active task template
+# Active task template (JSON)
 
+Use this structure when creating or updating `active_task.json`. Ensure `feature_id` matches the feature directory name (e.g. `feature_003_entities_spreadsheet`).
+
+```json
 {
-"metadata": {
-"feature_id": "feature_001_auth",
-"plan_reference": "plan.md#step-4-database-schema",
-"assigned_agent": "execution_agent_1",
-"last_updated": "2026-02-25T10:00:00Z"
-},
-"state": {
-"status": "in_progress",
-"current_objective": "Create the migration file for the User table based on step 4 of plan.md."
-},
-"execution_log": [
-{
-"step": "Read PRD for schema requirements",
-"status": "complete"
-},
-{
-"step": "Generate Prisma migration",
-"status": "in_progress"
+  "metadata": {
+    "feature_id": "feature_001_auth",
+    "plan_reference": "plan.md#step-4-database-schema",
+    "assigned_agent": "execution_agent_1",
+    "last_updated": "2026-02-25T10:00:00Z"
+  },
+  "state": {
+    "status": "in_progress",
+    "current_objective": "Create the migration file for the User table based on step 4 of plan.md."
+  },
+  "execution_log": [
+    { "step": "Read PRD for schema requirements", "status": "complete" },
+    { "step": "Generate Prisma migration", "status": "in_progress" }
+  ],
+  "handoff_notes": ""
 }
-],
-"handoff_notes": ""
-}
+```

@@ -26,9 +26,6 @@ todos:
   - id: docs-test-runner
     content: Update README with scripts for headless and headed Chromium spreadsheet test runs.
     status: completed
-  - id: export-full-csv
-    content: Add toolbar CSV export that outputs the full merged table (top grid entities + bottom sheet interaction columns/rows).
-    status: completed
 isProject: false
 ---
 
@@ -62,7 +59,6 @@ Add a new main-page button (parallel to Graph) that opens a popup tab showing th
 - Data source = current filtered entities from `searchState.products` (the actual streamed result set).
 - Lock model (`locked`/`unlocked`) and protected columns (`IfcClass` always read-only).
 - Split layout requirements: top entity table, bottom sheet interaction area.
-- Export requirements: single-click `.csv` export of the full table state combining top-grid entity columns and bottom-sheet interaction columns/values.
 - Out-of-scope guardrails for v1 (no backend persistence unless explicitly required).
 
 1. Seed feature constraints in [lessons_learned.md](.cursor/product/features/feature_003_filtered_entities_table_view/lessons_learned.md), including inherited hard constraints:
@@ -94,7 +90,6 @@ Add a new main-page button (parallel to Graph) that opens a popup tab showing th
 - Bootstrap from URL query (`projectId`, `branchId`, `revisionId`, optional selected entity).
 - Request/sync context via protocol channel.
 - Render split layout container (top grid + bottom sheet panel).
-- Add export CTA in the existing top-segment toolbar container (`div.segment-toolbar`) so it appears alongside existing controls (`Total entities`, `Find selected element`, `Lock all`, `Add column`, `Formula guide`).
 
 1. Implement top segment entity grid component(s) under [apps/web/src/lib/table/](apps/web/src/lib/table/):
 
@@ -108,22 +103,6 @@ Add a new main-page button (parallel to Graph) that opens a popup tab showing th
 - Start with lightweight interaction model (derived columns, ad-hoc notes/quantity formulas, row references).
 - Keep data contract explicit so this segment can migrate to Univer later if needed.
 - Define state persistence strategy for v1 (session/local only unless PRD calls for backend persistence).
-
-1. Implement full-table CSV export (grid + bottom sheet):
-
-- Add an `Export CSV` button in toolbar DOM path context:
-  - `div[0] > div.table-page > ... > section.table-segment.table-segment-top > div.segment-toolbar`
-  - Reference element observed: `<div class="segment-toolbar ...">Total entities: 73 Find selected element Lock all Add column Formula guide</div>`
-  - Target placement: same toolbar row (top segment), visible with existing controls.
-- Export must serialize the entire currently loaded table model, not just selected rows:
-  - Base columns from entity grid (including protected fields like `IfcClass`).
-  - User-created/derived columns and row values from bottom-sheet interaction state.
-  - Stable deterministic header order (entity identity fields first, then user/derived columns).
-- Normalization rules:
-  - Use CSV-safe escaping/quoting for commas, quotes, and multiline cell content.
-  - Emit UTF-8 text and trigger browser download with `.csv` extension.
-  - Preserve display value for formula/derived cells (and optionally include raw formula in a secondary column only if already represented in UI state).
-- Name file predictably using context (for example project/revision + timestamp), e.g. `filtered-entities-<revisionId>-<yyyyMMdd-HHmm>.csv`.
 
 1. Add a `TableEngine` adapter boundary in [apps/web/src/lib/table/engine.ts](apps/web/src/lib/table/engine.ts):
 
@@ -142,10 +121,6 @@ Add a new main-page button (parallel to Graph) that opens a popup tab showing th
 
 - Build a dedicated Playwright spec suite with deterministic dummy data fixtures (no dependency on live IFC streaming) under [apps/web/tests/table-spreadsheet/](apps/web/tests/table-spreadsheet/).
 - Cover spreadsheet-focused behaviors: split top/bottom segments, lock/unlock transitions, protected-cell enforcement (`IfcClass` uneditable), and bottom-sheet interaction edits/calculations.
-- Add CSV export checks:
-  - `Export CSV` button renders in top segment toolbar and remains enabled when data is present.
-  - Download payload includes both top-grid and bottom-sheet columns for the same exported row set.
-  - CSV escaping handles commas/quotes/newlines correctly.
 - Add a test harness entry mode (query flag, fixture injection, or mocked channel payload) so popup rendering can be validated in isolation from backend/network variability.
 - Add npm scripts in [apps/web/package.json](apps/web/package.json) for both:
   - default CI/headless run

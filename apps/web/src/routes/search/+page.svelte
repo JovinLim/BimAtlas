@@ -23,8 +23,8 @@
     UPDATE_FILTER_SET_MUTATION,
     DELETE_FILTER_SET_MUTATION,
     APPLY_FILTER_SETS_MUTATION,
+    IFC_PRODUCT_TREE_QUERY,
   } from "$lib/api/client";
-  import { IFC_PRODUCT_TREE_QUERY } from "$lib/api/client";
   import { setProductTreeFromApi } from "$lib/ifc/schema";
 
   // ---- Branch context (received from main window) ----
@@ -356,7 +356,6 @@
   }
 
   function cancelEditAppliedFilter() {
-    console.log("cancelEditAppliedFilter");
     editingAppliedFilterKey = null;
     editingAppliedFilterDraft = null;
   }

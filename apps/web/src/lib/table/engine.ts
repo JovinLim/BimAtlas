@@ -1,6 +1,6 @@
 /**
  * Table engine adapter boundary.
- * Default implementation is Svelte-native (EntityGrid + BottomSheet).
+ * Default implementation is Svelte-native (EntityGridDynamic + BottomSheet).
  * Optional Univer integration can be swapped in behind a feature flag or
  * dynamic import for phase-2 if spreadsheet requirements justify it.
  */
@@ -19,6 +19,89 @@ export interface TableEngineCapabilities {
 export interface TableEngine {
   id: "svelte-native" | "univer";
   capabilities: TableEngineCapabilities;
+}
+
+export type SpreadsheetSurface = "entity" | "sheet";
+
+export interface SpreadsheetCellRef {
+  surface: SpreadsheetSurface;
+  row: number;
+  col: string;
+}
+
+export interface SpreadsheetCellState extends SpreadsheetCellRef {
+  ref: string;
+  editable: boolean;
+  protected: boolean;
+}
+
+/** Serialized form of a single sheet for snapshot/undo. */
+export interface SheetSnapshot {
+  id: string;
+  name: string;
+  entries: Array<{
+    id: string;
+    entityGlobalId: string | null;
+    category: string;
+    label: string;
+    value: string;
+    notes: string;
+    tag: string;
+  }>;
+  formulas: Record<string, string>;
+  lockedIds: string[];
+}
+
+export interface SpreadsheetSnapshot {
+  topEdits: Record<string, string>;
+  topFormulas: Record<string, string>;
+  topColumns?: TopTableColumn[];
+  /** Multi-sheet: array of sheet snapshots. */
+  sheets: SheetSnapshot[];
+  /** ID of the active sheet. */
+  activeSheetId: string;
+  lockedIds: string[];
+}
+
+export type DefaultTopColumnKey =
+  | "globalId"
+  | "ifcClass"
+  | "name"
+  | "description"
+  | "objectType"
+  | "tag";
+
+export interface TopTableColumn {
+  id: string;
+  col: string;
+  label: string;
+  /** Raw user-entered header formula, supports [Display](Formula). */
+  headerFormula: string;
+  isDefault: boolean;
+  deletable: boolean;
+  editableCells: boolean;
+  protected: boolean;
+  defaultKey?: DefaultTopColumnKey;
+}
+
+export function indexToCol(index: number): string {
+  let n = index + 1;
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+export function colToIndex(col: string): number {
+  let result = 0;
+  const normalized = col.toUpperCase();
+  for (let i = 0; i < normalized.length; i += 1) {
+    result = result * 26 + (normalized.charCodeAt(i) - 64);
+  }
+  return result - 1;
 }
 
 const DEFAULT_ENGINE: TableEngine = {
@@ -53,8 +136,8 @@ export async function loadUniverEngine(): Promise<TableEngine> {
   }
   try {
     // Optional dependency: not installed by default; reserved for phase-2.
-    // @ts-expect-error - @univerjs/core is not in package.json
-    await import(/* webpackIgnore: true */ "@univerjs/core");
+    const univerPackage = "@univerjs/core";
+    await import(/* @vite-ignore */ univerPackage);
     currentEngine = {
       id: "univer",
       capabilities: {
@@ -67,4 +150,17 @@ export async function loadUniverEngine(): Promise<TableEngine> {
   } catch {
     return currentEngine;
   }
+}
+
+export function toCellRef(col: string, row: number): string {
+  return `${col.toUpperCase()}${row}`;
+}
+
+export function parseCellRef(value: string): { col: string; row: number } | null {
+  const match = /^([A-Za-z]+)(\d+)$/.exec(value.trim());
+  if (!match) return null;
+  return {
+    col: match[1].toUpperCase(),
+    row: Number(match[2]),
+  };
 }

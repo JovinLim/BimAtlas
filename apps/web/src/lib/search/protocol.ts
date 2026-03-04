@@ -12,6 +12,7 @@ export interface ProductMeta {
 	description: string | null;
 	objectType: string | null;
 	tag: string | null;
+	attributes?: Record<string, unknown> | null;
 }
 
 export interface SearchFilter {

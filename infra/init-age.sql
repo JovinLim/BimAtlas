@@ -138,6 +138,23 @@ CREATE TABLE IF NOT EXISTS filter_sets (
 CREATE INDEX idx_filter_sets_branch ON filter_sets (branch_id);
 
 -- ============================================================================
+-- Sheet templates (project-scoped bottom-sheet table state for /table page)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS sheet_template (
+    sheet_template_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id        UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    name              VARCHAR NOT NULL,
+    sheet             JSONB NOT NULL DEFAULT '{}',
+    open              BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (project_id, name)
+);
+
+CREATE INDEX idx_sheet_template_project ON sheet_template (project_id);
+
+-- ============================================================================
 -- Applied filter sets per branch (tracks which sets are currently active)
 -- ============================================================================
 

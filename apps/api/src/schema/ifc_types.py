@@ -243,3 +243,19 @@ class FilterInput:
     attribute: Optional[str] = None
     value: Optional[str] = None
     relation: Optional[str] = None
+
+
+# -- Sheet template types (FEAT-003 table page bottom-sheet persistence) --
+
+
+@strawberry.type
+class SheetTemplate:
+    """A project-scoped saved bottom-sheet table state."""
+
+    id: str
+    project_id: str
+    name: str
+    sheet: strawberry.scalars.JSON
+    open: bool
+    created_at: str
+    updated_at: str
