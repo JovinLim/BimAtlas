@@ -204,11 +204,20 @@ class TestProductFilterWithFilterSets:
                 ("g1", "IfcWall", "Exterior Wall", "Main wall", "BasicWall", "W1"),
                 ("g2", "IfcDoor", "Front Door", "Entry door", "SingleDoor", "D1"),
                 ("g3", "IfcWindow", "Side Window", None, "FixedWindow", "WN1"),
-                ("g4", "IfcSlab", "Floor Slab", "Ground floor", "BasicSlab", "S1"),
-                ("g5", "IfcWall", "Interior Wall", "Partition", "BasicWall", "W2"),
+                ("g4", "IfcSlab", "Floor Slab", "Ground floor", "BasicSlab", "S1", "2.5"),
+                ("g5", "IfcWall", "Interior Wall", "Partition", "BasicWall", "W2", "3.0"),
             ]
-            for gid, cls, name, desc, otype, tag in products:
+            for prod in products:
+                gid, cls, name, desc, otype, tag = prod[:6]
                 attrs = {"Name": name or "", "Description": desc or "", "ObjectType": otype or "", "Tag": tag or ""}
+                if gid == "g1":
+                    attrs["PropertySets"] = {"PsetWallCommon": {"FireRating": "2HR"}}
+                if gid == "g3":
+                    attrs["Meta"] = {"Name": "Basic Wall: Interior"}
+                if gid == "g5":
+                    attrs["PropertySets"] = {"PsetDoorCommon": {"FireRating": "1HR"}}
+                if len(prod) > 6 and prod[6] is not None:
+                    attrs["Height"] = prod[6]
                 cur.execute(
                     "INSERT INTO ifc_entity "
                     "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, created_in_revision_id) "
@@ -292,3 +301,182 @@ class TestProductFilterWithFilterSets:
             "AND",
         )
         assert len(rows) == 5
+
+    def test_operator_is_exact_match(self):
+        """operator=is: exact class match (same as legacy)."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "class", "ifcClass": "IfcWall", "operator": "is"}]}],
+            "AND",
+        )
+        assert len(rows) == 2
+        assert all(r["ifc_class"] == "IfcWall" for r in rows)
+
+    def test_operator_is_not_class(self):
+        """operator=is_not: exclude exact class."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "class", "ifcClass": "IfcWall", "operator": "is_not"}]}],
+            "AND",
+        )
+        assert len(rows) == 3
+        assert not any(r["ifc_class"] == "IfcWall" for r in rows)
+        gids = {r["ifc_global_id"] for r in rows}
+        assert gids == {"g2", "g3", "g4"}
+
+    def test_operator_contains_legacy_default(self):
+        """Missing operator defaults to contains for attribute mode."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "name", "value": "Door"}]}],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g2"
+
+    def test_operator_starts_with(self):
+        """operator=starts_with: prefix match."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "name", "value": "Exterior", "operator": "starts_with"}]}],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g1"
+
+    def test_operator_ends_with(self):
+        """operator=ends_with: suffix match."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "name", "value": "Wall", "operator": "ends_with"}]}],
+            "AND",
+        )
+        assert len(rows) == 2
+        gids = {r["ifc_global_id"] for r in rows}
+        assert gids == {"g1", "g5"}
+
+    def test_operator_is_not(self):
+        """operator=is_not: exclude exact match."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "name", "value": "Exterior Wall", "operator": "is_not"}]}],
+            "AND",
+        )
+        assert len(rows) == 4
+        assert not any(r["ifc_global_id"] == "g1" for r in rows)
+
+    def test_operator_is_empty(self):
+        """operator=is_empty: null or empty string (g3 has no description)."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "description", "operator": "is_empty"}]}],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g3"
+
+    def test_operator_is_not_empty(self):
+        """operator=is_not_empty: has non-empty value."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "attribute", "attribute": "name", "operator": "is_not_empty"}]}],
+            "AND",
+        )
+        assert len(rows) == 5
+
+    def test_operator_inherits_from(self, ifc_schema_seeded):
+        """operator=inherits_from: class + descendants (if schema loaded)."""
+        ifc_schema_seeded
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "class", "ifcClass": "IfcWall", "operator": "inherits_from"}]}],
+            "AND",
+        )
+        assert len(rows) >= 2
+        assert all(r["ifc_class"] == "IfcWall" for r in rows)
+
+    def test_logic_allowlist_normalized(self):
+        """Invalid logic tokens default to AND."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "xor", "filters": [{"mode": "class", "ifcClass": "IfcWall"}]}],
+            "nand",
+        )
+        assert len(rows) == 2
+
+    def test_operator_numeric_gte_on_height(self):
+        """Numeric Height >= 2.5 (g4 has 2.5, g5 has 3.0)."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{
+                "logic": "AND",
+                "filters": [{
+                    "mode": "attribute",
+                    "attribute": "height",
+                    "value": "2.5",
+                    "operator": "gte",
+                    "valueType": "numeric",
+                }],
+            }],
+            "AND",
+        )
+        assert len(rows) == 2
+        gids = {r["ifc_global_id"] for r in rows}
+        assert gids == {"g4", "g5"}
+
+    def test_operator_numeric_gt_on_height(self):
+        """Numeric Height > 2.5 (only g5 has 3.0)."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{
+                "logic": "AND",
+                "filters": [{
+                    "mode": "attribute",
+                    "attribute": "height",
+                    "value": "2.5",
+                    "operator": "gt",
+                    "valueType": "numeric",
+                }],
+            }],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g5"
+
+    def test_nested_attribute_key_contains_with_applicability(self):
+        """PropertySets contains PsetWallCommon should match only entities with that key+value."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq,
+            self.branch_id,
+            [{
+                "logic": "AND",
+                "filters": [{
+                    "mode": "attribute",
+                    "attribute": "PropertySets",
+                    "value": "PsetWallCommon",
+                    "operator": "contains",
+                }],
+            }],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g1"
+
+    def test_nested_attribute_key_is_match_any_depth(self):
+        """Name=is should match nested Name keys, not only top-level attributes.Name."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq,
+            self.branch_id,
+            [{
+                "logic": "AND",
+                "filters": [{
+                    "mode": "attribute",
+                    "attribute": "Name",
+                    "value": "Basic Wall: Interior",
+                    "operator": "is",
+                }],
+            }],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g3"

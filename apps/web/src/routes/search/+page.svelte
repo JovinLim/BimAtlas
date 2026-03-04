@@ -73,6 +73,8 @@
       attribute: f.attribute,
       value: f.value,
       relation: f.relation,
+      operator: f.operator,
+      valueType: f.valueType,
     }));
   }
 
@@ -225,6 +227,8 @@
       attribute: f.attribute ?? null,
       value: f.value ?? null,
       relation: f.relation ?? null,
+      operator: f.operator ?? null,
+      valueType: f.valueType ?? null,
     }));
   }
 
@@ -319,6 +323,9 @@
       ifcClass: f.ifcClass ?? undefined,
       attribute: f.attribute ?? undefined,
       value: f.value ?? undefined,
+      relation: f.relation ?? undefined,
+      operator: f.operator ?? undefined,
+      valueType: f.valueType ?? undefined,
     }));
     initNextIdFromFilters(filters);
   }
@@ -335,6 +342,15 @@
       await updateFilterSet(fs.id, name, fs.logic, fs.filters);
     } catch (err) {
       console.error("Failed to update applied filter set:", err);
+    }
+  }
+
+  async function handleLogicChange(fs: FilterSet, newLogic: "AND" | "OR") {
+    if (fs.logic === newLogic) return;
+    try {
+      await updateFilterSet(fs.id, getAppliedName(fs) || fs.name, newLogic, fs.filters);
+    } catch (err) {
+      console.error("Failed to update filter set logic:", err);
     }
   }
 
@@ -827,12 +843,14 @@
                   <button
                     class="mode-btn"
                     class:active={fs.logic === "AND"}
-                    disabled>AND</button
+                    onclick={() => handleLogicChange(fs, "AND")}
+                    >AND</button
                   >
                   <button
                     class="mode-btn"
                     class:active={fs.logic === "OR"}
-                    disabled>OR</button
+                    onclick={() => handleLogicChange(fs, "OR")}
+                    >OR</button
                   >
                 </div>
               </div>
@@ -901,7 +919,11 @@
                         {#if f.mode === "class"}
                           <span class="applied-filter-mode">Class</span>
                           <span class="applied-filter-value"
-                            >{f.ifcClass ?? "—"}</span
+                            >{f.operator === "inherits_from"
+                              ? "inherits from "
+                              : f.operator === "is_not"
+                                ? "is not "
+                                : ""}{f.ifcClass ?? "—"}</span
                           >
                         {:else if f.mode === "relation"}
                           <span class="applied-filter-mode">Relation</span>
@@ -911,7 +933,11 @@
                         {:else}
                           <span class="applied-filter-mode">Attr</span>
                           <span class="applied-filter-value"
-                            >{f.attribute ?? "—"} = {f.value ?? "—"}</span
+                            >{f.attribute ?? "—"} {f.operator === "is_empty"
+                              ? "is empty"
+                              : f.operator === "is_not_empty"
+                                ? "is not empty"
+                                : `${f.operator ?? "contains"} ${f.value ?? "—"}`}</span
                           >
                         {/if}
                         <div class="applied-filter-actions">
