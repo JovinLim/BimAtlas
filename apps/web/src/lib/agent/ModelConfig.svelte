@@ -10,68 +10,90 @@
 
 	let {
 		config = $bindable(),
-		collapsed = $bindable(false),
+		modalOpen = $bindable(false),
 		savedAgents = [],
 		selectedAgentId = null,
 		onselectAgent,
+		onclearAgent,
 		onsaveAgent,
-		ondeleteAgent,
 		savingAgent = false
 	}: {
 		config: AgentConfigDraft;
-		collapsed: boolean;
+		modalOpen: boolean;
 		savedAgents: AgentConfig[];
 		selectedAgentId: string | null;
 		onselectAgent: (agent: AgentConfig) => void;
+		onclearAgent?: () => void;
 		onsaveAgent: () => void;
-		ondeleteAgent: (id: string) => void;
 		savingAgent: boolean;
 	} = $props();
 
 	let showApiKey = $state(false);
 	let modelSuggestions = $derived(DEFAULT_MODELS[config.provider] ?? []);
+
+	function closeModal() {
+		modalOpen = false;
+	}
 </script>
 
-<section class="model-config" aria-label="LLM Configuration">
-	<button
-		type="button"
-		class="config-header"
-		onclick={() => (collapsed = !collapsed)}
-		aria-expanded={!collapsed}
-	>
-		<span class="config-title">Model</span>
-		<span class="config-summary">
-			{PROVIDER_OPTIONS.find((p) => p.value === config.provider)?.label ?? config.provider}
-			/ {config.model || '(none)'}
-		</span>
-		<span class="config-chevron" class:open={!collapsed}>▸</span>
-	</button>
+<svelte:window onkeydown={(e) => modalOpen && e.key === 'Escape' && closeModal()} />
 
-	{#if !collapsed}
-		<div class="config-body">
-			<!-- Saved agents -->
-			{#if savedAgents.length > 0}
-				<div class="saved-agents">
-					<span class="config-label">Saved Agents</span>
-					<div class="agent-list">
-						{#each savedAgents as agent}
-							<div class="agent-item" class:selected={agent.agent_config_id === selectedAgentId}>
-								<button
-									class="agent-item-name"
-									onclick={() => onselectAgent(agent)}
-								>
-									{agent.name}
-								</button>
-								<button
-									class="agent-item-delete"
-									onclick={() => ondeleteAgent(agent.agent_config_id)}
-									title="Delete"
-								>×</button>
-							</div>
-						{/each}
-					</div>
-				</div>
-			{/if}
+<section class="model-config" aria-label="LLM Configuration">
+	<div class="config-header">
+		<span class="config-title">Model</span>
+		<select
+			class="config-agent-select"
+			value={selectedAgentId ?? ''}
+			onchange={(e) => {
+				const v = (e.target as HTMLSelectElement).value;
+				if (v === '') {
+					onclearAgent?.();
+				} else {
+					const agent = savedAgents.find((a) => a.entity_id === v);
+					if (agent) onselectAgent(agent);
+				}
+			}}
+		>
+			<option value="">Select agent</option>
+			{#each savedAgents as agent}
+				<option value={agent.entity_id}>{agent.name}</option>
+			{/each}
+		</select>
+		<button
+			type="button"
+			class="config-toggle"
+			onclick={() => (modalOpen = true)}
+			aria-expanded={modalOpen}
+			aria-label="Edit agent config"
+		>
+			<span class="config-chevron">✎</span>
+		</button>
+	</div>
+</section>
+
+{#if modalOpen}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+	<div
+		class="config-modal-backdrop"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="config-modal-title"
+		tabindex="-1"
+		onclick={closeModal}
+	>
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+		<div class="config-modal" onclick={(e) => e.stopPropagation()} role="document">
+			<h2 id="config-modal-title" class="config-modal-title">Agent Configuration</h2>
+			<div class="config-body">
+			<label class="config-field">
+				<span class="config-label">Agent Name</span>
+				<input
+					class="config-input"
+					type="text"
+					placeholder="e.g. Wall Filter Assistant"
+					bind:value={config.name}
+				/>
+			</label>
 
 			<label class="config-field">
 				<span class="config-label">Provider</span>
@@ -132,21 +154,34 @@
 				</label>
 			{/if}
 
+			<label class="config-field">
+				<span class="config-label">Pre-Prompt</span>
+				<textarea
+					class="config-input config-textarea"
+					rows="4"
+					placeholder="Optional system instructions applied before each message."
+					bind:value={config.prePrompt}
+				></textarea>
+			</label>
+		</div>
+		<div class="config-modal-actions">
 			<button
 				type="button"
 				class="save-agent-btn"
 				onclick={onsaveAgent}
-				disabled={savingAgent || !config.model}
+				disabled={savingAgent || !config.model || !config.name.trim()}
 			>
-				{savingAgent ? 'Saving...' : 'Save as Agent'}
+				{savingAgent ? 'Saving...' : 'Save Agent'}
 			</button>
+			<button type="button" class="cancel-btn" onclick={closeModal}>Cancel</button>
 		</div>
-	{/if}
-</section>
+	</div>
+</div>
+{/if}
 
 <style>
 	.model-config {
-		border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.06));
+		border-bottom: 1px solid var(--color-border-subtle);
 	}
 
 	.config-header {
@@ -155,17 +190,41 @@
 		gap: 0.4rem;
 		width: 100%;
 		padding: 0.5rem 0.6rem;
-		background: none;
-		border: none;
-		color: var(--color-text-secondary, #ccc);
+		color: var(--color-text-secondary);
 		font-size: 0.78rem;
-		cursor: pointer;
-		text-align: left;
 		font-family: inherit;
 	}
 
-	.config-header:hover {
-		background: rgba(255, 255, 255, 0.03);
+	.config-agent-select {
+		flex: 1;
+		min-width: 0;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-default);
+		border-radius: 0.3rem;
+		color: var(--color-text-primary);
+		padding: 0.35rem 0.5rem;
+		font-size: 0.72rem;
+		outline: none;
+		font-family: inherit;
+		cursor: pointer;
+	}
+
+	.config-agent-select:focus,
+	.config-agent-select:focus-visible {
+		border-color: var(--color-border-strong);
+	}
+
+	.config-toggle {
+		background: none;
+		border: none;
+		color: var(--color-text-muted);
+		cursor: pointer;
+		padding: 0.2rem;
+	}
+
+	.config-toggle:hover,
+	.config-toggle:focus-visible {
+		background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 	}
 
 	.config-title {
@@ -173,32 +232,53 @@
 		font-size: 0.7rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: var(--color-text-muted, #888);
-	}
-
-	.config-summary {
-		flex: 1;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-size: 0.72rem;
-		color: var(--color-text-muted, #888);
+		color: var(--color-text-muted);
 	}
 
 	.config-chevron {
-		font-size: 0.6rem;
-		transition: transform 0.15s;
+		font-size: 0.75rem;
 	}
 
-	.config-chevron.open {
-		transform: rotate(90deg);
+	.config-modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+		padding: 1rem;
+	}
+
+	.config-modal {
+		width: 75vw;
+		height: 75vh;
+		background: var(--color-bg-surface);
+		border: 1px solid var(--color-border-default);
+		border-radius: 0.5rem;
+		padding: 1.25rem;
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		overflow: hidden;
+		box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.4);
+	}
+
+	.config-modal-title {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
+		flex-shrink: 0;
 	}
 
 	.config-body {
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		padding: 0 0.6rem 0.6rem;
+		overflow-y: auto;
+		flex: 1;
+		min-height: 0;
 	}
 
 	.config-field {
@@ -211,33 +291,40 @@
 		font-size: 0.65rem;
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
-		color: var(--color-text-muted, #888);
+		color: var(--color-text-muted);
 	}
 
 	.config-select,
 	.config-input {
-		background: var(--color-bg-elevated, rgba(255, 255, 255, 0.06));
-		border: 1px solid var(--color-border-default, rgba(255, 255, 255, 0.1));
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-default);
 		border-radius: 0.3rem;
-		color: var(--color-text-primary, #e0e0e0);
+		color: var(--color-text-primary);
 		padding: 0.35rem 0.5rem;
 		font-size: 0.78rem;
 		outline: none;
 		font-family: inherit;
 	}
 
+	.config-textarea {
+		resize: vertical;
+		min-height: 4.5rem;
+	}
+
 	.config-select:focus,
-	.config-input:focus {
-		border-color: var(--color-border-strong, rgba(255, 136, 102, 0.3));
+	.config-select:focus-visible,
+	.config-input:focus,
+	.config-input:focus-visible {
+		border-color: var(--color-border-strong);
 	}
 
 	.config-select option {
-		background: var(--color-bg-surface, #1a1a2e);
-		color: var(--color-text-primary, #e0e0e0);
+		background: var(--color-bg-surface);
+		color: var(--color-text-primary);
 	}
 
 	.config-input::placeholder {
-		color: var(--color-text-muted, #555);
+		color: var(--color-text-muted);
 	}
 
 	.key-row {
@@ -250,89 +337,63 @@
 	}
 
 	.key-toggle {
-		background: var(--color-bg-elevated, rgba(255, 255, 255, 0.06));
-		border: 1px solid var(--color-border-default, rgba(255, 255, 255, 0.1));
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-default);
 		border-radius: 0.3rem;
-		color: var(--color-text-muted, #888);
+		color: var(--color-text-muted);
 		cursor: pointer;
 		padding: 0 0.4rem;
 		font-size: 0.75rem;
 	}
 
-	.key-toggle:hover {
-		background: rgba(255, 255, 255, 0.1);
-	}
-
-	.saved-agents {
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-	}
-
-	.agent-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-
-	.agent-item {
-		display: flex;
-		align-items: center;
-		padding: 0.2rem 0.35rem;
-		border-radius: 0.25rem;
-		background: rgba(255, 255, 255, 0.03);
-	}
-
-	.agent-item.selected {
-		background: rgba(255, 136, 102, 0.12);
-		border: 1px solid rgba(255, 136, 102, 0.25);
-	}
-
-	.agent-item-name {
-		flex: 1;
-		background: none;
-		border: none;
-		color: var(--color-text-secondary, #ccc);
-		font-size: 0.72rem;
-		text-align: left;
-		cursor: pointer;
-		font-family: inherit;
-		padding: 0.15rem 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.agent-item-delete {
-		background: none;
-		border: none;
-		color: var(--color-text-muted, #666);
-		cursor: pointer;
-		font-size: 0.8rem;
-		padding: 0 0.15rem;
-	}
-
-	.agent-item-delete:hover {
-		color: var(--color-danger, #ff6b6b);
+	.key-toggle:hover,
+	.key-toggle:focus-visible {
+		background: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-bg-elevated));
 	}
 
 	.save-agent-btn {
 		padding: 0.35rem 0.6rem;
 		font-size: 0.72rem;
-		background: rgba(255, 136, 102, 0.15);
-		border: 1px solid rgba(255, 136, 102, 0.25);
+		background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-brand-500) 25%, transparent);
 		border-radius: 0.3rem;
-		color: var(--color-brand-500, #ff8866);
+		color: var(--color-brand-500);
 		cursor: pointer;
 		font-family: inherit;
 	}
 
-	.save-agent-btn:hover:not(:disabled) {
-		background: rgba(255, 136, 102, 0.3);
+	.save-agent-btn:hover:not(:disabled),
+	.save-agent-btn:focus-visible:not(:disabled) {
+		background: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
 	}
 
 	.save-agent-btn:disabled {
 		opacity: 0.4;
 		cursor: not-allowed;
+	}
+
+	.config-modal-actions {
+		display: flex;
+		justify-content: flex-start;
+		gap: 0.5rem;
+		padding-top: 0.5rem;
+		border-top: 1px solid var(--color-border-subtle);
+		flex-shrink: 0;
+	}
+
+	.config-modal-actions .cancel-btn {
+		padding: 0.4rem 0.8rem;
+		font-size: 0.82rem;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-default);
+		border-radius: 0.35rem;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+		font-family: inherit;
+	}
+
+	.config-modal-actions .cancel-btn:hover,
+	.config-modal-actions .cancel-btn:focus-visible {
+		background: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-bg-elevated));
 	}
 </style>

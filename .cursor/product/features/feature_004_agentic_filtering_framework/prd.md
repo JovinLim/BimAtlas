@@ -34,7 +34,7 @@ The backend must expose four MCP-compliant tools:
 
 - A Svelte chat panel in a **popup browser tab** (following the Graph/Search/Table/Attributes popup convention with BroadcastChannel context sync).
 - A model configuration sub-panel: Provider (OpenAI, Anthropic, Google, Ollama, Custom), Model name, API Key. Configuration is persisted to localStorage for convenience.
-- **IfcAgent saved models**: Users can save LLM configurations as named "IfcAgent" entities (project-scoped, stored in `agent_config` table). Saved agents can be selected, updated, or deleted. IfcAgent entities do not have geometry and are not rendered in the 3D viewer.
+- **IfcAgent saved models**: Users can save LLM configurations as named "IfcAgent" entities (project-scoped, stored as `ifc_entity` rows with `ifc_class='IfcAgent'` and attributes `{name, provider, model, api_key, base_url}`). Saved agents can be selected, updated, or deleted. IfcAgent entities do not have geometry and are not rendered in the 3D viewer.
 - Chat messages must show tool-call activity (which MCP tools were invoked, with what arguments) for transparency.
 - Errors from the agent (LLM failures, tool errors, network issues) must be visually distinguished in the chat with error styling.
 
@@ -63,7 +63,7 @@ The full operator vocabulary from FEAT-001 must be available to the agent:
 ## 3. Out of Scope (Strict Constraints)
 
 - Do not build a general-purpose chat assistant. The agent's sole purpose is filter construction and application on IFC data.
-- LLM API keys may be stored in the `agent_config` table as part of IfcAgent saved models. They can also be provided per-session without persistence.
+- LLM API keys may be stored in the `ifc_entity` attributes (as part of IfcAgent saved models). They can also be provided per-session without persistence.
 - Do not modify the existing filter set CRUD or JSONB schema — the MCP tools must wrap existing functions.
 - Do not implement graph traversal via Cypher for filtering; use the existing relational JSONB filter engine.
 - Do not expose geometry (BYTEA) data to the LLM or through MCP tools.

@@ -210,25 +210,10 @@ CREATE TABLE IF NOT EXISTS validation_rule (
 );
 
 -- ============================================================================
--- Agent configurations (saved LLM provider/model/key per project)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS agent_config (
-    agent_config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id      UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
-    name            VARCHAR NOT NULL,
-    provider        VARCHAR NOT NULL,
-    model           VARCHAR NOT NULL,
-    api_key         VARCHAR NOT NULL DEFAULT '',
-    base_url        VARCHAR,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    updated_at      TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_agent_config_project ON agent_config (project_id);
-
--- ============================================================================
 -- Agent chat sessions (persistent conversation history)
+-- ============================================================================
+-- Note: Agent configs (IfcAgent) are stored as ifc_entity rows with
+-- ifc_class='IfcAgent' and attributes {name, provider, model, api_key, base_url}.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS agent_chat (

@@ -11,7 +11,9 @@ import logging
 from typing import Any, AsyncGenerator
 
 from llama_index.core.agent import ReActAgent
+from llama_index.core.agent.workflow import AgentInput, AgentStream, ToolCall, ToolCallResult
 from llama_index.core.llms import ChatMessage, MessageRole
+from workflows.events import StopEvent
 
 from .llm_factory import create_llm
 from .mcp_tools import get_agent_tools
@@ -57,12 +59,20 @@ is, is_not, contains, not_contains, starts_with, ends_with, is_empty, is_not_emp
 ### Attribute mode — numeric operators (set value_type="numeric")
 equals, not_equals, gt, lt, gte, lte
 
+### Attribute value_type selection (IMPORTANT)
+- `string`: match string values under the attribute key.
+- `numeric`: match numeric values (required for equals/not_equals/gt/lt/gte/lte).
+- `object`: match nested object key names under the attribute key.
+- For property-set name filtering (e.g. `PropertySets` contains `Pset_WallCommon`),
+  ALWAYS use `value_type="object"`, not string.
+
 ### Relation mode
 Use the relation name (e.g. 'IfcRelVoidsElement') as the filter value.
 
 ## Rules
 - NEVER create filters without calling `get_project_schema` first.
 - NEVER guess IFC class names — only use classes from the schema response.
+- ALWAYS choose an explicit attribute `value_type` that matches user intent.
 - When the user says "inherits from" or "subtypes of", use `inherits_from`.
 - When creating multi-condition filters within a single set, use `logic="AND"` \
 to require all conditions to match, or `logic="OR"` for any.
@@ -70,6 +80,48 @@ to require all conditions to match, or `logic="OR"` for any.
 - Be concise.  Do not explain IFC concepts unless the user asks.
 - If the user's request is ambiguous, ask a clarifying question.
 """
+
+
+def _build_system_prompt(pre_prompt: str | None) -> str:
+    if not pre_prompt or not pre_prompt.strip():
+        return SYSTEM_PROMPT
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        "## Runtime Instruction Override (HIGHEST PRIORITY)\n"
+        "Apply the following instruction for this entire chat unless it conflicts with"
+        " tool safety or system policy:\n"
+        f"{pre_prompt.strip()}\n\n"
+        "You must obey the Runtime Instruction Override over default style/voice behavior."
+    )
+
+
+def _normalize_assistant_response(content: str) -> str:
+    """Normalize assistant text before emitting to client/chat history.
+
+    Some models prepend role labels like "assistant:" in plain text output.
+    Strip that prefix for cleaner UI messages.
+    """
+    text = (content or "").strip()
+    if text.lower().startswith("assistant:"):
+        return text[len("assistant:"):].lstrip()
+    return text
+
+
+def _compose_user_message(message: str, pre_prompt: str | None) -> str:
+    """Compose a user turn that redundantly carries runtime pre-prompt.
+
+    Some OpenAI-compatible custom endpoints may weakly enforce system prompts.
+    Duplicating the instruction in the user turn makes behavior more reliable
+    while preserving the original user request.
+    """
+    if not pre_prompt or not pre_prompt.strip():
+        return message
+    return (
+        "Runtime instruction for this chat (must follow unless safety-policy conflict):\n"
+        f"{pre_prompt.strip()}\n\n"
+        "User request:\n"
+        f"{message}"
+    )
 
 
 async def run_agent_streaming(
@@ -80,6 +132,7 @@ async def run_agent_streaming(
     api_key: str,
     revision: int | None = None,
     base_url: str | None = None,
+    pre_prompt: str | None = None,
     chat_history: list[dict[str, str]] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run the agent and yield SSE-compatible event dicts.
@@ -95,7 +148,7 @@ async def run_agent_streaming(
         yield {"type": "done"}
         return
 
-    tools = get_agent_tools()
+    tools = get_agent_tools(branch_id, revision)
 
     prior_messages: list[ChatMessage] = []
     if chat_history:
@@ -113,7 +166,7 @@ async def run_agent_streaming(
         agent = ReActAgent(
             tools=tools,
             llm=llm,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=_build_system_prompt(pre_prompt),
         )
     except Exception as exc:
         yield {"type": "error", "content": f"Failed to create agent: {exc}"}
@@ -124,35 +177,50 @@ async def run_agent_streaming(
 
     try:
         handler = agent.run(
-            user_msg=message,
+            user_msg=_compose_user_message(message, pre_prompt),
             chat_history=prior_messages if prior_messages else None,
         )
-        response = await handler
+        latest_streamed_response = ""
 
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            for tc in response.tool_calls:
-                tool_name = getattr(tc, "tool_name", "unknown")
-                tool_kwargs = getattr(tc, "tool_kwargs", {})
-                tool_output = getattr(tc, "tool_output", "")
+        async for event in handler.stream_events():
+            if isinstance(event, StopEvent):
+                break
+
+            if isinstance(event, AgentInput):
+                continue  # Actual reasoning comes from AgentStream.delta
+
+            if isinstance(event, AgentStream):
+                if event.delta:
+                    yield {"type": "thinking", "content": event.delta}
+                if event.thinking_delta:
+                    yield {"type": "thinking", "content": event.thinking_delta}
+                if event.response:
+                    latest_streamed_response = event.response
+                continue
+
+            if isinstance(event, ToolCall):
+                yield {"type": "thinking", "content": f"\n[Calling tool: {event.tool_name}]\n"}
+                continue
+
+            if isinstance(event, ToolCallResult):
                 try:
-                    result_preview = str(tool_output)[:500]
+                    result_preview = str(event.tool_output)[:500]
                 except Exception:
                     result_preview = "(could not serialize)"
                 yield {
                     "type": "tool_call",
-                    "name": tool_name,
+                    "name": event.tool_name,
                     "arguments": (
-                        tool_kwargs
-                        if isinstance(tool_kwargs, dict)
-                        else {"input": str(tool_kwargs)}
+                        event.tool_kwargs
+                        if isinstance(event.tool_kwargs, dict)
+                        else {"input": str(event.tool_kwargs)}
                     ),
                     "result": result_preview,
                 }
 
-        yield {
-            "type": "message",
-            "content": str(response.response),
-        }
+        response = await handler
+        final_response = _normalize_assistant_response(str(getattr(response, "response", "") or latest_streamed_response))
+        yield {"type": "message", "content": final_response}
 
     except Exception as exc:
         logger.exception("Agent execution failed")

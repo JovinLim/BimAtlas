@@ -47,9 +47,16 @@ def create_llm(
         return Ollama(model=model, base_url=url, request_timeout=120.0)
 
     if provider == "custom":
-        from llama_index.llms.openai import OpenAI
+        from llama_index.llms.openai_like import OpenAILike
         if not base_url:
             raise ValueError("base_url is required for 'custom' provider")
-        return OpenAI(model=model, api_key=api_key, api_base=base_url)
+        return OpenAILike(
+            model=model,
+            api_base=base_url.rstrip("/"),
+            api_key=api_key or "not-needed",
+            context_window=128000,
+            is_chat_model=True,
+            is_function_calling_model=True,
+        )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")

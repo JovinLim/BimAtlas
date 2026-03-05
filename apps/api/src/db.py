@@ -13,6 +13,7 @@ for SCD Type 2 range comparisons, joined via the UUID FK columns
 
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from uuid import uuid4
@@ -1650,83 +1651,220 @@ def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Agent config CRUD (IfcAgent saved models)
+# Agent CRUD (IfcAgent as ifc_entity)
 # ---------------------------------------------------------------------------
+# Agents are stored as ifc_entity rows with ifc_class='IfcAgent'. Attributes
+# {name, provider, model, api_key, base_url} live in the attributes JSONB.
+# Stored on the project's main branch for project-scoped access.
 
-_AGENT_CONFIG_COLS = (
-    "agent_config_id, project_id, name, provider, model, api_key, base_url, "
-    "created_at, updated_at"
-)
+IFC_AGENT_CLASS = "IfcAgent"
+
+
+def _agent_content_hash(attrs: dict) -> str:
+    """SHA-256 of attributes for SCD Type 2 change detection."""
+    h = hashlib.sha256()
+    h.update(json.dumps(attrs or {}, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _agent_attrs(
+    name: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: str | None,
+    pre_prompt: str | None = None,
+) -> dict:
+    return {
+        "name": name,
+        "provider": provider,
+        "model": model,
+        "api_key": api_key or "",
+        "base_url": base_url or "",
+        "pre_prompt": pre_prompt or "",
+    }
+
+
+def _row_to_agent(row: dict, project_id: str) -> dict:
+    """Convert ifc_entity row to agent config dict (API shape)."""
+    attrs = row.get("attributes") or {}
+    if isinstance(attrs, str):
+        attrs = json.loads(attrs)
+    return {
+        "entity_id": str(row["entity_id"]),
+        "project_id": project_id,
+        "name": attrs.get("name", ""),
+        "provider": attrs.get("provider", ""),
+        "model": attrs.get("model", ""),
+        "api_key": attrs.get("api_key", ""),
+        "base_url": attrs.get("base_url") or None,
+        "pre_prompt": attrs.get("pre_prompt", ""),
+    }
 
 
 def create_agent_config(
     project_id: str, name: str, provider: str, model: str,
-    api_key: str = "", base_url: str | None = None,
+    api_key: str = "", base_url: str | None = None, pre_prompt: str | None = None,
 ) -> dict:
+    """Create an IfcAgent entity on the project's main branch."""
+    branches = fetch_branches(project_id)
+    if not branches:
+        raise ValueError(f"Project {project_id} has no branches")
+    branch = branches[0]
+    branch_id = str(branch["branch_id"])
+
+    attrs = _agent_attrs(name, provider, model, api_key, base_url, pre_prompt)
+    content_hash = _agent_content_hash(attrs)
+    ifc_global_id = f"agent_{uuid4().hex[:20]}"
+
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"INSERT INTO agent_config (project_id, name, provider, model, api_key, base_url) "
-            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_AGENT_CONFIG_COLS}",
-            (project_id, name, provider, model, api_key, base_url),
+            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
+            "VALUES (%s, %s, %s) RETURNING revision_id",
+            (branch_id, "agent_config", f"IfcAgent: {name}"),
         )
-        return dict(cur.fetchone())
+        revision_id = cur.fetchone()["revision_id"]
+        cur.execute(
+            "INSERT INTO ifc_entity "
+            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING entity_id, attributes",
+            (
+                branch_id,
+                ifc_global_id,
+                IFC_AGENT_CLASS,
+                psycopg2.extras.Json(attrs),
+                content_hash,
+                revision_id,
+            ),
+        )
+        row = cur.fetchone()
+    return _row_to_agent(dict(row), project_id)
 
 
 def fetch_agent_configs_for_project(project_id: str) -> list[dict]:
+    """List active IfcAgent entities for a project (from its main branch)."""
+    branches = fetch_branches(project_id)
+    if not branches:
+        return []
+    branch_id = str(branches[0]["branch_id"])
+
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_AGENT_CONFIG_COLS} FROM agent_config "
-            f"WHERE project_id = %s ORDER BY updated_at DESC",
-            (project_id,),
+            "SELECT e.entity_id, e.attributes, r_cr.created_at "
+            "FROM ifc_entity e "
+            "JOIN revision r_cr ON e.created_in_revision_id = r_cr.revision_id "
+            "WHERE e.branch_id = %s AND e.ifc_class = %s AND e.obsoleted_in_revision_id IS NULL "
+            "ORDER BY r_cr.created_at DESC",
+            (branch_id, IFC_AGENT_CLASS),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = cur.fetchall()
+    return [_row_to_agent(dict(r), project_id) for r in rows]
 
 
-def fetch_agent_config(agent_config_id: str) -> dict | None:
+def fetch_agent_config(entity_id: str) -> dict | None:
+    """Fetch a single IfcAgent by entity_id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_AGENT_CONFIG_COLS} FROM agent_config WHERE agent_config_id = %s",
-            (agent_config_id,),
+            "SELECT e.entity_id, e.branch_id, e.attributes "
+            "FROM ifc_entity e "
+            "WHERE e.entity_id = %s AND e.ifc_class = %s AND e.obsoleted_in_revision_id IS NULL",
+            (entity_id, IFC_AGENT_CLASS),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    branch = fetch_branch(str(row["branch_id"]))
+    project_id = str(branch["project_id"]) if branch else ""
+    return _row_to_agent(dict(row), project_id)
 
 
 def update_agent_config(
-    agent_config_id: str, *, name: str | None = None, provider: str | None = None,
+    entity_id: str, *, name: str | None = None, provider: str | None = None,
     model: str | None = None, api_key: str | None = None, base_url: str | None = None,
+    pre_prompt: str | None = None,
 ) -> dict | None:
-    sets: list[str] = ["updated_at = now()"]
-    params: list = []
-    if name is not None:
-        sets.append("name = %s")
-        params.append(name)
-    if provider is not None:
-        sets.append("provider = %s")
-        params.append(provider)
-    if model is not None:
-        sets.append("model = %s")
-        params.append(model)
-    if api_key is not None:
-        sets.append("api_key = %s")
-        params.append(api_key)
-    if base_url is not None:
-        sets.append("base_url = %s")
-        params.append(base_url)
-    params.append(agent_config_id)
+    """Update an IfcAgent by closing the old row and inserting a new one (SCD Type 2)."""
+    existing = fetch_agent_config(entity_id)
+    if not existing:
+        return None
+
+    attrs = _agent_attrs(
+        name if name is not None else existing["name"],
+        provider if provider is not None else existing["provider"],
+        model if model is not None else existing["model"],
+        api_key if api_key is not None else existing["api_key"],
+        base_url if base_url is not None else existing["base_url"],
+        pre_prompt if pre_prompt is not None else existing.get("pre_prompt"),
+    )
+    content_hash = _agent_content_hash(attrs)
+
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"UPDATE agent_config SET {', '.join(sets)} WHERE agent_config_id = %s "
-            f"RETURNING {_AGENT_CONFIG_COLS}",
-            params,
+            "SELECT branch_id, ifc_global_id FROM ifc_entity "
+            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
+            (entity_id,),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    branch_id = str(row["branch_id"])
+    ifc_global_id = row["ifc_global_id"]
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
+            "VALUES (%s, %s, %s) RETURNING revision_id",
+            (branch_id, "agent_config", f"IfcAgent update: {attrs['name']}"),
+        )
+        revision_id = cur.fetchone()["revision_id"]
+        cur.execute(
+            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
+            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
+            (revision_id, entity_id),
+        )
+        cur.execute(
+            "INSERT INTO ifc_entity "
+            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING entity_id, attributes",
+            (
+                branch_id,
+                ifc_global_id,
+                IFC_AGENT_CLASS,
+                psycopg2.extras.Json(attrs),
+                content_hash,
+                revision_id,
+            ),
+        )
+        new_row = cur.fetchone()
+    branch = fetch_branch(branch_id)
+    project_id = str(branch["project_id"]) if branch else ""
+    return _row_to_agent(dict(new_row), project_id)
 
 
-def delete_agent_config(agent_config_id: str) -> bool:
-    with get_cursor() as cur:
-        cur.execute("DELETE FROM agent_config WHERE agent_config_id = %s", (agent_config_id,))
+def delete_agent_config(entity_id: str) -> bool:
+    """Obsolete an IfcAgent entity (SCD Type 2 close)."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT branch_id FROM ifc_entity "
+            "WHERE entity_id = %s AND ifc_class = %s AND obsoleted_in_revision_id IS NULL",
+            (entity_id, IFC_AGENT_CLASS),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
+            "VALUES (%s, %s, %s) RETURNING revision_id",
+            (str(row["branch_id"]), "agent_config", "IfcAgent delete"),
+        )
+        revision_id = cur.fetchone()["revision_id"]
+        cur.execute(
+            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
+            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
+            (revision_id, entity_id),
+        )
         return cur.rowcount > 0
 
 

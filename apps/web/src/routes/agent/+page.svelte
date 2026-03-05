@@ -8,6 +8,8 @@
 	let branchId = $state<string | null>(null);
 	let projectId = $state<string | null>(null);
 	let revision = $state<number | null>(null);
+	let projectName = $state<string | null>(null);
+	let branchName = $state<string | null>(null);
 
 	let channel: BroadcastChannel | null = null;
 	let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -43,6 +45,8 @@
 			branchId = msg.branchId;
 			projectId = msg.projectId;
 			revision = msg.revision;
+			projectName = msg.projectName ?? null;
+			branchName = msg.branchName ?? null;
 
 			const params = new URLSearchParams($page.url.searchParams);
 			if (branchId != null) params.set('branchId', String(branchId));
@@ -100,15 +104,15 @@
 </svelte:head>
 
 <main class="agent-page">
-	<ChatPanel {branchId} {projectId} {revision} />
+	<ChatPanel {branchId} {projectId} {revision} {projectName} {branchName} onRequestContext={requestContext} />
 </main>
 
 <style>
 	:global(body) {
 		margin: 0;
 		padding: 0;
-		background: var(--color-bg-canvas, #12121e);
-		color: var(--color-text-primary, #e0e0e0);
+		background: var(--color-bg-canvas);
+		color: var(--color-text-primary);
 		font-family: system-ui, -apple-system, sans-serif;
 	}
 

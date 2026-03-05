@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import partial
 from typing import Any, Optional
 from uuid import UUID
 
@@ -55,6 +56,35 @@ from ...schema.ifc_enums import IfcRelationshipType
 from .events import event_bus
 
 logger = logging.getLogger("bimatlas.agent")
+VALID_VALUE_TYPES = {"string", "numeric", "object"}
+
+
+def _normalize_value_type(
+    value_type: str | None,
+    attribute: str | None,
+    operator: str,
+) -> str | None:
+    """Normalize and infer value type for attribute filters."""
+    if value_type is None:
+        if operator in NUMERIC_OPERATORS:
+            return "numeric"
+        if (attribute or "").strip().lower() == "propertysets":
+            # PropertySets commonly needs object-key matching (e.g. Pset_WallCommon).
+            return "object"
+        return None
+
+    normalized = str(value_type).strip().lower()
+    aliases = {
+        "number": "numeric",
+        "text": "string",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in VALID_VALUE_TYPES:
+        allowed = ", ".join(sorted(VALID_VALUE_TYPES))
+        raise ValueError(
+            f"Invalid value_type: {value_type}. Must be one of: {allowed}.",
+        )
+    return normalized
 
 
 def _resolve_rev(branch_id: str, revision: int | None) -> int:
@@ -116,6 +146,10 @@ def get_project_schema(
         "ifc_classes": sorted(ifc_classes),
         "ifc_class_hierarchy": hierarchy,
         "common_attributes": common_attrs,
+        "attribute_value_types": sorted(VALID_VALUE_TYPES),
+        "attribute_value_type_hints": {
+            "PropertySets": "object",
+        },
         "relationship_types": rel_types,
         "filter_operators": {
             "string": sorted(STRING_OPERATORS),
@@ -181,7 +215,10 @@ def add_filter_condition(
     ifc_class : Required when mode='class'.
     attribute : Required when mode='attribute'.
     value : Comparison value (not needed for is_empty / is_not_empty).
-    value_type : 'string' or 'numeric' (attribute mode only).
+    value_type : 'string', 'numeric', or 'object' (attribute mode only).
+        Use 'object' to match nested object key names (e.g. PropertySets contains
+        Pset_WallCommon). If omitted, numeric operators infer 'numeric', and
+        PropertySets infers 'object'.
     relation : Required when mode='relation'.
     """
     _validate_uuid(filter_set_id, "filter_set_id")
@@ -210,6 +247,10 @@ def add_filter_condition(
     if isinstance(filters, str):
         filters = json.loads(filters)
 
+    normalized_value_type: str | None = None
+    if mode == "attribute":
+        normalized_value_type = _normalize_value_type(value_type, attribute, operator)
+
     new_condition: dict[str, Any] = {"mode": mode, "operator": operator}
     if ifc_class:
         new_condition["ifcClass"] = ifc_class
@@ -217,8 +258,8 @@ def add_filter_condition(
         new_condition["attribute"] = attribute
     if value is not None:
         new_condition["value"] = value
-    if value_type:
-        new_condition["valueType"] = value_type
+    if normalized_value_type:
+        new_condition["valueType"] = normalized_value_type
     if relation:
         new_condition["relation"] = relation
 
@@ -307,31 +348,41 @@ def apply_filter_set_to_context(
 
 
 # ---------------------------------------------------------------------------
-# Tool registry — returns LlamaIndex FunctionTool wrappers
+# Tool registry — returns LlamaIndex FunctionTool wrappers with context bound
 # ---------------------------------------------------------------------------
 
-def get_agent_tools() -> list[FunctionTool]:
-    """Return LlamaIndex FunctionTool wrappers for all four MCP tools."""
+def get_agent_tools(branch_id: str, revision: int | None = None) -> list[FunctionTool]:
+    """Return LlamaIndex FunctionTool wrappers with branch_id and revision bound.
+
+    The branch_id and revision are injected at agent instantiation so the LLM
+    does not need to provide them — it cannot know the correct values.
+    """
+    get_schema = partial(get_project_schema, branch_id, revision)
+    create_fs = partial(create_filter_set, branch_id)
+    apply_fs = partial(apply_filter_set_to_context, branch_id)
+
     return [
         FunctionTool.from_defaults(
-            fn=get_project_schema,
+            fn=get_schema,
             name="get_project_schema",
             description=(
-                "Returns the IFC schema context for a project branch: unique IFC "
+                "Returns the IFC schema context for the current branch: unique IFC "
                 "classes present, their common attribute keys, available filter "
                 "operators (string, numeric, class), IFC class hierarchy, and "
-                "relationship types. Call this FIRST to understand what data exists "
-                "before creating any filters."
+                "relationship types. Also returns valid attribute value types "
+                "(string, numeric, object) and hints (e.g. PropertySets => object). "
+                "Call this FIRST to understand what data exists before creating "
+                "any filters. No arguments required."
             ),
         ),
         FunctionTool.from_defaults(
-            fn=create_filter_set,
+            fn=create_fs,
             name="create_filter_set",
             description=(
-                "Creates a new empty named filter set on a branch. Returns the "
-                "filter_set_id for subsequent add_filter_condition calls. The "
+                "Creates a new empty named filter set on the current branch. Returns "
+                "the filter_set_id for subsequent add_filter_condition calls. The "
                 "intra-set logic (AND/OR) controls how conditions within the set "
-                "are combined."
+                "are combined. Parameters: name (required), logic (optional, AND/OR)."
             ),
         ),
         FunctionTool.from_defaults(
@@ -344,18 +395,21 @@ def get_agent_tools() -> list[FunctionTool]:
                 "conditions. Class mode operators: is, is_not, inherits_from. "
                 "Attribute string operators: is, is_not, contains, not_contains, "
                 "starts_with, ends_with, is_empty, is_not_empty. Attribute numeric "
-                "operators: equals, not_equals, gt, lt, gte, lte."
+                "operators: equals, not_equals, gt, lt, gte, lte. "
+                "Attribute value_type must be one of string, numeric, object. "
+                "Use object for nested object-key matching such as "
+                "attribute=PropertySets with value=Pset_WallCommon."
             ),
         ),
         FunctionTool.from_defaults(
-            fn=apply_filter_set_to_context,
+            fn=apply_fs,
             name="apply_filter_set_to_context",
             description=(
-                "Applies one or more filter sets to a branch, updating the active "
-                "view. This replaces any previously applied filter sets. After "
-                "application, the frontend view refreshes to show only matching "
-                "entities. Returns the count of matched entities. The combination "
-                "logic between multiple filter sets is always OR."
+                "Applies one or more filter sets to the current branch, updating "
+                "the active view. This replaces any previously applied filter sets. "
+                "After application, the frontend view refreshes to show only "
+                "matching entities. Returns the count of matched entities. "
+                "Parameters: filter_set_ids (list of UUIDs), combination_logic (OR)."
             ),
         ),
     ]

@@ -42,27 +42,36 @@ Use these values for this repository unless a design update changes them:
 
 ```css
 :root {
-  --color-brand-500: #ff8866;
-  --color-brand-400: #ffaa88;
-  --color-brand-gradient-start: #ff6644;
-  --color-brand-gradient-end: #ff9966;
+  /* Brand: Deep Slate & Bronze - Professional, precise, and timeless */
+  --color-brand-500: #334155; /* Sophisticated Slate Blue-Gray */
+  --color-brand-400: #64748b; /* Lighter Slate for secondary brand elements */
+  --color-brand-gradient-start: #1e293b;
+  --color-brand-gradient-end: #475569;
 
-  --color-bg-canvas: #12121e;
-  --color-bg-surface: #1a1a2e;
-  --color-bg-elevated: #1e1e30;
+  /* Backgrounds: Warm Sand & Stone (The "Paper" layer) */
+  --color-bg-canvas: #f7f7f2; /* Warm, high-end paper for the 3D viewport */
+  --color-bg-surface: #ffffff; /* Clean white for panels */
+  --color-bg-elevated: #efefe9; /* Soft warm gray for hover/active states */
 
-  --color-text-primary: #e0e0e0;
-  --color-text-secondary: #ccc;
-  --color-text-muted: #888;
+  /* Typography: Architectural Ink */
+  --color-text-primary: #0f172a; /* Near-black navy for sharp legibility */
+  --color-text-secondary: #475569; /* Muted ink for secondary labels */
+  --color-text-muted: #94a3b8; /* Light lead pencil for placeholders */
 
-  --color-border-subtle: rgba(255, 255, 255, 0.06);
-  --color-border-default: rgba(255, 255, 255, 0.1);
-  --color-border-strong: rgba(255, 136, 102, 0.3);
+  /* Borders: Technical Graphite */
+  --color-border-subtle: #e5e5e0;
+  --color-border-default: #d4d4ce;
+  --color-border-strong: #334155; /* Slate highlight for active selections */
 
-  --color-warning: #c9a227;
-  --color-danger: #ff6b6b;
-  --color-danger-soft: #ee8888;
-  --color-info: #87ceeb;
+  /* Functional: Muted Professional Tones */
+  --color-warning: #b45309; /* Deep Amber/Bronze for warnings */
+  --color-danger: #991b1b; /* Crimson Ink for errors */
+  --color-danger-soft: #fee2e2;
+  --color-info: #0369a1; /* Technical Blue for info */
+
+  /* Graph/IFC Specifics */
+  --color-success: #166534; /* Hunter Green (used only for "Pass" status) */
+  --color-accent-bronze: #78350f; /* For specialized relationship lines */
 }
 ```
 

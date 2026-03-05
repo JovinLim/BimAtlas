@@ -233,18 +233,6 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     is_active        BOOLEAN NOT NULL DEFAULT TRUE
 );
 
-CREATE TABLE IF NOT EXISTS agent_config (
-    agent_config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id      UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
-    name            VARCHAR NOT NULL,
-    provider        VARCHAR NOT NULL,
-    model           VARCHAR NOT NULL,
-    api_key         VARCHAR NOT NULL DEFAULT '',
-    base_url        VARCHAR,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    updated_at      TIMESTAMPTZ DEFAULT now()
-);
-
 CREATE TABLE IF NOT EXISTS agent_chat (
     chat_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
@@ -354,7 +342,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     # Truncate tables to leave database clean (order: FKs first)
                     try:
                         cur.execute(
-                            "TRUNCATE TABLE agent_chat_message, agent_chat, agent_config, "
+                            "TRUNCATE TABLE agent_chat_message, agent_chat, "
                             "merge_conflict_log, validation_rule, merge_request, "
                             "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
                             "branch, project_schema, project, ifc_schema CASCADE;"
@@ -385,7 +373,7 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
     with conn.cursor() as cur:
         # Truncate tables (order matters due to FK constraints)
         cur.execute(
-            "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
+            "TRUNCATE TABLE agent_chat_message, agent_chat, merge_conflict_log, validation_rule, merge_request, "
             "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
             "branch, project_schema, project, ifc_schema CASCADE;"
         )

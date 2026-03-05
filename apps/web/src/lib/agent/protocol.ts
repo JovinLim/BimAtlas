@@ -9,6 +9,8 @@ export interface AgentContextPayload {
 	branchId: string | null;
 	projectId: string | null;
 	revision: number | null;
+	projectName?: string | null;
+	branchName?: string | null;
 }
 
 export type AgentMessage =
@@ -21,7 +23,9 @@ export interface ChatMsg {
 	id: string;
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
+	thinkingSteps?: string[];
 	toolCalls?: ToolCallInfo[];
+	isStreaming?: boolean;
 	timestamp: string;
 }
 
@@ -41,23 +45,26 @@ export type AgentSSEEvent =
 	| { type: 'error'; content: string }
 	| { type: 'done' };
 
-// --- Saved agent config (IfcAgent) ---
+// --- Saved agent config (IfcAgent as ifc_entity) ---
 
 export interface AgentConfig {
-	agent_config_id: string;
+	entity_id: string;
 	project_id: string;
 	name: string;
 	provider: string;
 	model: string;
 	api_key: string;
 	base_url: string | null;
+	pre_prompt: string;
 }
 
 export interface AgentConfigDraft {
+	name: string;
 	provider: 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
 	model: string;
 	apiKey: string;
 	baseUrl?: string;
+	prePrompt: string;
 }
 
 // --- Chat session ---

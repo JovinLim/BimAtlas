@@ -79,6 +79,8 @@ class TestGetProjectSchema:
         assert "string" in result["filter_operators"]
         assert "numeric" in result["filter_operators"]
         assert "class" in result["filter_operators"]
+        assert "object" in result["attribute_value_types"]
+        assert result["attribute_value_type_hints"]["PropertySets"] == "object"
         assert "inherits_from" in result["filter_operators"]["class"]
         assert len(result["relationship_types"]) > 0
 
@@ -168,6 +170,41 @@ class TestAddFilterCondition:
         )
         assert result["condition_count"] == 2
 
+    def test_normalizes_value_type_case(self, test_branch):
+        fs = create_filter_set(test_branch, "Normalize ValueType")
+        result = add_filter_condition(
+            fs["filter_set_id"],
+            mode="attribute",
+            operator="contains",
+            attribute="PropertySets",
+            value="Pset_WallCommon",
+            value_type="Object",
+        )
+        assert result["filters"][0]["valueType"] == "object"
+
+    def test_infers_object_for_propertysets(self, test_branch):
+        fs = create_filter_set(test_branch, "Infer PropertySets")
+        result = add_filter_condition(
+            fs["filter_set_id"],
+            mode="attribute",
+            operator="contains",
+            attribute="PropertySets",
+            value="Pset_WallCommon",
+        )
+        assert result["filters"][0]["valueType"] == "object"
+
+    def test_invalid_value_type_raises(self, test_branch):
+        fs = create_filter_set(test_branch, "Bad ValueType")
+        with pytest.raises(ValueError, match="Invalid value_type"):
+            add_filter_condition(
+                fs["filter_set_id"],
+                mode="attribute",
+                operator="contains",
+                attribute="Name",
+                value="Wall",
+                value_type="boolean",
+            )
+
     def test_invalid_mode_raises(self, test_branch):
         fs = create_filter_set(test_branch, "Bad Mode")
         with pytest.raises(ValueError, match="Invalid mode"):
@@ -236,9 +273,9 @@ class TestApplyFilterSetToContext:
 # ---------------------------------------------------------------------------
 
 class TestToolRegistry:
-    def test_get_agent_tools_returns_four(self):
+    def test_get_agent_tools_returns_four(self, test_branch):
         from src.services.agent.mcp_tools import get_agent_tools
-        tools = get_agent_tools()
+        tools = get_agent_tools(test_branch, revision=None)
         assert len(tools) == 4
         names = {t.metadata.name for t in tools}
         assert names == {

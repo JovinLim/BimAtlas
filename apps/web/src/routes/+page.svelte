@@ -545,11 +545,18 @@
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
     agentChannel?.postMessage({
       type: "context",
       branchId,
       projectId,
       revision,
+      projectName: project?.name ?? null,
+      branchName: branch?.name ?? null,
     } satisfies AgentChannelMessage);
   }
 

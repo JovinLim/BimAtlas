@@ -3,76 +3,36 @@
     "metadata": {
       "feature_id": "feature_004_agentic_filtering_framework",
       "feature_description": "Agentic Filtering Framework using MCP tools and LlamaIndex to allow natural language IFC data audits and visualization queries. Users describe filter intent in plain language; a LlamaIndex agent orchestrates MCP tools (get_project_schema, create_filter_set, add_filter_condition, apply_filter_set_to_context) to construct and apply filter sets, with a Svelte chat UI and SSE-based state sync.",
-      "plan_reference": ".cursor/plans/feat004-agentic-filtering-framework.plan.md#step-01-mcp-tool-schemas",
-      "assigned_agent": "planning_agent",
-      "last_updated": "2026-03-04T00:00:00Z"
+      "plan_reference": ".cursor/plans/feat004-agentic-filtering-framework.plan.md",
+      "assigned_agent": "execution_agent",
+      "last_updated": "2026-03-05T00:00:00Z"
     },
     "state": {
-      "status": "ready_for_execution",
-      "current_objective": "Execute the 15-step implementation plan for the Agentic Filtering Framework."
+      "status": "complete",
+      "current_objective": "All 15 plan steps completed. Post-implementation enhancements (streaming metadata, pre-prompt enforcement, refresh-resume, Stop button) delivered."
     },
     "execution_log": [
-      {
-        "step": "Define JSON-RPC schemas for four MCP tools and create tool registry module (step-01)",
-        "status": "pending"
-      },
-      {
-        "step": "Implement get_project_schema tool returning IFC classes, attributes, operators, relationships (step-02)",
-        "status": "pending"
-      },
-      {
-        "step": "Implement create_filter_set MCP tool wrapping existing DB function (step-03)",
-        "status": "pending"
-      },
-      {
-        "step": "Implement add_filter_condition MCP tool appending conditions to filter sets (step-04)",
-        "status": "pending"
-      },
-      {
-        "step": "Implement apply_filter_set_to_context MCP tool with SSE event emission (step-05)",
-        "status": "pending"
-      },
-      {
-        "step": "Create LlamaIndex agent workflow with Discovery/Validation/Creation/Application steps (step-06)",
-        "status": "pending"
-      },
-      {
-        "step": "Create POST /agent/chat FastAPI endpoint with SSE streaming (step-07)",
-        "status": "pending"
-      },
-      {
-        "step": "Create GET /stream/agent-events SSE endpoint for filter-applied notifications (step-08)",
-        "status": "pending"
-      },
-      {
-        "step": "Build Svelte ChatPanel, ChatMessage, ToolCallBadge components (step-09)",
-        "status": "pending"
-      },
-      {
-        "step": "Build Svelte ModelConfig panel with localStorage persistence (step-10)",
-        "status": "pending"
-      },
-      {
-        "step": "Wire agent-events SSE to search state for view refresh on filter application (step-11)",
-        "status": "pending"
-      },
-      {
-        "step": "Create /agent route or integrate chat into main sidebar (step-12)",
-        "status": "pending"
-      },
-      {
-        "step": "Add pytest tests for MCP tools and agent workflow (step-13)",
-        "status": "pending"
-      },
-      {
-        "step": "End-to-end integration test: NL query → agent → filter → application → refresh (step-14)",
-        "status": "pending"
-      },
-      {
-        "step": "Run full test suite, linting, frontend type checks, and validate E2E scenario (step-15)",
-        "status": "pending"
-      }
+      { "step": "Define JSON-RPC schemas for four MCP tools and create tool registry module (step-01)", "status": "complete" },
+      { "step": "Implement get_project_schema tool returning IFC classes, attributes, operators, relationships (step-02)", "status": "complete" },
+      { "step": "Implement create_filter_set MCP tool wrapping existing DB function (step-03)", "status": "complete" },
+      { "step": "Implement add_filter_condition MCP tool appending conditions to filter sets (step-04)", "status": "complete" },
+      { "step": "Implement apply_filter_set_to_context MCP tool with SSE event emission (step-05)", "status": "complete" },
+      { "step": "Create LlamaIndex agent workflow with Discovery/Validation/Creation/Application steps (step-06)", "status": "complete" },
+      { "step": "Create POST /agent/chat FastAPI endpoint with SSE streaming (step-07)", "status": "complete" },
+      { "step": "Create GET /stream/agent-events SSE endpoint for filter-applied notifications (step-08)", "status": "complete" },
+      { "step": "Build Svelte ChatPanel, ChatMessage, ToolCallBadge components (step-09)", "status": "complete" },
+      { "step": "Build Svelte ModelConfig panel with localStorage persistence (step-10)", "status": "complete" },
+      { "step": "Wire agent-events SSE to search state for view refresh on filter application (step-11)", "status": "complete" },
+      { "step": "Create /agent route or integrate chat into main sidebar (step-12)", "status": "complete" },
+      { "step": "Add pytest tests for MCP tools and agent workflow (step-13)", "status": "complete" },
+      { "step": "End-to-end integration test: NL query → agent → filter → application → refresh (step-14)", "status": "complete" },
+      { "step": "Run full test suite, linting, frontend type checks, and validate E2E scenario (step-15)", "status": "complete" },
+      { "step": "Stream agent metadata (thinking, tool calls) progressively in collapsible bubble above response", "status": "complete" },
+      { "step": "Fix pre-prompt enforcement (system + user message duplication for weak providers)", "status": "complete" },
+      { "step": "Stream AgentStream.delta as actual reasoning text; preserve whitespace (no strip)", "status": "complete" },
+      { "step": "Implement Stop button via AbortController; preserve partial output on abort", "status": "complete" },
+      { "step": "Refresh-resume: load chat state, reconnect to live stream if agent still responding", "status": "complete" }
     ],
-    "handoff_notes": "Plan complete. All 15 steps are defined with file targets, actions, and constraints. The Execution Agent should start with step-01 (MCP tool schemas) and proceed sequentially. Backend steps (01-08) can be developed before frontend steps (09-12). Tests (13-15) should run after implementation. Key constraint: LLM API keys are per-request from frontend, never stored server-side."
+    "handoff_notes": "All plan steps and post-implementation enhancements complete. Live stream manager (live_streams.py), GET /agent/chats/{id}/live-state and /live-stream enable refresh-resume. Pre-prompt fix uses _compose_user_message. AgentStream.delta must not be stripped to preserve spacing."
   }
 ]
