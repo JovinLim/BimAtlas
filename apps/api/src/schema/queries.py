@@ -36,6 +36,7 @@ from ..db import (
     fetch_branch,
     fetch_branches,
     fetch_filter_set,
+    fetch_filter_set_matches,
     fetch_filter_sets_for_branch,
     fetch_distinct_ifc_classes_at_revision,
     fetch_entity_at_revision,
@@ -68,6 +69,7 @@ from .ifc_types import (
     FilterInput,
     FilterSet,
     FilterSetFilter,
+    FilterSetMatch,
     SheetTemplate,
     IfcMeshRepresentation,
     IfcProduct,
@@ -362,6 +364,7 @@ def _row_to_filter_set(row: dict) -> FilterSet:
             )
             for f in filters_data
         ],
+        color=row.get("color") or "#4A90D9",
         created_at=_to_iso(row["created_at"]),
         updated_at=_to_iso(row["updated_at"]),
     )
@@ -711,6 +714,42 @@ class Query:
             combination_logic=data["combination_logic"],
         )
 
+    @strawberry.field
+    async def filter_set_matches(
+        self, branch_id: str, revision: Optional[int] = None,
+    ) -> list[FilterSetMatch]:
+        """Return per-filter-set entity matches for the applied filter sets.
+
+        Each entry contains the filter set ID, its color, and the list of
+        matching entity global IDs.  The order matches the applied
+        ``display_order`` so the first set takes color priority.
+        """
+        rev = _resolve_revision(branch_id, revision)
+        applied = fetch_applied_filter_sets(branch_id)
+        if not applied["filter_sets"]:
+            return []
+        fs_data = [
+            {
+                "filter_set_id": fs["filter_set_id"],
+                "logic": fs.get("logic", "AND"),
+                "filters": fs.get("filters", []),
+            }
+            for fs in applied["filter_sets"]
+        ]
+        raw = fetch_filter_set_matches(rev, branch_id, fs_data)
+        color_map = {
+            fs["filter_set_id"]: fs.get("color") or "#4A90D9"
+            for fs in applied["filter_sets"]
+        }
+        return [
+            FilterSetMatch(
+                filter_set_id=m["filter_set_id"],
+                color=color_map.get(m["filter_set_id"], "#4A90D9"),
+                global_ids=m["global_ids"],
+            )
+            for m in raw
+        ]
+
     # ---- Sheet template queries --------------------------------------------
 
     @strawberry.field
@@ -805,6 +844,7 @@ class Mutation:
         name: str,
         logic: str,
         filters: list[FilterInput],
+        color: Optional[str] = None,
     ) -> FilterSet:
         """Create a new filter set on a branch."""
         filters_json = [
@@ -819,7 +859,7 @@ class Mutation:
             }
             for f in filters
         ]
-        row = db_create_filter_set(branch_id, name, logic, filters_json)
+        row = db_create_filter_set(branch_id, name, logic, filters_json, color=color)
         return _row_to_filter_set(row)
 
     @strawberry.mutation
@@ -829,6 +869,7 @@ class Mutation:
         name: Optional[str] = None,
         logic: Optional[str] = None,
         filters: Optional[list[FilterInput]] = None,
+        color: Optional[str] = None,
     ) -> Optional[FilterSet]:
         """Update an existing filter set."""
         filters_json = (
@@ -847,7 +888,9 @@ class Mutation:
             if filters is not None
             else None
         )
-        row = db_update_filter_set(id, name=name, logic=logic, filters_json=filters_json)
+        row = db_update_filter_set(
+            id, name=name, logic=logic, filters_json=filters_json, color=color,
+        )
         return _row_to_filter_set(row) if row else None
 
     @strawberry.mutation

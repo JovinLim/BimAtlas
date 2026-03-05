@@ -40,6 +40,7 @@
   import {
     client,
     APPLIED_FILTER_SETS_QUERY,
+    FILTER_SET_MATCHES_QUERY,
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
     CREATE_BRANCH_MUTATION,
@@ -63,6 +64,7 @@
   const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
+  let filterSetColorsEnabled = $state(false);
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
   let attributePopup: Window | null = null;
@@ -345,6 +347,9 @@
         handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
       } else if (e.data.type === "request-branch-context") {
         sendBranchContext();
+      } else if (e.data.type === "set-filter-set-colors") {
+        filterSetColorsEnabled = e.data.enabled;
+        handleFilterSetColorToggle();
       }
     };
 
@@ -668,6 +673,10 @@
     await loadGeometry(mgr, rev, branchId, extraVars);
     await ensureTotalProductCount(branchId, rev);
 
+    if (filterSetColorsEnabled && filterSets.length > 0) {
+      await applyFilterSetColorsToScene(mgr, branchId, rev);
+    }
+
     searchChannel?.postMessage({
       type: "filter-result-count",
       count: mgr.elementCount,
@@ -689,6 +698,9 @@
         return true;
       }
       searchState.appliedFilterSets = [];
+      if (filterSetColorsEnabled) {
+        sceneManager?.applyFilterSetColors(null);
+      }
       return false;
     } catch (err) {
       console.error("Failed to auto-load applied filter sets:", err);
@@ -1193,6 +1205,54 @@
       loadingGeometry = false;
       loadingGeometryCurrent = 0;
       loadingGeometryTotal = 0;
+    }
+  }
+
+  function hexToThreeColor(hex: string): number {
+    return parseInt(hex.replace('#', ''), 16);
+  }
+
+  async function handleFilterSetColorToggle() {
+    const mgr = sceneManager;
+    const branchId = projectState.activeBranchId;
+    const rev = revisionState.activeRevision;
+    if (!mgr || !branchId || rev === null) return;
+
+    if (!filterSetColorsEnabled) {
+      mgr.applyFilterSetColors(null);
+      return;
+    }
+
+    await applyFilterSetColorsToScene(mgr, branchId, rev);
+  }
+
+  async function applyFilterSetColorsToScene(
+    mgr: SceneManager,
+    branchId: string,
+    revision: number,
+  ) {
+    try {
+      const result = await client
+        .query(FILTER_SET_MATCHES_QUERY, { branchId, revision }, { requestPolicy: "network-only" })
+        .toPromise();
+      const matches = result.data?.filterSetMatches ?? [];
+      if (matches.length === 0) {
+        mgr.applyFilterSetColors(null);
+        return;
+      }
+
+      const colorMap = new Map<string, number>();
+      for (const match of matches) {
+        const colorHex = hexToThreeColor(match.color);
+        for (const gid of match.globalIds) {
+          if (!colorMap.has(gid)) {
+            colorMap.set(gid, colorHex);
+          }
+        }
+      }
+      mgr.applyFilterSetColors(colorMap);
+    } catch (err) {
+      console.error("Failed to fetch filter set matches:", err);
     }
   }
 

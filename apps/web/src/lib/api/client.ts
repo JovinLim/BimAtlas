@@ -362,6 +362,7 @@ const FILTER_SET_FIELDS = `
 		operator
 		valueType
 	}
+	color
 	createdAt
 	updatedAt
 `;
@@ -403,8 +404,9 @@ export const CREATE_FILTER_SET_MUTATION = gql`
 		$name: String!
 		$logic: String!
 		$filters: [FilterInput!]!
+		$color: String
 	) {
-		createFilterSet(branchId: $branchId, name: $name, logic: $logic, filters: $filters) {
+		createFilterSet(branchId: $branchId, name: $name, logic: $logic, filters: $filters, color: $color) {
 			${FILTER_SET_FIELDS}
 		}
 	}
@@ -417,8 +419,9 @@ export const UPDATE_FILTER_SET_MUTATION = gql`
 		$name: String
 		$logic: String
 		$filters: [FilterInput!]
+		$color: String
 	) {
-		updateFilterSet(id: $id, name: $name, logic: $logic, filters: $filters) {
+		updateFilterSet(id: $id, name: $name, logic: $logic, filters: $filters, color: $color) {
 			${FILTER_SET_FIELDS}
 		}
 	}
@@ -447,6 +450,17 @@ export const APPLY_FILTER_SETS_MUTATION = gql`
 			filterSets {
 				${FILTER_SET_FIELDS}
 			}
+		}
+	}
+`;
+
+/** Get per-filter-set entity matches for coloring. */
+export const FILTER_SET_MATCHES_QUERY = gql`
+	query FilterSetMatches($branchId: String!, $revision: Int) {
+		filterSetMatches(branchId: $branchId, revision: $revision) {
+			filterSetId
+			color
+			globalIds
 		}
 	}
 `;
