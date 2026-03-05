@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS filter_sets (
     name          VARCHAR NOT NULL,
     logic         logic_operator NOT NULL DEFAULT 'AND',
     filters       JSONB NOT NULL DEFAULT '[]',
+    color         VARCHAR NOT NULL DEFAULT '#4A90D9',
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now()
 );
@@ -194,6 +195,7 @@ CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
     branch_id         UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
     filter_set_id     UUID NOT NULL REFERENCES filter_sets(filter_set_id) ON DELETE CASCADE,
     combination_logic logic_operator NOT NULL DEFAULT 'AND',
+    display_order     INTEGER NOT NULL DEFAULT 0,
     applied_at        TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (branch_id, filter_set_id)
 );

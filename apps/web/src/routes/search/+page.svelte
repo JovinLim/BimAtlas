@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
   import SearchFilterRow from "$lib/ui/SearchFilter.svelte";
+  import ColorPicker from "$lib/ui/ColorPicker.svelte";
   import {
     SEARCH_CHANNEL,
     type FilterSet,
@@ -40,6 +41,8 @@
   let resultCount = $state(0);
   let totalCount = $state(0);
   let filterGuideOpen = $state(false);
+  let filterSetColorsEnabled = $state(false);
+  let editorColor = $state('#4A90D9');
 
   let nextId = 0;
   function genId(): string {
@@ -86,6 +89,7 @@
       name: fs.name,
       logic: fs.logic,
       filters: filtersToPlain(fs.filters),
+      color: fs.color,
       createdAt: fs.createdAt,
       updatedAt: fs.updatedAt,
     }));
@@ -238,24 +242,54 @@
     name: string,
     logic: "AND" | "OR",
     nextFilters: SearchFilter[],
+    color?: string,
   ) {
+    const vars: Record<string, unknown> = {
+      id,
+      name,
+      logic,
+      filters: toFilterInputs(nextFilters),
+    };
+    if (color !== undefined) vars.color = color;
     await client
-      .mutation(UPDATE_FILTER_SET_MUTATION, {
-        id,
-        name,
-        logic,
-        filters: toFilterInputs(nextFilters),
-      })
+      .mutation(UPDATE_FILTER_SET_MUTATION, vars)
       .toPromise();
     setAppliedName(id, name);
     appliedFilterSets = appliedFilterSets.map((fs) =>
-      fs.id === id ? { ...fs, name, logic, filters: nextFilters } : fs,
+      fs.id === id
+        ? { ...fs, name, logic, filters: nextFilters, ...(color !== undefined ? { color } : {}) }
+        : fs,
     );
     await loadFilterSets();
     channel?.postMessage({
       type: "apply-filter-sets",
       filterSets: filterSetsToPlain(appliedFilterSets),
       combinationLogic,
+    } satisfies SearchMessage);
+  }
+
+  async function handleColorChange(fs: FilterSet, newColor: string) {
+    await client
+      .mutation(UPDATE_FILTER_SET_MUTATION, { id: fs.id, color: newColor })
+      .toPromise();
+    appliedFilterSets = appliedFilterSets.map((s) =>
+      s.id === fs.id ? { ...s, color: newColor } : s,
+    );
+    browserFilterSets = browserFilterSets.map((s) =>
+      s.id === fs.id ? { ...s, color: newColor } : s,
+    );
+    channel?.postMessage({
+      type: "apply-filter-sets",
+      filterSets: filterSetsToPlain(appliedFilterSets),
+      combinationLogic,
+    } satisfies SearchMessage);
+  }
+
+  function toggleFilterSetColors() {
+    filterSetColorsEnabled = !filterSetColorsEnabled;
+    channel?.postMessage({
+      type: "set-filter-set-colors",
+      enabled: filterSetColorsEnabled,
     } satisfies SearchMessage);
   }
 
@@ -270,11 +304,13 @@
           name: trimmedName,
           logic: editorLogic,
           filters: toFilterInputs(filters),
+          color: editorColor,
         })
         .toPromise();
       await loadFilterSets(true);
       editorName = "";
       editorLogic = "AND";
+      editorColor = "#4A90D9";
       filters = [];
       filterSetEditorOpen = false;
     } catch (err) {
@@ -637,6 +673,18 @@
     <span class="result-count">{resultCount} / {totalCount} elements</span>
   </header>
 
+  <!-- Color mode toggle -->
+  <div class="color-toggle-bar">
+    <label class="color-toggle-label">
+      <input
+        type="checkbox"
+        checked={filterSetColorsEnabled}
+        onchange={toggleFilterSetColors}
+      />
+      <span>Use filter set colors</span>
+    </label>
+  </div>
+
   <!-- Filter Guide modal -->
   {#if filterGuideOpen}
     <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
@@ -722,6 +770,10 @@
                 onchange={() => toggleSetSelection(fs.id)}
               />
             </label>
+            <ColorPicker
+              color={fs.color}
+              onchange={(c) => handleColorChange(fs, c)}
+            />
             <div class="set-info">
               <span class="set-name">{fs.name}</span>
               <span class="set-meta"
@@ -799,6 +851,10 @@
       {/if}
 
       <div class="editor-row">
+        <ColorPicker
+          color={editorColor}
+          onchange={(c) => (editorColor = c)}
+        />
         <input
           class="editor-name"
           type="text"
@@ -891,6 +947,10 @@
           <div class="applied-item" class:collapsed={isCollapsed}>
             <div class="applied-item-header">
               <div class="editor-row applied-editor-row">
+                <ColorPicker
+                  color={fs.color}
+                  onchange={(c) => handleColorChange(fs, c)}
+                />
                 <input
                   class="editor-name applied-name"
                   type="text"
@@ -1721,5 +1781,37 @@
   .btn-danger:hover:not(:disabled) {
     background: rgba(255, 107, 107, 0.3);
     color: #ffb1b1;
+  }
+
+  /* ---- Color toggle bar ---- */
+
+  .color-toggle-bar {
+    display: flex;
+    align-items: center;
+    padding: 0.4rem 0.55rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0.35rem;
+  }
+
+  .color-toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+    color: #bbb;
+    cursor: pointer;
+  }
+
+  .color-toggle-label input {
+    accent-color: #ff8866;
+    cursor: pointer;
+  }
+
+  /* ---- Filter set editor trigger ---- */
+
+  .filter-set-editor-trigger {
+    display: flex;
+    justify-content: flex-start;
   }
 </style>

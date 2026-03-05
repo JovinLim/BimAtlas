@@ -570,19 +570,39 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _FILTER_SET_COLS = (
-    "filter_set_id, branch_id, name, logic, filters, created_at, updated_at"
+    "filter_set_id, branch_id, name, logic, filters, color, created_at, updated_at"
 )
+
+
+_DEFAULT_FILTER_SET_COLORS = [
+    "#4A90D9", "#E67E22", "#2ECC71", "#E74C3C",
+    "#9B59B6", "#1ABC9C", "#F1C40F", "#E91E63",
+]
+
+
+def _next_default_color(branch_id: str) -> str:
+    """Pick the next default color for a new filter set on a branch."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM filter_sets WHERE branch_id = %s",
+            (branch_id,),
+        )
+        count = cur.fetchone()[0]
+    return _DEFAULT_FILTER_SET_COLORS[count % len(_DEFAULT_FILTER_SET_COLORS)]
 
 
 def create_filter_set(
     branch_id: str, name: str, logic: str, filters_json: list[dict],
+    color: str | None = None,
 ) -> dict:
     """Create a new filter set on a branch. Returns the new row."""
+    if color is None:
+        color = _next_default_color(branch_id)
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"INSERT INTO filter_sets (branch_id, name, logic, filters) "
-            f"VALUES (%s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
-            (branch_id, name, logic, json.dumps(filters_json)),
+            f"INSERT INTO filter_sets (branch_id, name, logic, filters, color) "
+            f"VALUES (%s, %s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
+            (branch_id, name, logic, json.dumps(filters_json), color),
         )
         return dict(cur.fetchone())
 
@@ -592,6 +612,7 @@ def update_filter_set(
     name: str | None = None,
     logic: str | None = None,
     filters_json: list[dict] | None = None,
+    color: str | None = None,
 ) -> dict | None:
     """Update specified fields on a filter set. Returns the updated row."""
     sets: list[str] = ["updated_at = now()"]
@@ -605,6 +626,9 @@ def update_filter_set(
     if filters_json is not None:
         sets.append("filters = %s")
         params.append(json.dumps(filters_json))
+    if color is not None:
+        sets.append("color = %s")
+        params.append(color)
     params.append(filter_set_id)
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
@@ -869,7 +893,7 @@ def search_filter_sets(
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
             f"SELECT fs.filter_set_id, fs.branch_id, fs.name, fs.logic, "
-            f"fs.filters, fs.created_at, fs.updated_at "
+            f"fs.filters, fs.color, fs.created_at, fs.updated_at "
             f"FROM filter_sets fs {join} WHERE {where} ORDER BY fs.updated_at DESC",
             params,
         )
@@ -884,17 +908,22 @@ def search_filter_sets(
 def apply_filter_sets(
     branch_id: str, filter_set_ids: list[str], combination_logic: str,
 ) -> None:
-    """Replace the applied filter sets for a branch."""
+    """Replace the applied filter sets for a branch.
+
+    The list order of *filter_set_ids* determines ``display_order`` (0-based),
+    which controls priority when an entity matches multiple sets.
+    """
     with get_cursor() as cur:
         cur.execute(
             "DELETE FROM branch_applied_filter_sets WHERE branch_id = %s",
             (branch_id,),
         )
-        for fs_id in filter_set_ids:
+        for idx, fs_id in enumerate(filter_set_ids):
             cur.execute(
                 "INSERT INTO branch_applied_filter_sets "
-                "(branch_id, filter_set_id, combination_logic) VALUES (%s, %s, %s)",
-                (branch_id, fs_id, combination_logic),
+                "(branch_id, filter_set_id, combination_logic, display_order) "
+                "VALUES (%s, %s, %s, %s)",
+                (branch_id, fs_id, combination_logic, idx),
             )
 
 
@@ -902,15 +931,16 @@ def fetch_applied_filter_sets(branch_id: str) -> dict:
     """Return the currently applied filter sets for a branch.
 
     Returns ``{"filter_sets": [...], "combination_logic": "AND"|"OR"}``.
+    Filter sets are ordered by ``display_order`` (ascending).
     """
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT ba.combination_logic, "
+            "SELECT ba.combination_logic, ba.display_order, "
             "fs.filter_set_id, fs.branch_id, fs.name, fs.logic, fs.filters, "
-            "fs.created_at, fs.updated_at "
+            "fs.color, fs.created_at, fs.updated_at "
             "FROM branch_applied_filter_sets ba "
             "JOIN filter_sets fs ON ba.filter_set_id = fs.filter_set_id "
-            "WHERE ba.branch_id = %s ORDER BY ba.applied_at ASC",
+            "WHERE ba.branch_id = %s ORDER BY ba.display_order ASC",
             (branch_id,),
         )
         rows = [dict(r) for r in cur.fetchall()]
@@ -926,6 +956,7 @@ def fetch_applied_filter_sets(branch_id: str) -> dict:
             "name": r["name"],
             "logic": r["logic"],
             "filters": r["filters"],
+            "color": r["color"],
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
         }
@@ -1314,6 +1345,48 @@ def fetch_entities_with_filter_sets(
             params,
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_filter_set_matches(
+    rev: int,
+    branch_id: str,
+    filter_sets_data: list[dict],
+) -> list[dict]:
+    """Return per-filter-set matching entity global IDs.
+
+    Each entry in *filter_sets_data* must have ``filter_set_id``, ``logic``,
+    and ``filters``.  Returns a list of dicts
+    ``{"filter_set_id": ..., "global_ids": [...]}``, preserving input order.
+    """
+    from .schema.filter_operators import normalize_logic
+
+    results: list[dict] = []
+    for fs in filter_sets_data:
+        fs_id = fs.get("filter_set_id") or fs.get("id")
+        fs_logic = normalize_logic(fs.get("logic"))
+        clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
+        params: list = [branch_id, rev, rev]
+
+        filter_clauses: list[str] = []
+        for f in fs.get("filters", []):
+            clause = _build_filter_clause(f, params, rev=rev, branch_id=branch_id)
+            if clause:
+                filter_clauses.append(clause)
+
+        if filter_clauses:
+            joiner = f" {fs_logic} "
+            clauses.append(f"({joiner.join(filter_clauses)})")
+
+        where = " AND ".join(clauses)
+        with get_cursor() as cur:
+            cur.execute(
+                f"SELECT e.ifc_global_id FROM {_ENTITY_FROM} WHERE {where}",
+                params,
+            )
+            gids = [row[0] for row in cur.fetchall()]
+
+        results.append({"filter_set_id": fs_id, "global_ids": gids})
+    return results
 
 
 # ---------------------------------------------------------------------------

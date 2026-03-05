@@ -224,6 +224,7 @@ class FilterSet:
     name: str
     logic: str  # "AND" | "OR"
     filters: list[FilterSetFilter]
+    color: str  # hex color, e.g. "#4A90D9"
     created_at: str  # ISO 8601
     updated_at: str  # ISO 8601
 
@@ -234,6 +235,15 @@ class AppliedFilterSets:
 
     filter_sets: list[FilterSet]
     combination_logic: str  # "AND" | "OR"
+
+
+@strawberry.type
+class FilterSetMatch:
+    """Per-filter-set entity matches for coloring."""
+
+    filter_set_id: str
+    color: str
+    global_ids: list[str]
 
 
 @strawberry.input
