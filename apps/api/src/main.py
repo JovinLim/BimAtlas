@@ -418,10 +418,11 @@ async def agent_chat(body: dict = Body(...)):
     from .services.agent.workflow import run_agent_streaming
 
     collected_content = ""
+    collected_error = ""
     collected_tools: list[dict] = []
 
     async def event_generator():
-        nonlocal collected_content, collected_tools
+        nonlocal collected_content, collected_error, collected_tools
         async for event in run_agent_streaming(
             message=message,
             branch_id=branch_id,
@@ -432,9 +433,12 @@ async def agent_chat(body: dict = Body(...)):
             base_url=base_url,
             chat_history=chat_history,
         ):
-            if event.get("type") == "message":
+            etype = event.get("type")
+            if etype == "message":
                 collected_content = event.get("content", "")
-            elif event.get("type") == "tool_call":
+            elif etype == "error":
+                collected_error = event.get("content", "")
+            elif etype == "tool_call":
                 collected_tools.append({
                     "name": event.get("name"),
                     "arguments": event.get("arguments"),
@@ -442,11 +446,14 @@ async def agent_chat(body: dict = Body(...)):
                 })
             yield f"data: {json.dumps(event)}\n\n"
 
-        if chat_id and collected_content:
-            add_chat_message(
-                chat_id, "assistant", collected_content,
-                tool_calls=collected_tools if collected_tools else None,
-            )
+        if chat_id:
+            if collected_content:
+                add_chat_message(
+                    chat_id, "assistant", collected_content,
+                    tool_calls=collected_tools if collected_tools else None,
+                )
+            elif collected_error:
+                add_chat_message(chat_id, "assistant", collected_error)
 
     return StreamingResponse(
         event_generator(),

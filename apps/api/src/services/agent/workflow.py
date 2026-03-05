@@ -100,16 +100,20 @@ async def run_agent_streaming(
     prior_messages: list[ChatMessage] = []
     if chat_history:
         for msg in chat_history:
-            role = MessageRole.USER if msg.get("role") == "user" else MessageRole.ASSISTANT
-            prior_messages.append(ChatMessage(role=role, content=msg.get("content", "")))
+            role = (
+                MessageRole.USER
+                if msg.get("role") == "user"
+                else MessageRole.ASSISTANT
+            )
+            prior_messages.append(
+                ChatMessage(role=role, content=msg.get("content", ""))
+            )
 
     try:
-        agent = ReActAgent.from_tools(
+        agent = ReActAgent(
             tools=tools,
             llm=llm,
-            verbose=False,
             system_prompt=SYSTEM_PROMPT,
-            chat_history=prior_messages,
         )
     except Exception as exc:
         yield {"type": "error", "content": f"Failed to create agent: {exc}"}
@@ -119,27 +123,36 @@ async def run_agent_streaming(
     yield {"type": "thinking", "content": "Processing your request..."}
 
     try:
-        response = await agent.achat(message)
+        handler = agent.run(
+            user_msg=message,
+            chat_history=prior_messages if prior_messages else None,
+        )
+        response = await handler
 
-        for source in response.sources:
-            tool_name = source.tool_name if hasattr(source, "tool_name") else "unknown"
-            raw_input = source.raw_input if hasattr(source, "raw_input") else {}
-            raw_output = source.raw_output if hasattr(source, "raw_output") else ""
-            try:
-                result_preview = str(raw_output)[:500]
-            except Exception:
-                result_preview = "(could not serialize)"
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            for tc in response.tool_calls:
+                tool_name = getattr(tc, "tool_name", "unknown")
+                tool_kwargs = getattr(tc, "tool_kwargs", {})
+                tool_output = getattr(tc, "tool_output", "")
+                try:
+                    result_preview = str(tool_output)[:500]
+                except Exception:
+                    result_preview = "(could not serialize)"
+                yield {
+                    "type": "tool_call",
+                    "name": tool_name,
+                    "arguments": (
+                        tool_kwargs
+                        if isinstance(tool_kwargs, dict)
+                        else {"input": str(tool_kwargs)}
+                    ),
+                    "result": result_preview,
+                }
 
-            yield {
-                "type": "tool_call",
-                "name": tool_name,
-                "arguments": (
-                    raw_input if isinstance(raw_input, dict) else {"input": str(raw_input)}
-                ),
-                "result": result_preview,
-            }
-
-        yield {"type": "message", "content": str(response)}
+        yield {
+            "type": "message",
+            "content": str(response.response),
+        }
 
     except Exception as exc:
         logger.exception("Agent execution failed")
