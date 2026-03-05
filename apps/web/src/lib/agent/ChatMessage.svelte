@@ -64,6 +64,8 @@
 <style>
 	.chat-msg {
 		display: flex;
+		min-width: 0;
+		max-width: 100%;
 	}
 
 	.chat-msg.user {
@@ -80,11 +82,13 @@
 
 	.msg-bubble {
 		max-width: 85%;
+		min-width: 0;
 		padding: 0.5rem 0.75rem;
 		border-radius: 0.5rem;
 		font-size: 0.82rem;
 		line-height: 1.45;
 		word-break: break-word;
+		overflow-wrap: break-word;
 	}
 
 	.user .msg-bubble {

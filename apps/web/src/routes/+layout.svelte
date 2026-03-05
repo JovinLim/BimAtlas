@@ -16,36 +16,48 @@
 
 <style>
   :root {
-    --color-brand-500: #334155;
-    --color-brand-400: #64748b;
-    --color-brand-gradient-start: #1e293b;
-    --color-brand-gradient-end: #475569;
+    /* Brand: Deep Slate & Architectural Bronze */
+    --color-brand-500: #1e293b;
+    --color-brand-400: #334155;
+    --color-brand-gradient-start: #0f172a;
+    --color-brand-gradient-end: #334155;
 
-    --color-bg-canvas: #f7f7f2;
+    /* Backgrounds: Warm Sand & Stone */
+    --color-bg-canvas: #f8f8f2;
     --color-bg-surface: #ffffff;
-    --color-bg-elevated: #efefe9;
+    --color-bg-elevated: #f1f1eb;
 
+    /* Typography: Technical Ink */
     --color-text-primary: #0f172a;
-    --color-text-secondary: #475569;
+    --color-text-secondary: #64748b;
     --color-text-muted: #94a3b8;
 
-    --color-border-subtle: #e5e5e0;
-    --color-border-default: #d4d4ce;
-    --color-border-strong: #334155;
+    /* Borders & Geometry: Technical Graphite */
+    --color-border-subtle: #e2e2da;
+    --color-border-default: #cbd5e1;
+    --color-border-strong: #1e293b;
 
+    /* Functional: Muted Professional Tones */
+    --color-action-primary: #334155;
     --color-warning: #b45309;
     --color-danger: #991b1b;
     --color-danger-soft: #fee2e2;
-    --color-info: #0369a1;
+    --color-info: #475569;
 
-    --color-success: #166534;
-    --color-accent-bronze: #78350f;
+    /* IFC & Graph Specifics */
+    --color-success: #334155;
+    --color-graph-node: #78350f;
+    --color-graph-edge: #d4d4ce;
   }
 
   :global(*),
   :global(*::-webkit-scrollbar) {
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+  }
+
+  :global(html) {
+    color-scheme: light;
   }
 
   :global(html, body) {

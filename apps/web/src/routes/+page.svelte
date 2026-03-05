@@ -2460,7 +2460,7 @@
   .selector {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.3rem;
+    border-radius: 0.5rem;
     color: var(--color-text-secondary);
     padding: 0.25rem 0.5rem;
     font-size: 0.8rem;
@@ -2485,7 +2485,7 @@
   }
 
   .selector:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .selector option {
@@ -2549,7 +2549,7 @@
     min-height: 2.25rem;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.3rem;
+    border-radius: 0.5rem;
     color: var(--color-text-secondary);
     padding: 0.3rem 0.45rem;
     font-size: 0.78rem;
@@ -2559,7 +2559,7 @@
   }
 
   .revision-search-section .revision-filter-input:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .revision-search-section .revision-filter-input::placeholder {
@@ -2572,7 +2572,7 @@
     min-height: 2.25rem;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.3rem;
+    border-radius: 0.5rem;
     color: var(--color-text-secondary);
     padding: 0.3rem 0.45rem;
     font-size: 0.78rem;
@@ -2582,7 +2582,7 @@
   }
 
   .revision-search-section .revision-date-input:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .revision-search-section
@@ -2636,7 +2636,7 @@
     text-align: left;
     background: var(--color-bg-elevated);
     border: 1px solid transparent;
-    border-radius: 0.25rem;
+    border-radius: 0.5rem;
     color: var(--color-text-secondary);
     cursor: pointer;
   }
@@ -2760,7 +2760,7 @@
   .icon-btn {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.3rem;
+    border-radius: 0.5rem;
     color: var(--color-text-muted);
     width: 24px;
     height: 24px;
@@ -2836,7 +2836,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(247, 247, 242, 0.8);
+    background: color-mix(in srgb, var(--color-bg-canvas) 80%, transparent);
     z-index: 100;
     pointer-events: none;
   }
@@ -2848,9 +2848,9 @@
     gap: 1rem;
     padding: 1.5rem 2rem;
     background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.5rem;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
   }
 
   .viewport-loading-message {
@@ -2903,8 +2903,8 @@
     flex-direction: column;
     gap: 1rem;
     background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 16px;
     padding: 2rem;
     max-width: 520px;
     width: 100%;
@@ -2934,7 +2934,7 @@
     gap: 0.5rem;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
-    border-radius: 0.5rem;
+    border-radius: 12px;
     padding: 0.75rem 1rem;
     transition:
       background 0.15s,
@@ -3007,7 +3007,7 @@
   .input {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.4rem;
+    border-radius: 12px;
     color: var(--color-text-primary);
     padding: 0.5rem 0.75rem;
     font-size: 0.85rem;
@@ -3016,7 +3016,7 @@
   }
 
   .input:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .input::placeholder {
@@ -3032,13 +3032,14 @@
   .btn {
     padding: 0.5rem 1.1rem;
     font-size: 0.82rem;
-    border: none;
-    border-radius: 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 12px;
     cursor: pointer;
     font-weight: 500;
     transition:
       background 0.15s,
-      opacity 0.15s;
+      opacity 0.15s,
+      border-color 0.15s;
   }
 
   .btn:disabled {
@@ -3048,26 +3049,30 @@
 
   .btn-secondary {
     background: var(--color-bg-elevated);
+    border-color: var(--color-border-default);
     color: var(--color-text-secondary);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
+    background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
     color: var(--color-text-primary);
   }
 
   .btn-primary {
-    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
-    color: var(--color-brand-500);
+    background: var(--color-action-primary);
+    border: 1px solid var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-brand-500) 20%, transparent);
-    color: var(--color-brand-500);
+    background: color-mix(in srgb, var(--color-action-primary) 80%, black);
+    border-color: color-mix(in srgb, var(--color-action-primary) 80%, black);
+    color: var(--color-bg-surface);
   }
 
   .btn-danger {
     background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
     color: var(--color-danger);
   }
 
@@ -3083,7 +3088,7 @@
     border: 1px solid var(--color-border-default);
     color: var(--color-text-secondary);
     padding: 0.4rem 0.8rem;
-    border-radius: 0.35rem;
+    border-radius: 12px;
     cursor: pointer;
     font-size: 0.78rem;
     backdrop-filter: blur(8px);
@@ -3146,11 +3151,11 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    background: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
-    border: 1px solid var(--color-border-default);
-    color: var(--color-text-secondary);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    color: var(--color-action-primary);
     padding: 0.45rem 1rem;
-    border-radius: 0.4rem;
+    border-radius: 12px;
     cursor: pointer;
     font-size: 0.82rem;
     backdrop-filter: blur(8px);
@@ -3166,9 +3171,9 @@
   .schema-btn:hover,
   .attributes-btn:hover,
   .agent-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
-    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
-    color: var(--color-brand-500);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   /* ---- Modal (shared) ---- */
@@ -3189,12 +3194,12 @@
     flex-direction: column;
     gap: 1rem;
     background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 16px;
     width: 90%;
     max-width: 420px;
     padding: 1.5rem;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
   }
 
   .modal-header {
@@ -3215,7 +3220,7 @@
     color: var(--color-text-muted);
     cursor: pointer;
     padding: 0.25rem;
-    border-radius: 0.25rem;
+    border-radius: 0.5rem;
     display: flex;
     align-items: center;
     transition: color 0.15s;
@@ -3255,7 +3260,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(247, 247, 242, 0.9);
+    background: color-mix(in srgb, var(--color-bg-canvas) 90%, transparent);
     backdrop-filter: blur(6px);
   }
 
@@ -3273,7 +3278,7 @@
     padding: 0.65rem 1rem;
     background: var(--color-danger-soft);
     border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
-    border-radius: 0.5rem;
+    border-radius: 12px;
     color: var(--color-danger);
     font-size: 0.82rem;
     backdrop-filter: blur(8px);

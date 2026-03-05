@@ -42,36 +42,43 @@ Use these values for this repository unless a design update changes them:
 
 ```css
 :root {
-  /* Brand: Deep Slate & Bronze - Professional, precise, and timeless */
-  --color-brand-500: #334155; /* Sophisticated Slate Blue-Gray */
-  --color-brand-400: #64748b; /* Lighter Slate for secondary brand elements */
-  --color-brand-gradient-start: #1e293b;
-  --color-brand-gradient-end: #475569;
+  /* --- Brand: Deep Slate & Architectural Bronze --- */
+  /* Used for the Sidebar (like the reference) and primary navigation */
+  --color-brand-500: #1e293b; /* Deep Navy Slate - The "Anchor" color */
+  --color-brand-400: #334155; /* Mid-tone Slate for secondary nav elements */
+  --color-brand-gradient-start: #0f172a;
+  --color-brand-gradient-end: #334155;
 
-  /* Backgrounds: Warm Sand & Stone (The "Paper" layer) */
-  --color-bg-canvas: #f7f7f2; /* Warm, high-end paper for the 3D viewport */
-  --color-bg-surface: #ffffff; /* Clean white for panels */
-  --color-bg-elevated: #efefe9; /* Soft warm gray for hover/active states */
+  /* --- Backgrounds: Warm Sand & Stone --- */
+  /* Mimics the reference's clean feel without being "cold" */
+  --color-bg-canvas: #f8f8f2; /* Warm Sand - The base background layer */
+  --color-bg-surface: #ffffff; /* Pure White - For the rounded cards/panels */
+  --color-bg-elevated: #f1f1eb; /* Soft Stone - For hover states and secondary tabs */
 
-  /* Typography: Architectural Ink */
-  --color-text-primary: #0f172a; /* Near-black navy for sharp legibility */
-  --color-text-secondary: #475569; /* Muted ink for secondary labels */
-  --color-text-muted: #94a3b8; /* Light lead pencil for placeholders */
+  /* --- Typography: Technical Ink --- */
+  /* High contrast for headers, softer for metadata */
+  --color-text-primary: #0f172a; /* Near-Black - Sharp legibility for data */
+  --color-text-secondary: #64748b; /* Muted Slate - For labels like "Current MRR" */
+  --color-text-muted: #94a3b8; /* Light Lead - For timestamps and placeholders */
 
-  /* Borders: Technical Graphite */
-  --color-border-subtle: #e5e5e0;
-  --color-border-default: #d4d4ce;
-  --color-border-strong: #334155; /* Slate highlight for active selections */
+  /* --- Borders & Geometry: Technical Graphite --- */
+  /* Crucial for the "Friendly" feel - Use border-radius: 12px to 16px */
+  --color-border-subtle: #e2e2da; /* Very light stone for card outlines */
+  --color-border-default: #cbd5e1; /* For input fields and dividers */
+  --color-border-strong: #1e293b; /* For active focus states */
 
-  /* Functional: Muted Professional Tones */
-  --color-warning: #b45309; /* Deep Amber/Bronze for warnings */
-  --color-danger: #991b1b; /* Crimson Ink for errors */
-  --color-danger-soft: #fee2e2;
-  --color-info: #0369a1; /* Technical Blue for info */
+  /* --- Functional: Muted Professional Tones --- */
+  /* Replaces the bright blue/orange with your custom palette */
+  --color-action-primary: #334155;
+  --color-warning: #b45309; /* Deep Amber - For structural warnings */
+  --color-danger: #991b1b; /* Crimson Ink - For critical errors */
+  --color-info: #475569; /* Slate - For neutral technical info */
 
-  /* Graph/IFC Specifics */
-  --color-success: #166534; /* Hunter Green (used only for "Pass" status) */
-  --color-accent-bronze: #78350f; /* For specialized relationship lines */
+  /* --- IFC & Graph Specifics --- */
+  /* Avoiding green to prevent the "Sustainability Project" look */
+  --color-success: #334155; /* Slate - Used for "Verified" or "Pass" (Minimalist) */
+  --color-graph-node: #78350f; /* Bronze - For selected IFC elements */
+  --color-graph-edge: #d4d4ce; /* Light Stone - For relationship lines */
 }
 ```
 

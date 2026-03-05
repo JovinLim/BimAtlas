@@ -118,7 +118,10 @@
 
 	.agent-page {
 		height: 100vh;
+		width: 100%;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
+		overflow: hidden;
 	}
 </style>
