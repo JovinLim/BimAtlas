@@ -22,7 +22,6 @@ from strawberry.fastapi import GraphQLRouter
 from .db import (
     add_chat_message,
     close_pool,
-    run_migrations,
     create_agent_chat,
     create_agent_config,
     delete_agent_chat,
@@ -64,10 +63,6 @@ async def lifespan(app: FastAPI):
                 "Then wait a few seconds for PostgreSQL to be ready."
             ) from e
         raise
-    try:
-        run_migrations()
-    except Exception:
-        logger.warning("FEAT-004 migration skipped (tables may already exist)", exc_info=True)
     yield
     logger.info("Shutting down BimAtlas API -- closing connection pool")
     close_pool()
