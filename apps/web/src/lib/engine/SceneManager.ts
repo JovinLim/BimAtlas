@@ -12,11 +12,12 @@ export class SceneManager {
 	private camera: THREE.PerspectiveCamera;
 	private renderer: THREE.WebGLRenderer;
 	private controls: OrbitControls;
-	private meshMap: Map<string, THREE.Mesh> = new Map(); // globalId -> Mesh
-	private idByMesh: Map<THREE.Mesh, string> = new Map(); // reverse lookup for raycasting
+	private meshMap: Map<string, THREE.Mesh> = new Map();
+	private idByMesh: Map<THREE.Mesh, string> = new Map();
 	private highlightMaterial: THREE.MeshStandardMaterial;
 	private defaultMaterial: THREE.MeshStandardMaterial;
 	private ghostMaterial: THREE.MeshStandardMaterial;
+	private colorMaterialCache: Map<number, THREE.MeshStandardMaterial> = new Map();
 	private animationId: number | null = null;
 	private raycaster: THREE.Raycaster;
 	private pointer: THREE.Vector2;
@@ -226,6 +227,49 @@ export class SceneManager {
 		this.currentHighlight = null;
 	}
 
+	/**
+	 * Apply per-entity coloring based on filter set matches.
+	 *
+	 * - null colorMap → reset all meshes to default material.
+	 * - Map → meshes with a color get that material; others are ghosted.
+	 */
+	applyFilterSetColors(colorMap: Map<string, number> | null): void {
+		if (colorMap === null) {
+			for (const [, mesh] of this.meshMap) {
+				mesh.visible = true;
+				mesh.material = this.defaultMaterial;
+			}
+			this.currentHighlight = null;
+			return;
+		}
+
+		for (const [id, mesh] of this.meshMap) {
+			const colorHex = colorMap.get(id);
+			if (colorHex !== undefined) {
+				mesh.material = this.getOrCreateColorMaterial(colorHex);
+				mesh.visible = true;
+			} else {
+				mesh.material = this.ghostMaterial;
+				mesh.visible = true;
+			}
+		}
+		this.currentHighlight = null;
+	}
+
+	private getOrCreateColorMaterial(colorHex: number): THREE.MeshStandardMaterial {
+		let mat = this.colorMaterialCache.get(colorHex);
+		if (!mat) {
+			mat = new THREE.MeshStandardMaterial({
+				color: colorHex,
+				flatShading: true,
+				metalness: 0.1,
+				roughness: 0.8
+			});
+			this.colorMaterialCache.set(colorHex, mat);
+		}
+		return mat;
+	}
+
 	/** Auto-fit the camera to encompass all loaded elements. */
 	fitToContent(): void {
 		if (this.meshMap.size === 0) return;
@@ -281,6 +325,10 @@ export class SceneManager {
 		this.defaultMaterial.dispose();
 		this.highlightMaterial.dispose();
 		this.ghostMaterial.dispose();
+		for (const mat of this.colorMaterialCache.values()) {
+			mat.dispose();
+		}
+		this.colorMaterialCache.clear();
 		for (const mesh of this.meshMap.values()) {
 			mesh.geometry.dispose();
 		}

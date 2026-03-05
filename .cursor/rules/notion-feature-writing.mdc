@@ -1,0 +1,60 @@
+---
+description: Process for writing BimAtlas feature documentation to Notion
+alwaysApply: false
+---
+
+# Notion Feature Writing
+
+When documenting BimAtlas features on Notion for users, follow this process.
+
+## 1. Gather Context
+
+- **Fetch the Notion page first**: Use `notion-fetch` with the page URL or ID to get existing content, schema (for database pages), and structure.
+- **Read product context**: Use `.cursor/product/overview.md` and feature docs under `.cursor/product/features/` for domain terms and scope.
+- **Inspect the feature in code**: Search for relevant components (e.g. `ForceGraph.svelte`, `Viewport`, routes) to describe behavior accurately.
+
+## 2. Content Structure
+
+Write user-facing documentation (not internal/technical). Typical sections:
+
+- **Overview** — What the feature does and why it matters.
+- **Main view / Primary feature** — Core UI and capabilities.
+- **Secondary views** — Related views (e.g. graph, table).
+- **How to Use** — Numbered steps to accomplish common tasks.
+- **Key concepts** — Short explanations (e.g. Subgraph Depth).
+- **Technical Notes** — Brief, optional (data source, stack).
+
+Use Notion-flavored Markdown. Fetch `notion://docs/enhanced-markdown-spec` for syntax.
+
+## 3. Page Naming
+
+Use clear, descriptive names for users:
+
+- ✅ "IFC Graph & 3D Viewer"
+- ❌ "View IFC as a graph"
+
+## 4. Screenshots
+
+- **App must be running** (localhost:5173). Do not start servers; use the existing dev environment.
+- **Use cursor-ide-browser**:
+  1. `browser_navigate` to the app URL.
+  2. `browser_take_screenshot` with a descriptive filename.
+  3. For graph: open graph tab or navigate to `/graph?...`; capture when nodes are visible (select an element in the 3D viewer first if needed).
+- **Save to project**: Copy screenshots to `docs/screenshots/` (e.g. `bimatlas-viewer.png`, `bimatlas-graph.png`).
+- **Add to Notion**: User drags & drops or pastes images into the page; Notion image blocks require URLs, so manual upload is typical.
+
+## 5. Notion Tools
+
+| Tool | Use |
+|------|-----|
+| `notion-fetch` | Get page content, database schema, data source IDs |
+| `notion-update-page` | `replace_content`, `update_properties`, `replace_content_range` |
+| `notion-create-pages` | Create new pages under a database or page |
+
+For `replace_content_range`, use `selection_with_ellipsis` with ~10 chars at start, `...`, `~10 chars` at end.
+
+## 6. Quick Reference
+
+- Database pages: Fetch first to get schema; use exact property names from `<sqlite-table>`.
+- Replace content: `command: "replace_content"`, `new_str: "..."`.
+- Update page name: `command: "update_properties"`, `properties: {"Name": "New Title"}`.

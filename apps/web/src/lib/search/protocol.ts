@@ -73,6 +73,7 @@ export interface FilterSet {
 	name: string;
 	logic: 'AND' | 'OR';
 	filters: SearchFilter[];
+	color: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -94,4 +95,5 @@ export type SearchMessage =
 	  }
 	| { type: 'filter-result-count'; count: number; total: number }
 	| { type: 'branch-context'; branchId: string; projectId: string }
-	| { type: 'request-branch-context' };
+	| { type: 'request-branch-context' }
+	| { type: 'set-filter-set-colors'; enabled: boolean };

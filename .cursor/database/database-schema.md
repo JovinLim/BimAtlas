@@ -119,6 +119,7 @@ branch_id UUID [note: "The branch this filter set belongs to"]
 name varchar [note: "e.g., '2HR Fire Rated Walls'"]
 logic logic_operator [default: 'AND', note: "Intra-set logic between the JSONB filters"]
 filters jsonb [default: '[]', note: "Array of filter conditions"]
+color varchar [default: '#4A90D9', note: "Hex color for viewer coloring"]
 created_at timestamp
 updated_at timestamp
 Note: 'Named, reusable filter collections scoped to a branch'
@@ -128,6 +129,7 @@ Table branch_applied_filter_sets {
 branch_id UUID [pk]
 filter_set_id UUID [pk]
 combination_logic logic_operator [default: 'AND', note: "How this set combines with other applied sets"]
+display_order integer [default: 0, note: "Order for color priority; lower = higher priority"]
 applied_at timestamp
 Note: 'Junction table tracking which filter sets are currently active on a branch'
 }
