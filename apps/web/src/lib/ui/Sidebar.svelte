@@ -124,17 +124,18 @@
 
   .resize-handle:hover,
   .sidebar-container.resizing .resize-handle {
-    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    background: color-mix(in srgb, white 15%, var(--color-brand-500));
   }
 
   .sidebar {
     inset: 0;
     height: 100%;
-    background: var(--color-bg-surface);
-    border-right: 1px solid var(--color-border-subtle);
+    background: var(--color-brand-500);
+    border-right: 1px solid color-mix(in srgb, white 12%, var(--color-brand-500));
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    color: rgba(255, 255, 255, 0.9);
   }
 
   .toggle-btn {
@@ -146,22 +147,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-default);
+    background: var(--color-brand-500);
+    border: 1px solid color-mix(in srgb, white 20%, var(--color-brand-500));
     border-radius: 0 0.25rem 0.25rem 0;
-    color: var(--color-text-muted);
+    color: rgba(255, 255, 255, 0.8);
     cursor: pointer;
     padding: 0;
     z-index: 2;
-    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.06);
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.2);
     transition:
       background 0.15s,
       color 0.15s;
   }
 
   .toggle-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
-    color: var(--color-brand-500);
+    background: var(--color-brand-400);
+    color: white;
   }
 
   .sidebar-content {
@@ -171,5 +172,111 @@
     gap: 1rem;
     overflow-y: auto;
     overflow-x: hidden;
+  }
+
+  /* Sidebar content overrides for dark background */
+  .sidebar :global(.sidebar-section-heading) {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .sidebar :global(.toolbar-btn) {
+    background: color-mix(in srgb, white 12%, var(--color-brand-500));
+    border-color: color-mix(in srgb, white 20%, var(--color-brand-500));
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .sidebar :global(.toolbar-btn:hover) {
+    background: color-mix(in srgb, white 20%, var(--color-brand-500));
+    color: white;
+  }
+
+  .sidebar :global(.revision-filter-group-header),
+  .sidebar :global(.revision-filter-checkbox),
+  .sidebar :global(.filter-row-label) {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .sidebar :global(.revision-filter-group-header:hover) {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .sidebar :global(.revision-filter-input),
+  .sidebar :global(.revision-date-input) {
+    background: color-mix(in srgb, white 8%, var(--color-brand-500));
+    border-color: color-mix(in srgb, white 18%, var(--color-brand-500));
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .sidebar :global(.revision-filter-input::placeholder),
+  .sidebar :global(.revision-date-input::placeholder) {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .sidebar :global(.revision-filter-input:focus),
+  .sidebar :global(.revision-date-input:focus) {
+    border-color: color-mix(in srgb, white 35%, var(--color-brand-500));
+  }
+
+  .sidebar :global(.revision-loading),
+  .sidebar :global(.revision-empty),
+  .sidebar :global(.revision-results-heading) {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .sidebar :global(.revision-item) {
+    background: color-mix(in srgb, white 8%, var(--color-brand-500));
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .sidebar :global(.revision-item:hover) {
+    background: color-mix(in srgb, white 15%, var(--color-brand-500));
+  }
+
+  .sidebar :global(.revision-item--current) {
+    background: color-mix(in srgb, var(--color-action-primary) 25%, var(--color-brand-500));
+    border-color: color-mix(in srgb, var(--color-action-primary) 50%, var(--color-brand-500));
+    color: white;
+  }
+
+  .sidebar :global(.revision-current-label),
+  .sidebar :global(.revision-item--current .revision-seq) {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .sidebar :global(.revision-seq),
+  .sidebar :global(.revision-filename),
+  .sidebar :global(.revision-label),
+  .sidebar :global(.revision-author) {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .sidebar :global(.revision-current-not-in-filter) {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .sidebar :global(.revision-filter-checkbox input) {
+    accent-color: var(--color-action-primary);
+  }
+
+  .sidebar :global(.depth-widget .label) {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .sidebar :global(.depth-widget .stepper) {
+    background: color-mix(in srgb, white 10%, var(--color-brand-500));
+    border-color: color-mix(in srgb, white 20%, var(--color-brand-500));
+  }
+
+  .sidebar :global(.depth-widget .step-btn) {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .sidebar :global(.depth-widget .step-btn:hover:not(:disabled)) {
+    background: color-mix(in srgb, white 18%, var(--color-brand-500));
+    color: white;
+  }
+
+  .sidebar :global(.depth-widget .value-input) {
+    color: rgba(255, 255, 255, 0.95);
   }
 </style>

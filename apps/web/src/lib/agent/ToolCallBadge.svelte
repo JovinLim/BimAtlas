@@ -83,6 +83,9 @@
 		background: var(--color-bg-elevated);
 		border-radius: 0.25rem;
 		font-size: 0.7rem;
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
 	}
 
 	.tool-section {

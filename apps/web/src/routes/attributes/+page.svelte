@@ -164,6 +164,7 @@
     padding: 1rem 1.25rem;
     box-sizing: border-box;
     font-family: system-ui, -apple-system, sans-serif;
+    font-size: 0.8rem;
     overflow: hidden;
   }
 
@@ -178,15 +179,17 @@
 
   .page-header h2 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
+    color: var(--color-text-primary);
   }
 
   .context-pill {
-    padding: 0.15rem 0.6rem;
+    padding: 0.2rem 0.6rem;
     border-radius: 999px;
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
     color: var(--color-text-primary);

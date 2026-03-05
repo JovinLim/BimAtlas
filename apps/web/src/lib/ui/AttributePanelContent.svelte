@@ -412,6 +412,19 @@
             >
               {typeRelation.name ?? typeRelation.ifcClass}
             </button>
+            <button
+              type="button"
+              class="copy-btn"
+              title="Copy type"
+              aria-label="Copy type"
+              onclick={() =>
+                copyValue(typeRelation!.name ?? typeRelation!.ifcClass)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+              </svg>
+            </button>
           </div>
         </div>
       {/if}
@@ -421,17 +434,36 @@
           <ul class="relation-list">
             {#each product.representations as rep}
               <li>
+                <div class="relation-main">
+                  <button
+                    class="link-btn"
+                    onclick={() => handleSelectGlobalId(rep.globalId)}
+                  >
+                    {rep.representationIdentifier ??
+                      rep.representationType ??
+                      "Shape Representation"}
+                  </button>
+                  {#if rep.representationType}
+                    <span class="rel-type">{rep.representationType}</span>
+                  {/if}
+                </div>
                 <button
-                  class="link-btn"
-                  onclick={() => handleSelectGlobalId(rep.globalId)}
+                  type="button"
+                  class="copy-btn"
+                  title="Copy representation"
+                  aria-label="Copy representation"
+                  onclick={() =>
+                    copyValue(
+                      rep.representationIdentifier ??
+                        rep.representationType ??
+                        "Shape Representation",
+                    )}
                 >
-                  {rep.representationIdentifier ??
-                    rep.representationType ??
-                    "Shape Representation"}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+                  </svg>
                 </button>
-                {#if rep.representationType}
-                  <span class="rel-type">{rep.representationType}</span>
-                {/if}
               </li>
             {/each}
           </ul>
@@ -466,7 +498,21 @@
                     View
                   </button>
                 {:else}
-                  <span class="pset-value">{String(value)}</span>
+                  <div class="attr-value-row">
+                    <span class="pset-value">{String(value)}</span>
+                    <button
+                      type="button"
+                      class="copy-btn"
+                      title="Copy value"
+                      aria-label="Copy value"
+                      onclick={() => copyValue(String(value))}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+                      </svg>
+                    </button>
+                  </div>
                 {/if}
               </li>
             {/each}
@@ -479,13 +525,27 @@
           <ul class="relation-list">
             {#each product.relations as n}
               <li>
+                <div class="relation-main">
+                  <button
+                    class="link-btn"
+                    onclick={() => handleSelectGlobalId(n.globalId)}
+                  >
+                    {n.name ?? n.ifcClass}
+                  </button>
+                  <span class="rel-type">{n.relationship}</span>
+                </div>
                 <button
-                  class="link-btn"
-                  onclick={() => handleSelectGlobalId(n.globalId)}
+                  type="button"
+                  class="copy-btn"
+                  title="Copy relation"
+                  aria-label="Copy relation"
+                  onclick={() => copyValue(n.name ?? n.ifcClass)}
                 >
-                  {n.name ?? n.ifcClass}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+                  </svg>
                 </button>
-                <span class="rel-type">{n.relationship}</span>
               </li>
             {/each}
           </ul>
@@ -497,12 +557,44 @@
           <div class="pset-list">
             {#each objectEntries(product.propertySets ?? {}) as [psetName, props]}
               <details>
-                <summary>{psetName}</summary>
+                <summary class="pset-summary">
+                  <span class="pset-summary-name">{psetName}</span>
+                  <button
+                    type="button"
+                    class="copy-btn pset-copy-all"
+                    title="Copy property set as JSON"
+                    aria-label="Copy property set as JSON"
+                    onclick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      copyValue(JSON.stringify(props, null, 2));
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+                    </svg>
+                  </button>
+                </summary>
                 <ul class="pset-props">
                   {#each objectEntries(props as Record<string, unknown>) as [key, value]}
                     <li>
                       <span class="pset-key">{key}</span>
-                      <span class="pset-value">{String(value)}</span>
+                      <div class="attr-value-row">
+                        <span class="pset-value">{String(value)}</span>
+                        <button
+                          type="button"
+                          class="copy-btn"
+                          title="Copy value"
+                          aria-label="Copy value"
+                          onclick={() => copyValue(String(value))}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2" />
+                          </svg>
+                        </button>
+                      </div>
                     </li>
                   {/each}
                 </ul>
@@ -600,22 +692,23 @@
   }
 
   .value {
+    font-size: 0.8rem;
     color: var(--color-text-primary);
     word-break: break-all;
   }
 
   .mono {
     font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
   }
 
   .badge {
     display: inline-block;
     background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
     color: var(--color-brand-500);
-    padding: 0.1rem 0.4rem;
+    padding: 0.15rem 0.4rem;
     border-radius: 0.25rem;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     width: fit-content;
   }
 
@@ -630,7 +723,7 @@
     color: var(--color-info);
     cursor: pointer;
     padding: 0;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     text-align: left;
   }
 
@@ -645,7 +738,7 @@
     color: var(--color-brand-500);
     padding: 0.15rem 0.5rem;
     border-radius: 0.25rem;
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     cursor: pointer;
   }
 
@@ -675,6 +768,15 @@
     min-height: 1.5em;
   }
 
+  .relation-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
   .relation-list li .link-btn {
     flex: 1;
     min-width: 0;
@@ -682,7 +784,7 @@
   }
 
   .rel-type {
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     color: var(--color-text-muted);
     text-align: right;
     white-space: normal;
@@ -704,9 +806,40 @@
     padding: 0.25rem 0.4rem;
   }
 
-  .pset-list summary {
+  .pset-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     cursor: pointer;
+    font-size: 0.8rem;
     color: var(--color-text-secondary);
+    list-style: none;
+  }
+
+  .pset-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .pset-summary::before {
+    content: "▸";
+    font-size: 0.6rem;
+    color: var(--color-text-muted);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+
+  .pset-list details[open] .pset-summary::before {
+    transform: rotate(90deg);
+  }
+
+  .pset-summary-name {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .pset-copy-all {
+    flex-shrink: 0;
   }
 
   .pset-props {
@@ -718,17 +851,36 @@
     gap: 0.15rem;
   }
 
+  .pset-props li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .attr-value-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .attr-value-row .pset-value {
+    flex: 1;
+    min-width: 0;
+  }
+
   .pset-key {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--color-text-muted);
     margin-right: 0.4rem;
   }
 
   .attr-badge {
-    font-size: 0.6rem;
+    font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    padding: 0.08rem 0.35rem;
+    padding: 0.1rem 0.35rem;
     border-radius: 0.2rem;
     margin-left: 0.35rem;
   }
@@ -753,7 +905,7 @@
     flex-shrink: 0;
     color: var(--color-text-muted);
     margin: 0.5rem 0;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
   }
 
   .error {

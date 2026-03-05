@@ -739,7 +739,7 @@
 		--control-border: 1px solid var(--color-border-default);
 		--control-radius: 0.3rem;
 		--control-bg: var(--color-bg-elevated);
-		--control-focus-border: var(--color-brand-500);
+		--control-focus-border: var(--color-border-strong);
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -773,8 +773,8 @@
 	}
 
 	.mode-btn.active {
-		background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
-		color: var(--color-brand-500);
+		background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+		color: var(--color-action-primary);
 	}
 
 	.filter-fields {
@@ -866,8 +866,8 @@
 
 	.filter-combobox-option:hover,
 	.filter-combobox-option.highlighted {
-		background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
-		color: var(--color-brand-500);
+		background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
+		color: var(--color-action-primary);
 	}
 
 	.filter-combobox-option--empty {

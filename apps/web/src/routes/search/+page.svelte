@@ -43,7 +43,30 @@
   let filterGuideOpen = $state(false);
   let filterSetColorsEnabled = $state(false);
   let filterSetsSectionCollapsed = $state(false);
-  let editorColor = $state('#4A90D9');
+  let editorColor = $state('#334155');
+  let scopeDropdownOpen = $state(false);
+  let scopeSelectorEl: HTMLDivElement | undefined = $state(undefined);
+
+  const SCOPE_OPTIONS: { value: SearchScope; label: string }[] = [
+    { value: "branch", label: "This Branch" },
+    { value: "project", label: "This Project" },
+    { value: "all", label: "All" },
+  ];
+
+  $effect(() => {
+    if (!scopeDropdownOpen) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (scopeSelectorEl?.contains(target)) return;
+      scopeDropdownOpen = false;
+    }
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  });
+
+  $effect(() => {
+    if (filterSetsSectionCollapsed) scopeDropdownOpen = false;
+  });
 
   let nextId = 0;
   function genId(): string {
@@ -735,30 +758,68 @@
 
   <!-- ═══════ Filter Set Browser ═══════ -->
   <section class="section">
-    <button
-      type="button"
-      class="section-header section-header--collapsible"
-      onclick={(e) => {
-        if ((e.target as HTMLElement).closest('.scope-selector')) return;
-        filterSetsSectionCollapsed = !filterSetsSectionCollapsed;
-      }}
-      aria-expanded={!filterSetsSectionCollapsed}
-      aria-label={filterSetsSectionCollapsed ? 'Expand Filter Sets' : 'Collapse Filter Sets'}
-    >
-      <span class="section-header-title">
-        <span class="section-chevron" class:open={!filterSetsSectionCollapsed}>▸</span>
-        <h3>Filter Sets</h3>
-      </span>
+    <div class="section-header section-header--collapsible-wrap">
+      <button
+        type="button"
+        class="section-header--collapsible"
+        onclick={() => (filterSetsSectionCollapsed = !filterSetsSectionCollapsed)}
+        aria-expanded={!filterSetsSectionCollapsed}
+        aria-label={filterSetsSectionCollapsed ? 'Expand Filter Sets' : 'Collapse Filter Sets'}
+      >
+        <span class="section-header-title">
+          <span class="section-chevron" class:open={!filterSetsSectionCollapsed}>▸</span>
+          <h3>Filter Sets</h3>
+        </span>
+      </button>
       {#if branchId}
-        <div class="scope-selector">
-          <select class="scope-select" bind:value={searchScope}>
-            <option value="branch">This Branch</option>
-            <option value="project">This Project</option>
-            <option value="all">All</option>
-          </select>
+        <div
+          class="scope-selector"
+          bind:this={scopeSelectorEl}
+        >
+          <button
+            type="button"
+            class="scope-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={scopeDropdownOpen}
+            aria-label="Search scope"
+            onclick={() => (scopeDropdownOpen = !scopeDropdownOpen)}
+          >
+            {SCOPE_OPTIONS.find((o) => o.value === searchScope)?.label ?? searchScope}
+            <span class="scope-chevron" class:open={scopeDropdownOpen}>▾</span>
+          </button>
+          {#if scopeDropdownOpen}
+            <ul
+              class="scope-dropdown"
+              role="listbox"
+              aria-label="Search scope"
+            >
+              {#each SCOPE_OPTIONS as opt}
+                <li
+                  role="option"
+                  aria-selected={searchScope === opt.value}
+                  tabindex="-1"
+                  class="scope-option"
+                  class:selected={searchScope === opt.value}
+                  onclick={() => {
+                    searchScope = opt.value;
+                    scopeDropdownOpen = false;
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      searchScope = opt.value;
+                      scopeDropdownOpen = false;
+                    }
+                  }}
+                >
+                  {opt.label}
+                </li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       {/if}
-    </button>
+    </div>
 
     {#if !filterSetsSectionCollapsed}
     <input
@@ -833,7 +894,7 @@
     <div class="filter-set-editor-trigger">
       <button
         type="button"
-        class="btn btn-secondary"
+        class="btn btn-primary"
         onclick={() => (filterSetEditorOpen = true)}
       >
         New Filter Set
@@ -921,7 +982,7 @@
           <button class="btn btn-secondary" onclick={clearAll}>Clear All</button
           >
           <button
-            class="btn btn-secondary"
+            class="btn btn-primary"
             disabled={filters.length === 0}
             onclick={handleApplyAdHoc}
           >
@@ -1146,7 +1207,7 @@
                 <div class="editor-actions">
                   <button
                     type="button"
-                    class="btn btn-secondary"
+                    class="btn btn-primary"
                     onclick={() => handleUpdateAppliedFilterSet(fs)}
                   >
                     Update
@@ -1221,14 +1282,14 @@
   }
 
   .btn-guide:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
-    color: var(--color-brand-500);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+    color: var(--color-action-primary);
   }
 
   .guide-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: color-mix(in srgb, var(--color-bg-canvas) 20%, black);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1237,8 +1298,8 @@
 
   .guide-modal {
     background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.5rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 12px;
     width: 75%;
     height: 75%;
     overflow: hidden;
@@ -1300,7 +1361,7 @@
 
   .result-count {
     font-size: 0.78rem;
-    color: var(--color-brand-500);
+    color: var(--color-action-primary);
     font-variant-numeric: tabular-nums;
   }
 
@@ -1308,7 +1369,7 @@
 
   .section {
     border: 1px solid var(--color-border-subtle);
-    border-radius: 0.5rem;
+    border-radius: 12px;
     padding: 0.75rem;
     background: var(--color-bg-elevated);
     display: flex;
@@ -1322,8 +1383,13 @@
     justify-content: space-between;
   }
 
-  .section-header--collapsible {
+  .section-header--collapsible-wrap {
     width: 100%;
+  }
+
+  .section-header--collapsible {
+    flex: 1;
+    min-width: 0;
     background: none;
     border: none;
     padding: 0;
@@ -1378,7 +1444,7 @@
   }
 
   .search-input:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .search-input::placeholder {
@@ -1389,22 +1455,75 @@
 
   .scope-selector {
     flex-shrink: 0;
+    position: relative;
   }
 
-  .scope-select {
+  .scope-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
-    border-radius: 0.3rem;
-    color: var(--color-text-muted);
+    border-radius: 0.5rem;
+    color: var(--color-text-primary);
     padding: 0.2rem 0.4rem;
     font-size: 0.7rem;
     cursor: pointer;
     outline: none;
+    font-family: inherit;
+    min-width: 6rem;
   }
 
-  .scope-select option {
+  .scope-trigger:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .scope-trigger:focus-visible {
+    border-color: var(--color-border-strong);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-border-strong) 25%, transparent);
+  }
+
+  .scope-chevron {
+    font-size: 0.55rem;
+    color: var(--color-text-muted);
+    transition: transform 0.15s;
+  }
+
+  .scope-chevron.open {
+    transform: rotate(180deg);
+  }
+
+  .scope-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin: 0.2rem 0 0;
+    padding: 0.25rem 0;
+    min-width: 100%;
+    list-style: none;
     background: var(--color-bg-surface);
-    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    z-index: 100;
+  }
+
+  .scope-option {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.7rem;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .scope-option:hover {
+    background: color-mix(in srgb, var(--color-action-primary) 10%, transparent);
+    color: var(--color-action-primary);
+  }
+
+  .scope-option.selected {
+    background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
+    color: var(--color-action-primary);
   }
 
   /* ---- Filter set list ---- */
@@ -1419,8 +1538,9 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.35rem 0.4rem;
-    border-radius: 0.3rem;
-    transition: background 0.12s;
+    border-radius: 0.5rem;
+    border: 1px solid transparent;
+    transition: background 0.12s, border-color 0.12s;
   }
 
   .set-row:hover {
@@ -1428,11 +1548,12 @@
   }
 
   .set-row.selected {
-    background: color-mix(in srgb, var(--color-brand-500) 6%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-action-primary) 25%, transparent);
   }
 
   .set-checkbox input {
-    accent-color: var(--color-brand-500);
+    accent-color: var(--color-action-primary);
     cursor: pointer;
   }
 
@@ -1475,7 +1596,7 @@
   }
 
   .icon-btn:hover {
-    color: var(--color-brand-500);
+    color: var(--color-action-primary);
   }
 
   .icon-btn--danger:hover {
@@ -1524,7 +1645,7 @@
   }
 
   .applied-item {
-    border-radius: 0.45rem;
+    border-radius: 12px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     font-size: 0.78rem;
@@ -1576,8 +1697,8 @@
   }
 
   .applied-item:hover {
-    border-color: color-mix(in srgb, var(--color-brand-500) 24%, transparent);
-    background: color-mix(in srgb, var(--color-brand-500) 3%, transparent);
+    border-color: color-mix(in srgb, var(--color-action-primary) 25%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 8%, transparent);
   }
 
   .applied-name {
@@ -1701,9 +1822,9 @@
   }
 
   .mode-btn.active {
-    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
-    color: var(--color-brand-500);
-    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+    color: var(--color-action-primary);
+    border-color: color-mix(in srgb, var(--color-action-primary) 35%, transparent);
   }
 
   /* ---- Editor ---- */
@@ -1726,7 +1847,7 @@
   }
 
   .editor-name:focus {
-    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    border-color: var(--color-border-strong);
   }
 
   .editor-name::placeholder {
@@ -1772,9 +1893,9 @@
   }
 
   .add-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
-    color: var(--color-brand-500);
-    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
+    color: var(--color-action-primary);
+    border-color: color-mix(in srgb, var(--color-action-primary) 35%, transparent);
   }
 
   .empty-hint {
@@ -1787,8 +1908,8 @@
   .btn {
     padding: 0.45rem 1rem;
     font-size: 0.78rem;
-    border: none;
-    border-radius: 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 12px;
     cursor: pointer;
     font-weight: 500;
     transition:
@@ -1807,18 +1928,20 @@
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
     color: var(--color-text-primary);
   }
 
   .btn-primary {
-    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
-    color: var(--color-brand-500);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    color: var(--color-action-primary);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
-    color: var(--color-brand-400);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .btn-danger {
@@ -1852,7 +1975,7 @@
   }
 
   .color-toggle-label input {
-    accent-color: var(--color-brand-500);
+    accent-color: var(--color-action-primary);
     cursor: pointer;
   }
 

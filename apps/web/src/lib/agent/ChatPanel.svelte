@@ -747,6 +747,7 @@
     <!-- Toolbar -->
     <div class="sidebar-toolbar">
       <button
+        type="button"
         class="toolbar-btn new-chat-btn"
         onclick={createNewChat}
         title="New chat"
@@ -754,8 +755,9 @@
         + New chat
       </button>
       <button
+        type="button"
         class="toolbar-btn new-agent-btn"
-        onclick={() => (configModalOpen = true)}
+        onclick={clearAgentSelection}
         title="Create new agent"
       >
         + Agent
@@ -1119,30 +1121,31 @@
   }
 
   .new-chat-btn {
-    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
     border: 1px solid
-      color-mix(in srgb, var(--color-brand-500) 25%, transparent);
-    color: var(--color-brand-500);
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    color: var(--color-action-primary);
   }
 
   .new-chat-btn:hover,
   .new-chat-btn:focus-visible {
-    background: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .new-agent-btn {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-default);
-    color: var(--color-text-secondary);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+    border: 1px solid
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    color: var(--color-action-primary);
   }
 
   .new-agent-btn:hover,
   .new-agent-btn:focus-visible {
-    background: color-mix(
-      in srgb,
-      var(--color-text-primary) 10%,
-      var(--color-bg-elevated)
-    );
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .saved-agents-section {
@@ -1275,24 +1278,27 @@
     color: var(--color-text-muted);
     background: var(--color-bg-elevated);
     border-bottom: 1px solid var(--color-border-subtle);
+    min-width: 0;
   }
 
   .link-context-btn {
     flex-shrink: 0;
     padding: 0.25rem 0.5rem;
     font-size: 0.7rem;
-    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
     border: 1px solid
-      color-mix(in srgb, var(--color-brand-500) 25%, transparent);
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
     border-radius: 0.3rem;
-    color: var(--color-brand-500);
+    color: var(--color-action-primary);
     cursor: pointer;
     font-family: inherit;
   }
 
   .link-context-btn:hover,
   .link-context-btn:focus-visible {
-    background: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .chat-details-text {
@@ -1318,6 +1324,7 @@
     padding: 0.45rem 0.6rem;
     border-bottom: 1px solid var(--color-border-subtle);
     background: var(--color-bg-canvas);
+    min-width: 0;
   }
 
   .chat-title {
@@ -1389,6 +1396,8 @@
 
   .messages {
     flex: 1;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     padding: 0.6rem;
     display: flex;
@@ -1447,10 +1456,12 @@
     padding: 0.5rem 0.6rem;
     border-top: 1px solid var(--color-border-subtle);
     background: var(--color-bg-canvas);
+    min-width: 0;
   }
 
   .chat-input {
     flex: 1;
+    min-width: 0;
     resize: none;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-default);
@@ -1485,11 +1496,11 @@
     width: 2.5rem;
     min-width: 2.5rem;
     flex-shrink: 0;
-    background: color-mix(in srgb, var(--color-brand-500) 20%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
     border: 1px solid
-      color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
     border-radius: 0.35rem;
-    color: var(--color-brand-500);
+    color: var(--color-action-primary);
     cursor: pointer;
     transition:
       background 0.15s,
@@ -1522,8 +1533,9 @@
 
   .send-btn:hover:not(:disabled),
   .send-btn:focus-visible:not(:disabled) {
-    background: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
-    color: var(--color-brand-400);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .send-btn:disabled {
@@ -1637,15 +1649,17 @@
   }
 
   .save-btn {
-    background: color-mix(in srgb, var(--color-brand-500) 20%, transparent);
+    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
     border: 1px solid
-      color-mix(in srgb, var(--color-brand-500) 30%, transparent);
-    color: var(--color-brand-500);
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    color: var(--color-action-primary);
   }
 
   .save-btn:hover:not(:disabled),
   .save-btn:focus-visible:not(:disabled) {
-    background: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
+    background: var(--color-action-primary);
+    border-color: var(--color-action-primary);
+    color: var(--color-bg-surface);
   }
 
   .save-btn:disabled {

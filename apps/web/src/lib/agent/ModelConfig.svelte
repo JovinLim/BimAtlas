@@ -59,15 +59,6 @@
 				<option value={agent.entity_id}>{agent.name}</option>
 			{/each}
 		</select>
-		<button
-			type="button"
-			class="config-toggle"
-			onclick={() => (modalOpen = true)}
-			aria-expanded={modalOpen}
-			aria-label="Edit agent config"
-		>
-			<span class="config-chevron">✎</span>
-		</button>
 	</div>
 </section>
 
@@ -182,22 +173,26 @@
 <style>
 	.model-config {
 		border-bottom: 1px solid var(--color-border-subtle);
+		min-width: 0;
+		overflow: hidden;
 	}
 
 	.config-header {
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		width: 100%;
+		min-width: 0;
 		padding: 0.5rem 0.6rem;
 		color: var(--color-text-secondary);
 		font-size: 0.78rem;
 		font-family: inherit;
+		overflow: hidden;
 	}
 
 	.config-agent-select {
 		flex: 1;
 		min-width: 0;
+		overflow: hidden;
 		background: var(--color-bg-elevated);
 		border: 1px solid var(--color-border-default);
 		border-radius: 0.3rem;
@@ -214,29 +209,13 @@
 		border-color: var(--color-border-strong);
 	}
 
-	.config-toggle {
-		background: none;
-		border: none;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		padding: 0.2rem;
-	}
-
-	.config-toggle:hover,
-	.config-toggle:focus-visible {
-		background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
-	}
-
 	.config-title {
+		flex-shrink: 0;
 		font-weight: 600;
 		font-size: 0.7rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		color: var(--color-text-muted);
-	}
-
-	.config-chevron {
-		font-size: 0.75rem;
 	}
 
 	.config-modal-backdrop {
@@ -354,17 +333,19 @@
 	.save-agent-btn {
 		padding: 0.35rem 0.6rem;
 		font-size: 0.72rem;
-		background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-brand-500) 25%, transparent);
+		background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-action-primary) 35%, transparent);
 		border-radius: 0.3rem;
-		color: var(--color-brand-500);
+		color: var(--color-action-primary);
 		cursor: pointer;
 		font-family: inherit;
 	}
 
 	.save-agent-btn:hover:not(:disabled),
 	.save-agent-btn:focus-visible:not(:disabled) {
-		background: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+		background: var(--color-action-primary);
+		border-color: var(--color-action-primary);
+		color: var(--color-bg-surface);
 	}
 
 	.save-agent-btn:disabled {
