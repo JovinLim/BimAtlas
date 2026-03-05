@@ -2485,7 +2485,7 @@
 <style>
   .table-page {
     --table-grid-border-width: 1px;
-    --table-grid-border-color: rgba(255, 255, 255, 0.06);
+    --table-grid-border-color: var(--color-border-subtle);
     --table-header-height: 28px;
     --table-subheader-height: 34px;
     --table-row-height: 34px;
@@ -2494,8 +2494,8 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
     font-family: system-ui, -apple-system, sans-serif;
     overflow: hidden;
   }
@@ -2507,7 +2507,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .table-header h2 {
@@ -2515,16 +2515,16 @@
     font-size: 0.95rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .context-pill {
     padding: 0.15rem 0.6rem;
     border-radius: 999px;
     font-size: 0.72rem;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: #ccc;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
     max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2537,7 +2537,7 @@
   }
 
   .context-pill.fixture {
-    color: #8f8;
+    color: var(--color-success);
   }
 
   .mono {
@@ -2558,17 +2558,17 @@
   .split-resize-handle {
     grid-column: 1;
     cursor: row-resize;
-    background: rgba(255, 255, 255, 0.06);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-elevated);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   .split-resize-handle:hover {
-    background: rgba(255, 136, 102, 0.15);
-    border-top-color: rgba(255, 136, 102, 0.35);
+    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    border-top-color: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
   }
 
   .table-split.resizing .split-resize-handle {
-    background: rgba(255, 136, 102, 0.2);
+    background: color-mix(in srgb, var(--color-brand-500) 20%, transparent);
   }
 
   .formula-bar {
@@ -2578,8 +2578,8 @@
     gap: 0.4rem;
     align-items: center;
     padding: 0.45rem 0.75rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-elevated);
   }
 
   .formula-cell-ref {
@@ -2587,10 +2587,10 @@
     text-align: center;
     padding: 0.35rem 0.5rem;
     border-radius: 0.25rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
     font-size: 0.78rem;
-    color: #e7e7f3;
+    color: var(--color-text-primary);
   }
 
   .formula-input-wrap {
@@ -2607,9 +2607,9 @@
     padding: 0.25rem 0;
     list-style: none;
     border-radius: 0.35rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     max-height: 12rem;
     overflow-y: auto;
     z-index: 100;
@@ -2626,23 +2626,23 @@
 
   .formula-suggestion-item:hover,
   .formula-suggestion-item.selected {
-    background: rgba(255, 136, 102, 0.15);
-    color: #ffd8cf;
+    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    color: var(--color-brand-400);
   }
 
   .formula-suggestion-sig {
-    color: #e7e7f3;
+    color: var(--color-text-primary);
     font-weight: 500;
   }
 
   .formula-suggestion-desc {
     font-size: 0.72rem;
-    color: #a0a0b0;
+    color: var(--color-text-muted);
   }
 
   .formula-suggestion-item:hover .formula-suggestion-desc,
   .formula-suggestion-item.selected .formula-suggestion-desc {
-    color: #c8c8d8;
+    color: var(--color-text-secondary);
   }
 
   .formula-input {
@@ -2650,39 +2650,39 @@
     height: 2rem;
     box-sizing: border-box;
     border-radius: 0.35rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.03);
-    color: #e0e0e0;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
     padding: 0 0.6rem;
     font-size: 0.82rem;
   }
 
   .formula-input:focus {
     outline: none;
-    border-color: rgba(255, 136, 102, 0.55);
-    box-shadow: 0 0 0 2px rgba(255, 136, 102, 0.2);
+    border-color: color-mix(in srgb, var(--color-brand-500) 55%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-500) 20%, transparent);
   }
 
   .formula-input[readonly] {
     opacity: 0.8;
-    color: #bbbbc8;
+    color: var(--color-text-muted);
   }
 
   .formula-btn {
     height: 2rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: #e0e0e0;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     font-size: 0.75rem;
     padding: 0 0.6rem;
     cursor: pointer;
   }
 
   .formula-btn:hover:enabled {
-    background: rgba(255, 136, 102, 0.18);
-    border-color: rgba(255, 136, 102, 0.45);
-    color: #ffd8cf;
+    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 45%, transparent);
+    color: var(--color-brand-400);
   }
 
   .formula-btn:disabled {
@@ -2695,7 +2695,7 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   .segment-toolbar {
@@ -2704,31 +2704,31 @@
     align-items: center;
     gap: 1rem;
     padding: 0.4rem 0.75rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-elevated);
   }
 
   .segment-label {
     margin: 0;
     font-size: 0.8rem;
-    color: #a0a0b0;
+    color: var(--color-text-muted);
   }
 
   .formula-guide-btn {
     margin-left: auto;
     padding: 0.3rem 0.6rem;
     font-size: 0.75rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: #e0e0e0;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     cursor: pointer;
   }
 
   .formula-guide-btn:hover {
-    background: rgba(255, 136, 102, 0.18);
-    border-color: rgba(255, 136, 102, 0.45);
-    color: #ffd8cf;
+    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 45%, transparent);
+    color: var(--color-brand-400);
   }
 
   .formula-guide-backdrop {
@@ -2750,9 +2750,9 @@
     display: flex;
     flex-direction: column;
     border-radius: 0.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     overflow: hidden;
   }
 
@@ -2762,14 +2762,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .formula-guide-header h2 {
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .formula-guide-close {
@@ -2784,13 +2784,13 @@
     border: none;
     border-radius: 0.35rem;
     background: transparent;
-    color: #a0a0b0;
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
   .formula-guide-close:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #e0e0e0;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
   }
 
   .formula-guide-body {
@@ -2819,9 +2819,9 @@
     display: flex;
     flex-direction: column;
     border-radius: 0.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     overflow: hidden;
   }
 
@@ -2831,14 +2831,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .cell-content-title {
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .cell-content-body {
@@ -2853,7 +2853,7 @@
     margin: 0;
     font-size: 0.82rem;
     line-height: 1.45;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -2861,9 +2861,9 @@
   .close-sheet-dialog {
     padding: 1.25rem;
     border-radius: 0.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     min-width: 18rem;
   }
 
@@ -2871,13 +2871,13 @@
     margin: 0 0 0.75rem;
     font-size: 1rem;
     font-weight: 600;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .close-sheet-dialog p {
     margin: 0 0 1rem;
     font-size: 0.9rem;
-    color: #c0c0d0;
+    color: var(--color-text-secondary);
   }
 
   .close-sheet-dialog-actions {
@@ -2890,24 +2890,24 @@
     padding: 0.4rem 0.75rem;
     font-size: 0.85rem;
     border-radius: 0.3rem;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(255, 255, 255, 0.06);
-    color: #e0e0e0;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     cursor: pointer;
   }
 
   .close-sheet-dialog-actions button:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
   }
 
   .close-sheet-dialog-actions button:last-child {
-    background: rgba(255, 136, 102, 0.2);
-    border-color: rgba(255, 136, 102, 0.4);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    color: var(--color-brand-500);
   }
 
   .close-sheet-dialog-actions button:last-child:hover {
-    background: rgba(255, 136, 102, 0.3);
+    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
   }
 
   .formula-guide-section {
@@ -2922,19 +2922,19 @@
     margin: 0 0 0.35rem;
     font-size: 0.95rem;
     font-weight: 600;
-    color: #e7e7f3;
+    color: var(--color-text-primary);
   }
 
   .formula-guide-usage {
     margin: 0 0 0.35rem;
     font-size: 0.82rem;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .formula-guide-desc {
     margin: 0;
     font-size: 0.8rem;
-    color: #a0a0b0;
+    color: var(--color-text-muted);
     line-height: 1.4;
   }
 
@@ -2956,12 +2956,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-bg-elevated);
   }
 
   .sheets-loading-text {
     font-size: 0.9rem;
-    color: #888;
+    color: var(--color-text-muted);
   }
 
   .sheet-tabs {
@@ -2970,8 +2970,8 @@
     align-items: center;
     gap: 0.2rem;
     padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-elevated);
   }
 
   .sheet-tab {
@@ -2983,7 +2983,7 @@
     border-radius: 0.25rem;
     border: 1px solid transparent;
     background: transparent;
-    color: #999;
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
@@ -2999,41 +2999,41 @@
     line-height: 1;
     border: none;
     background: transparent;
-    color: #777;
+    color: var(--color-text-muted);
     cursor: pointer;
     border-radius: 0.15rem;
   }
 
   .sheet-tab-close:hover {
-    color: #e66;
-    background: rgba(255, 100, 100, 0.15);
+    color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
   }
 
   .sheet-tab:hover {
-    color: #ccc;
-    background: rgba(255, 255, 255, 0.05);
+    color: var(--color-text-secondary);
+    background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
   }
 
   .sheet-tab.active {
-    color: #ff8866;
-    background: rgba(255, 136, 102, 0.12);
-    border-color: rgba(255, 136, 102, 0.3);
+    color: var(--color-brand-500);
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
   }
 
   .sheet-tab-add {
     padding: 0.2rem 0.5rem;
     font-size: 0.75rem;
     border-radius: 0.25rem;
-    border: 1px dashed rgba(255, 255, 255, 0.2);
+    border: 1px dashed var(--color-border-default);
     background: transparent;
-    color: #888;
+    color: var(--color-text-muted);
     cursor: pointer;
     margin-left: 0.25rem;
   }
 
   .sheet-tab-add:hover {
-    color: #ff8866;
-    border-color: rgba(255, 136, 102, 0.4);
+    color: var(--color-brand-500);
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
   }
 
   .sheet-tab-context-menu {
@@ -3042,9 +3042,9 @@
     min-width: 10rem;
     padding: 0.25rem 0;
     border-radius: 0.35rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   }
   .sheet-tab-context-item {
     display: block;
@@ -3053,26 +3053,26 @@
     border: none;
     border-radius: 0;
     background: transparent;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     font-size: 0.8rem;
     text-align: left;
     cursor: pointer;
   }
   .sheet-tab-context-item:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-elevated);
   }
   .sheet-tab-context-item-danger:hover {
-    background: rgba(220, 80, 60, 0.2);
-    color: #ffaa99;
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+    color: var(--color-danger);
   }
 
   .sheet-tab-edit {
     padding: 0.25rem 0.5rem;
     font-size: 0.78rem;
     border-radius: 0.25rem;
-    border: 1px solid rgba(255, 136, 102, 0.4);
-    background: rgba(255, 255, 255, 0.06);
-    color: #e0e0f0;
+    border: 1px solid color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     min-width: 4rem;
   }
 
@@ -3091,11 +3091,11 @@
     transform: translateX(-50%);
     padding: 0.6rem 1rem;
     border-radius: 0.35rem;
-    background: #2d2d3d;
-    color: #e0e0e0;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     font-size: 0.875rem;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    border: 1px solid var(--color-border-subtle);
     z-index: 100;
   }
 </style>

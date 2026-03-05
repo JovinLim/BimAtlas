@@ -124,14 +124,14 @@
 
   .resize-handle:hover,
   .sidebar-container.resizing .resize-handle {
-    background: rgba(255, 136, 102, 0.15);
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
   }
 
   .sidebar {
     inset: 0;
     height: 100%;
-    background: #1a1a2e;
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--color-bg-surface);
+    border-right: 1px solid var(--color-border-subtle);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -146,22 +146,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #1a1a2e;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0 0.25rem 0.25rem 0;
-    color: #888;
+    color: var(--color-text-muted);
     cursor: pointer;
     padding: 0;
     z-index: 2;
-    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.2);
+    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.06);
     transition:
       background 0.15s,
       color 0.15s;
   }
 
   .toggle-btn:hover {
-    background: rgba(255, 102, 68, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    color: var(--color-brand-500);
   }
 
   .sidebar-content {

@@ -30,7 +30,7 @@ export class SceneManager {
 	constructor(canvas: HTMLCanvasElement) {
 		this.canvas = canvas;
 		this.scene = new THREE.Scene();
-		this.scene.background = new THREE.Color(0x1a1a2e);
+		this.scene.background = new THREE.Color(0xf7f7f2);
 
 		const w = canvas.clientWidth || 1;
 		const h = canvas.clientHeight || 1;
@@ -80,14 +80,14 @@ export class SceneManager {
 			roughness: 0.8
 		});
 		this.highlightMaterial = new THREE.MeshStandardMaterial({
-			color: 0xff6644,
+			color: 0x334155,
 			flatShading: true,
-			emissive: 0x331100,
+			emissive: 0x1e293b,
 			metalness: 0.1,
 			roughness: 0.6
 		});
 		this.ghostMaterial = new THREE.MeshStandardMaterial({
-			color: 0x445566,
+			color: 0xd4d4ce,
 			flatShading: true,
 			metalness: 0.05,
 			roughness: 0.9,
@@ -105,7 +105,7 @@ export class SceneManager {
 		canvas.addEventListener('click', this.handleClick);
 
 		// Ground grid (rotated to XZ plane for Z-up)
-		const grid = new THREE.GridHelper(100, 50, 0x444466, 0x333355);
+		const grid = new THREE.GridHelper(100, 50, 0xd4d4ce, 0xe5e5e0);
 		grid.rotation.x = Math.PI / 2; // Rotate 90 degrees to lay on XZ plane
 		this.scene.add(grid);
 

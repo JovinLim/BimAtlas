@@ -2311,7 +2311,7 @@
     height: 100vh;
     margin: 0;
     padding: 0;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     font-family:
       system-ui,
       -apple-system,
@@ -2326,8 +2326,8 @@
     padding: 0 1rem;
     height: 48px;
     min-height: 48px;
-    background: #1a1a2e;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--color-bg-surface);
+    border-bottom: 1px solid var(--color-border-subtle);
     gap: 1rem;
   }
 
@@ -2340,7 +2340,11 @@
     font-size: 1.1rem;
     font-weight: 700;
     letter-spacing: 0.03em;
-    background: linear-gradient(135deg, #ff6644, #ff9966);
+    background: linear-gradient(
+      135deg,
+      var(--color-brand-gradient-start),
+      var(--color-brand-gradient-end)
+    );
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -2376,14 +2380,14 @@
     font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #666;
+    color: var(--color-text-muted);
   }
 
   .selector {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     padding: 0.25rem 0.5rem;
     font-size: 0.8rem;
     cursor: pointer;
@@ -2407,16 +2411,16 @@
   }
 
   .selector:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
   }
 
   .selector option {
-    background: #1e1e30;
-    color: #ddd;
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
   }
 
   .separator {
-    color: #555;
+    color: var(--color-text-muted);
     font-size: 1rem;
   }
 
@@ -2442,14 +2446,14 @@
     align-items: center;
     gap: 0.4rem;
     font-size: 0.7rem;
-    color: #888;
+    color: var(--color-text-muted);
     cursor: pointer;
     min-width: 0;
     line-height: 1.3;
   }
 
   .revision-search-section .revision-filter-checkbox input {
-    accent-color: #ff8866;
+    accent-color: var(--color-brand-500);
     flex-shrink: 0;
   }
 
@@ -2469,10 +2473,10 @@
     width: 100%;
     box-sizing: border-box;
     min-height: 2.25rem;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     padding: 0.3rem 0.45rem;
     font-size: 0.78rem;
     outline: none;
@@ -2481,21 +2485,21 @@
   }
 
   .revision-search-section .revision-filter-input:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
   }
 
   .revision-search-section .revision-filter-input::placeholder {
-    color: #555;
+    color: var(--color-text-muted);
   }
 
   .revision-search-section .revision-date-input {
     width: 100%;
     box-sizing: border-box;
     min-height: 2.25rem;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     padding: 0.3rem 0.45rem;
     font-size: 0.78rem;
     outline: none;
@@ -2504,20 +2508,20 @@
   }
 
   .revision-search-section .revision-date-input:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
   }
 
   .revision-search-section
     .revision-date-input::-webkit-calendar-picker-indicator {
-    filter: invert(0.8);
+    filter: none;
     cursor: pointer;
-    opacity: 0.8;
+    opacity: 0.7;
   }
 
   .revision-loading,
   .revision-empty {
     font-size: 0.8rem;
-    color: #888;
+    color: var(--color-text-muted);
     margin: 0;
   }
 
@@ -2529,7 +2533,7 @@
     margin: 0 0 0.35rem;
     font-size: 0.8rem;
     font-weight: 600;
-    color: #aaa;
+    color: var(--color-text-muted);
     text-transform: none;
     letter-spacing: 0;
   }
@@ -2540,6 +2544,9 @@
     padding: 0;
     max-height: 160px;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
   }
 
   .revision-item {
@@ -2553,29 +2560,28 @@
     padding: 0.35rem 0.5rem;
     font-size: 0.78rem;
     text-align: left;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--color-bg-elevated);
     border: 1px solid transparent;
     border-radius: 0.25rem;
-    color: #bbb;
+    color: var(--color-text-secondary);
     cursor: pointer;
-    margin-bottom: 0.2rem;
   }
 
   .revision-item:hover {
-    background: rgba(255, 136, 102, 0.12);
-    color: #ddd;
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    color: var(--color-text-primary);
   }
 
   .revision-item--current {
     cursor: default;
-    background: rgba(255, 136, 102, 0.2);
-    border-color: rgba(255, 136, 102, 0.4);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    color: var(--color-brand-500);
   }
 
   .revision-item--current:hover {
-    background: rgba(255, 136, 102, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    color: var(--color-brand-500);
   }
 
   .revision-item--current,
@@ -2587,7 +2593,7 @@
     font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: rgba(255, 136, 102, 0.9);
+    color: var(--color-brand-500);
     width: 100%;
     flex-basis: 100%;
     margin-bottom: 0.15rem;
@@ -2599,17 +2605,17 @@
 
   .revision-current-not-in-filter {
     font-size: 0.7rem;
-    color: #888;
+    color: var(--color-text-muted);
     font-style: italic;
   }
 
   .revision-seq {
     font-weight: 600;
-    color: #999;
+    color: var(--color-text-muted);
   }
 
   .revision-item--current .revision-seq {
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   /* Collapsible "Filter revisions" group */
@@ -2626,7 +2632,7 @@
     padding: 0.35rem 0;
     font-size: 0.8rem;
     font-weight: 600;
-    color: #aaa;
+    color: var(--color-text-muted);
     background: none;
     border: none;
     cursor: pointer;
@@ -2634,7 +2640,7 @@
   }
 
   .revision-filter-group-header:hover {
-    color: #ddd;
+    color: var(--color-text-secondary);
   }
 
   .revision-filter-group-chevron {
@@ -2674,14 +2680,14 @@
 
   .revision-author {
     font-size: 0.7rem;
-    color: #777;
+    color: var(--color-text-muted);
   }
 
   .icon-btn {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
-    color: #aaa;
+    color: var(--color-text-muted);
     width: 24px;
     height: 24px;
     display: flex;
@@ -2706,21 +2712,21 @@
 
   .icon-btn--danger.no-background:hover:not(:disabled) {
     background: none;
-    color: #ee8888;
+    color: var(--color-danger);
   }
 
   .icon-btn:hover {
-    background: rgba(255, 136, 102, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    color: var(--color-brand-500);
   }
 
   .icon-btn--danger {
-    color: #cc6666;
+    color: var(--color-danger);
   }
 
   .icon-btn--danger:hover:not(:disabled) {
-    background: rgba(204, 68, 68, 0.2);
-    color: #ee8888;
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    color: var(--color-danger);
   }
 
   .icon-btn:disabled {
@@ -2756,7 +2762,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(26, 26, 46, 0.75);
+    background: rgba(247, 247, 242, 0.8);
     z-index: 100;
     pointer-events: none;
   }
@@ -2767,30 +2773,30 @@
     align-items: center;
     gap: 1rem;
     padding: 1.5rem 2rem;
-    background: rgba(30, 30, 48, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.5rem;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
   }
 
   .viewport-loading-message {
     margin: 0;
     font-size: 0.9rem;
-    color: #aaa;
+    color: var(--color-text-muted);
     white-space: nowrap;
   }
 
   .viewport-loading-bar {
     width: 200px;
     height: 6px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
     border-radius: 3px;
     overflow: hidden;
   }
 
   .viewport-loading-fill {
     height: 100%;
-    background: #ff8866;
+    background: var(--color-brand-500);
     border-radius: 3px;
     transition: width 0.1s ease-out;
   }
@@ -2822,23 +2828,23 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    background: #1e1e30;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.75rem;
     padding: 2rem;
     max-width: 520px;
     width: 100%;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
   }
 
   .picker-card h2 {
     font-size: 1.2rem;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
   }
 
   .picker-subtitle {
-    color: #888;
+    color: var(--color-text-muted);
     font-size: 0.85rem;
   }
 
@@ -2852,8 +2858,8 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
     transition:
@@ -2862,8 +2868,8 @@
   }
 
   .project-item:hover {
-    background: rgba(255, 136, 102, 0.08);
-    border-color: rgba(255, 136, 102, 0.2);
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 25%, transparent);
   }
 
   .project-item-main {
@@ -2892,22 +2898,22 @@
   .project-item-name {
     font-size: 0.9rem;
     font-weight: 500;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
   }
 
   .project-item-desc {
     font-size: 0.75rem;
-    color: #888;
+    color: var(--color-text-muted);
   }
 
   .project-item-branches {
     font-size: 0.72rem;
-    color: #666;
+    color: var(--color-text-muted);
     white-space: nowrap;
   }
 
   .empty-msg {
-    color: #666;
+    color: var(--color-text-muted);
     font-size: 0.85rem;
     text-align: center;
   }
@@ -2925,10 +2931,10 @@
   }
 
   .input {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.4rem;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     padding: 0.5rem 0.75rem;
     font-size: 0.85rem;
     outline: none;
@@ -2936,11 +2942,11 @@
   }
 
   .input:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 50%, transparent);
   }
 
   .input::placeholder {
-    color: #555;
+    color: var(--color-text-muted);
   }
 
   .create-project-btn {
@@ -2967,41 +2973,41 @@
   }
 
   .btn-secondary {
-    background: rgba(255, 255, 255, 0.06);
-    color: #aaa;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-    color: #ccc;
+    background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
+    color: var(--color-text-primary);
   }
 
   .btn-primary {
-    background: rgba(255, 136, 102, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    color: var(--color-brand-500);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: rgba(255, 136, 102, 0.35);
-    color: #ffaa88;
+    background: color-mix(in srgb, var(--color-brand-500) 20%, transparent);
+    color: var(--color-brand-500);
   }
 
   .btn-danger {
-    background: rgba(204, 68, 68, 0.2);
-    color: #cc6666;
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    color: var(--color-danger);
   }
 
   .btn-danger:hover:not(:disabled) {
-    background: rgba(204, 68, 68, 0.35);
-    color: #ee8888;
+    background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+    color: var(--color-danger);
   }
 
   /* ---- Viewport toolbar overlay ---- */
 
   .toolbar-btn {
-    background: rgba(26, 26, 46, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #ccc;
+    background: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
     padding: 0.4rem 0.8rem;
     border-radius: 0.35rem;
     cursor: pointer;
@@ -3013,8 +3019,8 @@
   }
 
   .toolbar-btn:hover {
-    background: rgba(255, 102, 68, 0.2);
-    color: #fff;
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    color: var(--color-brand-500);
   }
 
   .sidebar-section {
@@ -3029,7 +3035,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #666;
+    color: var(--color-text-muted);
   }
 
   .element-count {
@@ -3037,7 +3043,7 @@
     bottom: 1rem;
     right: 1rem;
     font-size: 0.72rem;
-    color: #666;
+    color: var(--color-text-muted);
   }
 
   .import-btn {
@@ -3065,9 +3071,9 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    background: rgba(26, 26, 46, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: #ccc;
+    background: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
     padding: 0.45rem 1rem;
     border-radius: 0.4rem;
     cursor: pointer;
@@ -3084,9 +3090,9 @@
   .table-btn:hover,
   .attributes-btn:hover,
   .agent-btn:hover {
-    background: rgba(255, 102, 68, 0.2);
-    border-color: rgba(255, 136, 102, 0.3);
-    color: #fff;
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+    color: var(--color-brand-500);
   }
 
   /* ---- Modal (shared) ---- */
@@ -3106,13 +3112,13 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    background: #1e1e30;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.75rem;
     width: 90%;
     max-width: 420px;
     padding: 1.5rem;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   }
 
   .modal-header {
@@ -3124,13 +3130,13 @@
   .modal-header h2 {
     font-size: 1.05rem;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
   }
 
   .close-btn {
     background: none;
     border: none;
-    color: #666;
+    color: var(--color-text-muted);
     cursor: pointer;
     padding: 0.25rem;
     border-radius: 0.25rem;
@@ -3140,17 +3146,17 @@
   }
 
   .close-btn:hover {
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   .modal-subtitle {
     font-size: 0.82rem;
-    color: #888;
+    color: var(--color-text-muted);
     line-height: 1.4;
   }
 
   .modal-subtitle strong {
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   .modal-input {
@@ -3173,7 +3179,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 18, 30, 0.85);
+    background: rgba(247, 247, 242, 0.9);
     backdrop-filter: blur(6px);
   }
 
@@ -3189,10 +3195,10 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.65rem 1rem;
-    background: rgba(255, 107, 107, 0.12);
-    border: 1px solid rgba(255, 107, 107, 0.25);
+    background: var(--color-danger-soft);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
     border-radius: 0.5rem;
-    color: #ff8888;
+    color: var(--color-danger);
     font-size: 0.82rem;
     backdrop-filter: blur(8px);
     max-width: 90%;

@@ -16,34 +16,36 @@
 
 <style>
   :root {
-    --color-brand-500: #ff8866;
-    --color-brand-400: #ffaa88;
-    --color-brand-gradient-start: #ff6644;
-    --color-brand-gradient-end: #ff9966;
+    --color-brand-500: #334155;
+    --color-brand-400: #64748b;
+    --color-brand-gradient-start: #1e293b;
+    --color-brand-gradient-end: #475569;
 
-    --color-bg-canvas: #12121e;
-    --color-bg-surface: #1a1a2e;
-    --color-bg-elevated: #1e1e30;
+    --color-bg-canvas: #f7f7f2;
+    --color-bg-surface: #ffffff;
+    --color-bg-elevated: #efefe9;
 
-    --color-text-primary: #e0e0e0;
-    --color-text-secondary: #ccc;
-    --color-text-muted: #888;
+    --color-text-primary: #0f172a;
+    --color-text-secondary: #475569;
+    --color-text-muted: #94a3b8;
 
-    --color-border-subtle: rgba(255, 255, 255, 0.06);
-    --color-border-default: rgba(255, 255, 255, 0.1);
-    --color-border-strong: rgba(255, 136, 102, 0.3);
+    --color-border-subtle: #e5e5e0;
+    --color-border-default: #d4d4ce;
+    --color-border-strong: #334155;
 
-    --color-warning: #c9a227;
-    --color-danger: #ff6b6b;
-    --color-danger-soft: #ee8888;
-    --color-info: #87ceeb;
+    --color-warning: #b45309;
+    --color-danger: #991b1b;
+    --color-danger-soft: #fee2e2;
+    --color-info: #0369a1;
+
+    --color-success: #166534;
+    --color-accent-bronze: #78350f;
   }
 
-  /* Thin, macOS-style scrollbars globally (Firefox: all elements; WebKit: pseudo-elements below) */
   :global(*),
   :global(*::-webkit-scrollbar) {
     scrollbar-width: thin;
-    scrollbar-color: rgba(128, 128, 128, 0.4) transparent;
+    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
   }
 
   :global(html, body) {
@@ -70,12 +72,12 @@
   }
 
   :global(::-webkit-scrollbar-thumb) {
-    background: rgba(128, 128, 128, 0.4);
+    background: rgba(0, 0, 0, 0.18);
     border-radius: 4px;
   }
 
   :global(::-webkit-scrollbar-thumb:hover) {
-    background: rgba(128, 128, 128, 0.6);
+    background: rgba(0, 0, 0, 0.28);
   }
 
   :global(::-webkit-scrollbar-corner) {
