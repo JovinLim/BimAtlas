@@ -1574,3 +1574,166 @@ def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
         "deleted_validation_rules": deleted_rules,
         "deleted_ifc_schemas": deleted_schemas,
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent config CRUD (IfcAgent saved models)
+# ---------------------------------------------------------------------------
+
+_AGENT_CONFIG_COLS = (
+    "agent_config_id, project_id, name, provider, model, api_key, base_url, "
+    "created_at, updated_at"
+)
+
+
+def create_agent_config(
+    project_id: str, name: str, provider: str, model: str,
+    api_key: str = "", base_url: str | None = None,
+) -> dict:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"INSERT INTO agent_config (project_id, name, provider, model, api_key, base_url) "
+            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_AGENT_CONFIG_COLS}",
+            (project_id, name, provider, model, api_key, base_url),
+        )
+        return dict(cur.fetchone())
+
+
+def fetch_agent_configs_for_project(project_id: str) -> list[dict]:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_AGENT_CONFIG_COLS} FROM agent_config "
+            f"WHERE project_id = %s ORDER BY updated_at DESC",
+            (project_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_agent_config(agent_config_id: str) -> dict | None:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_AGENT_CONFIG_COLS} FROM agent_config WHERE agent_config_id = %s",
+            (agent_config_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def update_agent_config(
+    agent_config_id: str, *, name: str | None = None, provider: str | None = None,
+    model: str | None = None, api_key: str | None = None, base_url: str | None = None,
+) -> dict | None:
+    sets: list[str] = ["updated_at = now()"]
+    params: list = []
+    if name is not None:
+        sets.append("name = %s")
+        params.append(name)
+    if provider is not None:
+        sets.append("provider = %s")
+        params.append(provider)
+    if model is not None:
+        sets.append("model = %s")
+        params.append(model)
+    if api_key is not None:
+        sets.append("api_key = %s")
+        params.append(api_key)
+    if base_url is not None:
+        sets.append("base_url = %s")
+        params.append(base_url)
+    params.append(agent_config_id)
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"UPDATE agent_config SET {', '.join(sets)} WHERE agent_config_id = %s "
+            f"RETURNING {_AGENT_CONFIG_COLS}",
+            params,
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def delete_agent_config(agent_config_id: str) -> bool:
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM agent_config WHERE agent_config_id = %s", (agent_config_id,))
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Agent chat CRUD (persistent conversation history)
+# ---------------------------------------------------------------------------
+
+_CHAT_COLS = "chat_id, project_id, branch_id, title, created_at, updated_at"
+_MSG_COLS = "message_id, chat_id, role, content, tool_calls, created_at"
+
+
+def create_agent_chat(project_id: str, branch_id: str, title: str = "New chat") -> dict:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"INSERT INTO agent_chat (project_id, branch_id, title) "
+            f"VALUES (%s, %s, %s) RETURNING {_CHAT_COLS}",
+            (project_id, branch_id, title),
+        )
+        return dict(cur.fetchone())
+
+
+def fetch_agent_chats(project_id: str, branch_id: str | None = None) -> list[dict]:
+    with get_cursor(dict_cursor=True) as cur:
+        if branch_id:
+            cur.execute(
+                f"SELECT {_CHAT_COLS} FROM agent_chat "
+                f"WHERE project_id = %s AND branch_id = %s ORDER BY updated_at DESC",
+                (project_id, branch_id),
+            )
+        else:
+            cur.execute(
+                f"SELECT {_CHAT_COLS} FROM agent_chat "
+                f"WHERE project_id = %s ORDER BY updated_at DESC",
+                (project_id,),
+            )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_agent_chat(chat_id: str, title: str) -> dict | None:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"UPDATE agent_chat SET title = %s, updated_at = now() "
+            f"WHERE chat_id = %s RETURNING {_CHAT_COLS}",
+            (title, chat_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def delete_agent_chat(chat_id: str) -> bool:
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM agent_chat WHERE chat_id = %s", (chat_id,))
+        return cur.rowcount > 0
+
+
+def add_chat_message(
+    chat_id: str, role: str, content: str, tool_calls: list[dict] | None = None,
+) -> dict:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"INSERT INTO agent_chat_message (chat_id, role, content, tool_calls) "
+            f"VALUES (%s, %s, %s, %s) RETURNING {_MSG_COLS}",
+            (chat_id, role, content, json.dumps(tool_calls) if tool_calls else None),
+        )
+        cur.execute(
+            "UPDATE agent_chat SET updated_at = now() WHERE chat_id = %s",
+            (chat_id,),
+        )
+        return dict(cur.fetchone())
+
+
+def fetch_chat_messages(chat_id: str) -> list[dict]:
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_MSG_COLS} FROM agent_chat_message "
+            f"WHERE chat_id = %s ORDER BY created_at ASC",
+            (chat_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            if isinstance(r.get("tool_calls"), str):
+                r["tool_calls"] = json.loads(r["tool_calls"])
+        return rows

@@ -1,10 +1,23 @@
 /**
- * Shared types and constants for the agentic filtering chat interface.
+ * Shared types and constants for cross-window Agent popup communication
+ * via the BroadcastChannel API and REST endpoints.
  */
 
 export const AGENT_CHANNEL = 'bimatlas-agent';
 
-export interface AgentMessage {
+export interface AgentContextPayload {
+	branchId: string | null;
+	projectId: string | null;
+	revision: number | null;
+}
+
+export type AgentMessage =
+	| { type: 'request-context' }
+	| ({ type: 'context' } & AgentContextPayload);
+
+// --- Chat message types ---
+
+export interface ChatMsg {
 	id: string;
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
@@ -19,12 +32,7 @@ export interface ToolCallInfo {
 	status: 'pending' | 'complete' | 'error';
 }
 
-export interface AgentConfig {
-	provider: 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
-	model: string;
-	apiKey: string;
-	baseUrl?: string;
-}
+// --- SSE event types from POST /agent/chat ---
 
 export type AgentSSEEvent =
 	| { type: 'thinking'; content: string }
@@ -33,12 +41,46 @@ export type AgentSSEEvent =
 	| { type: 'error'; content: string }
 	| { type: 'done' };
 
+// --- Saved agent config (IfcAgent) ---
+
+export interface AgentConfig {
+	agent_config_id: string;
+	project_id: string;
+	name: string;
+	provider: string;
+	model: string;
+	api_key: string;
+	base_url: string | null;
+}
+
+export interface AgentConfigDraft {
+	provider: 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
+	model: string;
+	apiKey: string;
+	baseUrl?: string;
+}
+
+// --- Chat session ---
+
+export interface ChatSession {
+	chat_id: string;
+	project_id: string;
+	branch_id: string;
+	title: string;
+	created_at: string;
+	updated_at: string;
+}
+
+// --- Agent event bus (from GET /stream/agent-events SSE) ---
+
 export type AgentBusEvent =
 	| { type: 'filter-applied'; branchId: string; filterSetIds: string[]; matchedCount: number }
 	| { type: 'agent-thinking'; step: string }
 	| { type: 'agent-error'; message: string }
 	| { type: 'heartbeat' }
 	| { type: 'connected'; branchId: string };
+
+// --- Constants ---
 
 export const PROVIDER_OPTIONS = [
 	{ value: 'openai', label: 'OpenAI' },

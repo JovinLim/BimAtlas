@@ -230,6 +230,36 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     severity         rule_severity NOT NULL DEFAULT 'Error',
     is_active        BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS agent_config (
+    agent_config_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    name            VARCHAR NOT NULL,
+    provider        VARCHAR NOT NULL,
+    model           VARCHAR NOT NULL,
+    api_key         VARCHAR NOT NULL DEFAULT '',
+    base_url        VARCHAR,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS agent_chat (
+    chat_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES project(project_id) ON DELETE CASCADE,
+    branch_id  UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    title      VARCHAR NOT NULL DEFAULT 'New chat',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS agent_chat_message (
+    message_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id    UUID NOT NULL REFERENCES agent_chat(chat_id) ON DELETE CASCADE,
+    role       VARCHAR NOT NULL,
+    content    TEXT NOT NULL DEFAULT '',
+    tool_calls JSONB,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
 GRAPH_SETUP_SQL = """
@@ -322,7 +352,8 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                     # Truncate tables to leave database clean (order: FKs first)
                     try:
                         cur.execute(
-                            "TRUNCATE TABLE merge_conflict_log, validation_rule, merge_request, "
+                            "TRUNCATE TABLE agent_chat_message, agent_chat, agent_config, "
+                            "merge_conflict_log, validation_rule, merge_request, "
                             "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
                             "branch, project_schema, project, ifc_schema CASCADE;"
                         )

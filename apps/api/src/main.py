@@ -20,10 +20,18 @@ from fastapi.responses import StreamingResponse
 from strawberry.fastapi import GraphQLRouter
 
 from .db import (
+    add_chat_message,
     close_pool,
+    create_agent_chat,
+    create_agent_config,
+    delete_agent_chat,
+    delete_agent_config,
     delete_ifc_schema_with_rules,
-    fetch_branch,
+    fetch_agent_chats,
+    fetch_agent_configs_for_project,
     fetch_applied_filter_sets,
+    fetch_branch,
+    fetch_chat_messages,
     fetch_entities_at_revision,
     fetch_entities_with_filter_sets,
     fetch_entity_attributes_for_global_ids,
@@ -31,6 +39,8 @@ from .db import (
     get_latest_revision_seq,
     init_pool,
     insert_validation_rules,
+    update_agent_chat,
+    update_agent_config,
     validation_schema_exists,
 )
 from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
@@ -365,20 +375,9 @@ async def delete_ifc_schema(schema_name: str):
 async def agent_chat(body: dict = Body(...)):
     """Stream an agentic filtering conversation turn.
 
-    Request body::
-
-        {
-            "message": str,
-            "provider": "openai" | "anthropic" | "google" | "ollama" | "custom",
-            "model": str,
-            "apiKey": str,
-            "branchId": str,
-            "revision": int | null,
-            "baseUrl": str | null,
-            "chatHistory": [ { "role": "user"|"assistant", "content": str } ] | null
-        }
-
-    Returns an SSE stream of JSON events.
+    Supports persistent chat history via ``chatId``. When provided, the
+    backend loads prior messages from the DB, appends the user message
+    before streaming, and saves the assistant reply on completion.
     """
     message = body.get("message")
     provider = body.get("provider")
@@ -387,7 +386,7 @@ async def agent_chat(body: dict = Body(...)):
     branch_id = body.get("branchId")
     revision = body.get("revision")
     base_url = body.get("baseUrl")
-    chat_history = body.get("chatHistory")
+    chat_id = body.get("chatId")
 
     if not message or not provider or not model or not branch_id:
         raise HTTPException(
@@ -402,9 +401,27 @@ async def agent_chat(body: dict = Body(...)):
     except (ValueError, TypeError):
         raise HTTPException(status_code=404, detail="Invalid branchId")
 
+    chat_history: list[dict[str, str]] | None = None
+    if chat_id:
+        try:
+            UUID(chat_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid chatId")
+        msgs = fetch_chat_messages(chat_id)
+        chat_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in msgs
+            if m["role"] in ("user", "assistant")
+        ]
+        add_chat_message(chat_id, "user", message)
+
     from .services.agent.workflow import run_agent_streaming
 
+    collected_content = ""
+    collected_tools: list[dict] = []
+
     async def event_generator():
+        nonlocal collected_content, collected_tools
         async for event in run_agent_streaming(
             message=message,
             branch_id=branch_id,
@@ -415,7 +432,21 @@ async def agent_chat(body: dict = Body(...)):
             base_url=base_url,
             chat_history=chat_history,
         ):
+            if event.get("type") == "message":
+                collected_content = event.get("content", "")
+            elif event.get("type") == "tool_call":
+                collected_tools.append({
+                    "name": event.get("name"),
+                    "arguments": event.get("arguments"),
+                    "result": event.get("result"),
+                })
             yield f"data: {json.dumps(event)}\n\n"
+
+        if chat_id and collected_content:
+            add_chat_message(
+                chat_id, "assistant", collected_content,
+                tool_calls=collected_tools if collected_tools else None,
+            )
 
     return StreamingResponse(
         event_generator(),
@@ -426,6 +457,134 @@ async def agent_chat(body: dict = Body(...)):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# -- Agent config (IfcAgent saved models) CRUD ---
+
+@app.get("/agent/configs")
+async def list_agent_configs(
+    project_id: str = Query(..., description="Project ID"),
+):
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    return fetch_agent_configs_for_project(project_id)
+
+
+@app.post("/agent/configs", status_code=201)
+async def create_config(body: dict = Body(...)):
+    project_id = body.get("projectId")
+    name = body.get("name")
+    provider = body.get("provider")
+    model_name = body.get("model")
+    api_key = body.get("apiKey", "")
+    base_url = body.get("baseUrl")
+
+    if not project_id or not name or not provider or not model_name:
+        raise HTTPException(status_code=400, detail="projectId, name, provider, model required")
+    if provider == "custom" and not base_url:
+        raise HTTPException(status_code=400, detail="baseUrl required for custom provider")
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid projectId")
+
+    return create_agent_config(project_id, name, provider, model_name, api_key, base_url)
+
+
+@app.put("/agent/configs/{config_id}")
+async def update_config(config_id: str, body: dict = Body(...)):
+    try:
+        UUID(config_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid config_id")
+    row = update_agent_config(
+        config_id,
+        name=body.get("name"),
+        provider=body.get("provider"),
+        model=body.get("model"),
+        api_key=body.get("apiKey"),
+        base_url=body.get("baseUrl"),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Config not found")
+    return row
+
+
+@app.delete("/agent/configs/{config_id}")
+async def delete_config(config_id: str):
+    try:
+        UUID(config_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid config_id")
+    if not delete_agent_config(config_id):
+        raise HTTPException(status_code=404, detail="Config not found")
+    return {"deleted": True}
+
+
+# -- Agent chat CRUD ---
+
+@app.get("/agent/chats")
+async def list_agent_chats(
+    project_id: str = Query(...),
+    branch_id: str | None = Query(None),
+):
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    return fetch_agent_chats(project_id, branch_id)
+
+
+@app.post("/agent/chats", status_code=201)
+async def create_chat(body: dict = Body(...)):
+    project_id = body.get("projectId")
+    branch_id = body.get("branchId")
+    title = body.get("title", "New chat")
+    if not project_id or not branch_id:
+        raise HTTPException(status_code=400, detail="projectId and branchId required")
+    try:
+        UUID(project_id)
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid IDs")
+    return create_agent_chat(project_id, branch_id, title)
+
+
+@app.put("/agent/chats/{chat_id}")
+async def rename_chat(chat_id: str, body: dict = Body(...)):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    title = body.get("title")
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    row = update_agent_chat(chat_id, title)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return row
+
+
+@app.delete("/agent/chats/{chat_id}")
+async def remove_chat(chat_id: str):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    if not delete_agent_chat(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {"deleted": True}
+
+
+@app.get("/agent/chats/{chat_id}/messages")
+async def get_chat_messages(chat_id: str):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    return fetch_chat_messages(chat_id)
 
 
 @app.get("/stream/agent-events")

@@ -3,19 +3,23 @@
 	import ChatMessage from './ChatMessage.svelte';
 	import ModelConfig from './ModelConfig.svelte';
 	import {
-		type AgentMessage,
-		type AgentConfig,
+		type ChatMsg,
 		type AgentSSEEvent,
 		type ToolCallInfo,
+		type AgentConfigDraft,
+		type AgentConfig,
+		type ChatSession,
 		needsApiKey,
 		generateMessageId
 	} from './protocol';
 
 	let {
 		branchId,
+		projectId,
 		revision
 	}: {
 		branchId: string | null;
+		projectId: string | null;
 		revision: number | null;
 	} = $props();
 
@@ -24,18 +28,28 @@
 		? (import.meta.env.VITE_API_URL as string).replace('/graphql', '')
 		: '/api';
 
-	let messages = $state<AgentMessage[]>([]);
+	let messages = $state<ChatMsg[]>([]);
 	let inputText = $state('');
 	let loading = $state(false);
 	let configCollapsed = $state(true);
 	let messagesEl: HTMLDivElement | undefined = $state(undefined);
 
-	let config = $state<AgentConfig>({
+	let config = $state<AgentConfigDraft>({
 		provider: 'openai',
 		model: 'gpt-4o',
 		apiKey: '',
 		baseUrl: undefined
 	});
+
+	// Saved agent configs (IfcAgent)
+	let savedAgents = $state<AgentConfig[]>([]);
+	let selectedAgentId = $state<string | null>(null);
+	let savingAgent = $state(false);
+
+	// Chat sessions
+	let chatSessions = $state<ChatSession[]>([]);
+	let activeChatId = $state<string | null>(null);
+	let showChatList = $state(false);
 
 	onMount(() => {
 		try {
@@ -51,6 +65,8 @@
 		} catch {
 			configCollapsed = false;
 		}
+		loadSavedAgents();
+		loadChatSessions();
 	});
 
 	$effect(() => {
@@ -60,6 +76,124 @@
 			localStorage.setItem(STORAGE_KEY, JSON.stringify({ provider, model, apiKey, baseUrl }));
 		} catch {}
 	});
+
+	$effect(() => {
+		if (projectId) loadSavedAgents();
+	});
+
+	$effect(() => {
+		if (projectId && branchId) loadChatSessions();
+	});
+
+	async function loadSavedAgents() {
+		if (!projectId) return;
+		try {
+			const res = await fetch(`${API_BASE}/agent/configs?project_id=${encodeURIComponent(projectId)}`);
+			if (res.ok) savedAgents = await res.json();
+		} catch {}
+	}
+
+	async function loadChatSessions() {
+		if (!projectId || !branchId) return;
+		try {
+			const url = `${API_BASE}/agent/chats?project_id=${encodeURIComponent(projectId)}&branch_id=${encodeURIComponent(branchId)}`;
+			const res = await fetch(url);
+			if (res.ok) chatSessions = await res.json();
+		} catch {}
+	}
+
+	async function selectAgent(agent: AgentConfig) {
+		selectedAgentId = agent.agent_config_id;
+		config = {
+			provider: agent.provider as AgentConfigDraft['provider'],
+			model: agent.model,
+			apiKey: agent.api_key,
+			baseUrl: agent.base_url ?? undefined
+		};
+		configCollapsed = true;
+	}
+
+	async function saveCurrentAgent() {
+		if (!projectId || !config.model) return;
+		savingAgent = true;
+		try {
+			const body = {
+				projectId,
+				name: `${config.provider}/${config.model}`,
+				provider: config.provider,
+				model: config.model,
+				apiKey: config.apiKey,
+				baseUrl: config.baseUrl || null
+			};
+			const res = await fetch(`${API_BASE}/agent/configs`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			if (res.ok) {
+				await loadSavedAgents();
+			}
+		} catch {}
+		savingAgent = false;
+	}
+
+	async function deleteSavedAgent(id: string) {
+		try {
+			await fetch(`${API_BASE}/agent/configs/${id}`, { method: 'DELETE' });
+			if (selectedAgentId === id) selectedAgentId = null;
+			await loadSavedAgents();
+		} catch {}
+	}
+
+	async function createNewChat() {
+		if (!projectId || !branchId) return;
+		try {
+			const res = await fetch(`${API_BASE}/agent/chats`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ projectId, branchId, title: 'New chat' })
+			});
+			if (res.ok) {
+				const chat: ChatSession = await res.json();
+				activeChatId = chat.chat_id;
+				messages = [];
+				await loadChatSessions();
+				showChatList = false;
+			}
+		} catch {}
+	}
+
+	async function switchChat(chat: ChatSession) {
+		activeChatId = chat.chat_id;
+		showChatList = false;
+		try {
+			const res = await fetch(`${API_BASE}/agent/chats/${chat.chat_id}/messages`);
+			if (res.ok) {
+				const msgs = await res.json();
+				messages = msgs.map((m: Record<string, unknown>) => ({
+					id: m.message_id as string,
+					role: m.role as string,
+					content: m.content as string,
+					toolCalls: (m.tool_calls as ToolCallInfo[] | null) ?? undefined,
+					timestamp: m.created_at as string
+				}));
+			}
+		} catch {
+			messages = [];
+		}
+		await scrollToBottom();
+	}
+
+	async function deleteChat(id: string) {
+		try {
+			await fetch(`${API_BASE}/agent/chats/${id}`, { method: 'DELETE' });
+			if (activeChatId === id) {
+				activeChatId = null;
+				messages = [];
+			}
+			await loadChatSessions();
+		} catch {}
+	}
 
 	async function scrollToBottom() {
 		await tick();
@@ -99,7 +233,26 @@
 			return;
 		}
 
-		const userMsg: AgentMessage = {
+		if (!activeChatId && projectId && branchId) {
+			try {
+				const res = await fetch(`${API_BASE}/agent/chats`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						projectId,
+						branchId,
+						title: text.length > 40 ? text.slice(0, 40) + '...' : text
+					})
+				});
+				if (res.ok) {
+					const chat: ChatSession = await res.json();
+					activeChatId = chat.chat_id;
+					await loadChatSessions();
+				}
+			} catch {}
+		}
+
+		const userMsg: ChatMsg = {
 			id: generateMessageId(),
 			role: 'user',
 			content: text,
@@ -110,24 +263,20 @@
 		loading = true;
 		await scrollToBottom();
 
-		const chatHistory = messages
-			.filter((m) => m.role === 'user' || m.role === 'assistant')
-			.slice(0, -1)
-			.map((m) => ({ role: m.role, content: m.content }));
-
-		const body = {
+		const body: Record<string, unknown> = {
 			message: text,
 			provider: config.provider,
 			model: config.model,
 			apiKey: config.apiKey,
 			branchId,
 			revision,
-			baseUrl: config.baseUrl || null,
-			chatHistory
+			baseUrl: config.baseUrl || null
 		};
+		if (activeChatId) body.chatId = activeChatId;
 
 		const toolCalls: ToolCallInfo[] = [];
 		let assistantContent = '';
+		let hadError = false;
 
 		try {
 			const res = await fetch(`${API_BASE}/agent/chat`, {
@@ -170,18 +319,20 @@
 						} else if (event.type === 'message') {
 							assistantContent = event.content;
 						} else if (event.type === 'error') {
-							assistantContent = `Error: ${event.content}`;
+							hadError = true;
+							assistantContent = event.content;
 						}
 					} catch {}
 				}
 			}
 		} catch (err) {
+			hadError = true;
 			assistantContent = `Failed to reach the agent: ${err instanceof Error ? err.message : err}`;
 		}
 
-		const assistantMsg: AgentMessage = {
+		const assistantMsg: ChatMsg = {
 			id: generateMessageId(),
-			role: 'assistant',
+			role: hadError ? 'tool' : 'assistant',
 			content: assistantContent || '(no response)',
 			toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
 			timestamp: new Date().toISOString()
@@ -200,8 +351,51 @@
 </script>
 
 <div class="chat-panel">
-	<ModelConfig bind:config bind:collapsed={configCollapsed} />
+	<!-- Header with chat selector -->
+	<header class="panel-header">
+		<button class="chat-list-toggle" onclick={() => (showChatList = !showChatList)}>
+			{#if activeChatId}
+				{chatSessions.find((c) => c.chat_id === activeChatId)?.title ?? 'Chat'}
+			{:else}
+				New chat
+			{/if}
+			<span class="chevron" class:open={showChatList}>▸</span>
+		</button>
+		<button class="new-chat-btn" onclick={createNewChat} title="New chat">+</button>
+	</header>
 
+	<!-- Chat list dropdown -->
+	{#if showChatList}
+		<div class="chat-list">
+			{#each chatSessions as chat}
+				<div class="chat-list-item" class:active={chat.chat_id === activeChatId}>
+					<button class="chat-list-name" onclick={() => switchChat(chat)}>
+						{chat.title}
+					</button>
+					<button
+						class="chat-list-delete"
+						onclick={() => deleteChat(chat.chat_id)}
+						title="Delete chat"
+					>
+						×
+					</button>
+				</div>
+			{/each}
+			{#if chatSessions.length === 0}
+				<p class="chat-list-empty">No chats yet</p>
+			{/if}
+		</div>
+	{/if}
+
+	<!-- Model config (collapsible) -->
+	<ModelConfig bind:config bind:collapsed={configCollapsed} {savedAgents} {selectedAgentId}
+		onselectAgent={selectAgent}
+		onsaveAgent={saveCurrentAgent}
+		ondeleteAgent={deleteSavedAgent}
+		{savingAgent}
+	/>
+
+	<!-- Messages -->
 	<div class="messages" bind:this={messagesEl}>
 		{#if messages.length === 0}
 			<p class="empty-hint">
@@ -218,6 +412,7 @@
 		{/if}
 	</div>
 
+	<!-- Input -->
 	<div class="input-area">
 		<textarea
 			class="chat-input"
@@ -254,6 +449,116 @@
 		height: 100%;
 		background: var(--color-bg-surface, #1a1a2e);
 		overflow: hidden;
+	}
+
+	.panel-header {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.45rem 0.6rem;
+		border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.06));
+		background: var(--color-bg-canvas, #12121e);
+	}
+
+	.chat-list-toggle {
+		flex: 1;
+		background: none;
+		border: none;
+		color: var(--color-text-primary, #e0e0e0);
+		font-size: 0.82rem;
+		font-weight: 500;
+		text-align: left;
+		cursor: pointer;
+		font-family: inherit;
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.2rem 0;
+	}
+
+	.chevron {
+		font-size: 0.55rem;
+		transition: transform 0.15s;
+		color: var(--color-text-muted, #888);
+	}
+
+	.chevron.open {
+		transform: rotate(90deg);
+	}
+
+	.new-chat-btn {
+		width: 1.6rem;
+		height: 1.6rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(255, 136, 102, 0.15);
+		border: 1px solid rgba(255, 136, 102, 0.25);
+		border-radius: 0.3rem;
+		color: var(--color-brand-500, #ff8866);
+		font-size: 1rem;
+		cursor: pointer;
+	}
+
+	.new-chat-btn:hover {
+		background: rgba(255, 136, 102, 0.3);
+	}
+
+	.chat-list {
+		max-height: 12rem;
+		overflow-y: auto;
+		border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.06));
+		background: var(--color-bg-canvas, #12121e);
+	}
+
+	.chat-list-item {
+		display: flex;
+		align-items: center;
+		padding: 0.3rem 0.6rem;
+	}
+
+	.chat-list-item.active {
+		background: rgba(255, 136, 102, 0.1);
+	}
+
+	.chat-list-name {
+		flex: 1;
+		background: none;
+		border: none;
+		color: var(--color-text-secondary, #ccc);
+		font-size: 0.75rem;
+		text-align: left;
+		cursor: pointer;
+		font-family: inherit;
+		padding: 0.2rem 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.chat-list-name:hover {
+		color: var(--color-text-primary, #e0e0e0);
+	}
+
+	.chat-list-delete {
+		background: none;
+		border: none;
+		color: var(--color-text-muted, #666);
+		cursor: pointer;
+		font-size: 0.9rem;
+		padding: 0 0.2rem;
+	}
+
+	.chat-list-delete:hover {
+		color: var(--color-danger, #ff6b6b);
+	}
+
+	.chat-list-empty {
+		color: var(--color-text-muted, #666);
+		font-size: 0.72rem;
+		text-align: center;
+		padding: 0.6rem;
+		margin: 0;
 	}
 
 	.messages {

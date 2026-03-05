@@ -8,7 +8,10 @@
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
   import DepthWidget from "$lib/ui/DepthWidget.svelte";
-  import ChatPanel from "$lib/agent/ChatPanel.svelte";
+  import {
+    AGENT_CHANNEL,
+    type AgentMessage as AgentChannelMessage,
+  } from "$lib/agent/protocol";
   import type { AgentBusEvent } from "$lib/agent/protocol";
   import {
     getSelection,
@@ -89,7 +92,8 @@
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
     : "/api";
 
-  let showAgentPanel = $state(false);
+  let agentPopup: Window | null = null;
+  let agentChannel: BroadcastChannel | null = null;
   let agentEventSource: EventSource | null = null;
 
   // Agent events SSE: subscribe when branchId changes
@@ -409,6 +413,13 @@
         selection.activeGlobalId = e.data.globalId;
       }
     };
+
+    agentChannel = new BroadcastChannel(AGENT_CHANNEL);
+    agentChannel.onmessage = (e: MessageEvent<AgentChannelMessage>) => {
+      if (e.data.type === "request-context") {
+        sendAgentContext();
+      }
+    };
   });
 
   onDestroy(() => {
@@ -416,6 +427,7 @@
     attributesChannel?.close();
     graphChannel?.close();
     tableChannel?.close();
+    agentChannel?.close();
   });
 
   // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
@@ -521,6 +533,37 @@
         type: "selection-sync",
         globalId: selection.activeGlobalId,
       } satisfies TableMessage);
+    }
+  }
+
+  function sendAgentContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    agentChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+    } satisfies AgentChannelMessage);
+  }
+
+  function openAgentPopup() {
+    if (!agentPopup || agentPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/agent?${query}` : "/agent";
+      agentPopup = window.open(url, "bimatlas-agent", "width=460,height=700");
+      setTimeout(sendAgentContext, 500);
+    } else {
+      agentPopup.focus();
+      sendAgentContext();
     }
   }
 
@@ -1930,12 +1973,11 @@
             </svg>
             Attributes
           </button>
-          <!-- Agent chat panel toggle -->
+          <!-- Agent popup button -->
           <button
             class="agent-btn"
-            class:active={showAgentPanel}
-            onclick={() => (showAgentPanel = !showAgentPanel)}
-            aria-label="Toggle AI agent panel"
+            onclick={openAgentPopup}
+            aria-label="Open AI agent"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
@@ -1951,15 +1993,6 @@
             Agent
           </button>
         </div>
-        <!-- Agent chat panel (right side) -->
-        {#if showAgentPanel}
-          <div class="agent-panel-container">
-            <ChatPanel
-              branchId={projectState.activeBranchId}
-              revision={revisionState.activeRevision}
-            />
-          </div>
-        {/if}
         <!-- Element count -->
         <span class="element-count"
           >{sceneManager?.elementCount ?? 0} elements</span
@@ -2977,23 +3010,6 @@
       background 0.15s,
       color 0.15s,
       border-color 0.15s;
-  }
-
-  .agent-btn.active {
-    background: rgba(255, 136, 102, 0.2);
-    border-color: rgba(255, 136, 102, 0.4);
-    color: #ff8866;
-  }
-
-  .agent-panel-container {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 340px;
-    height: 100%;
-    pointer-events: auto;
-    z-index: 10;
-    border-left: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .search-btn:hover,

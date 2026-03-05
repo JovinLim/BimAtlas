@@ -1,13 +1,17 @@
 <script lang="ts">
-	import type { AgentMessage } from './protocol';
+	import type { ChatMsg } from './protocol';
 	import ToolCallBadge from './ToolCallBadge.svelte';
 
-	let { message }: { message: AgentMessage } = $props();
+	let { message }: { message: ChatMsg } = $props();
 	const isUser = message.role === 'user';
+	const isError = message.role === 'tool';
 </script>
 
-<div class="chat-msg" class:user={isUser} class:assistant={!isUser}>
+<div class="chat-msg" class:user={isUser} class:assistant={!isUser && !isError} class:error={isError}>
 	<div class="msg-bubble">
+		{#if isError}
+			<span class="error-icon">⚠</span>
+		{/if}
 		<p class="msg-text">{message.content}</p>
 		{#if message.toolCalls && message.toolCalls.length > 0}
 			<div class="tool-calls">
@@ -33,6 +37,10 @@
 		justify-content: flex-start;
 	}
 
+	.chat-msg.error {
+		justify-content: flex-start;
+	}
+
 	.msg-bubble {
 		max-width: 85%;
 		padding: 0.5rem 0.75rem;
@@ -54,9 +62,25 @@
 		border-bottom-left-radius: 0.15rem;
 	}
 
+	.error .msg-bubble {
+		background: rgba(255, 107, 107, 0.12);
+		border: 1px solid rgba(255, 107, 107, 0.25);
+		color: var(--color-danger-soft, #ee8888);
+		border-bottom-left-radius: 0.15rem;
+	}
+
+	.error-icon {
+		margin-right: 0.35rem;
+		font-size: 0.85rem;
+	}
+
 	.msg-text {
 		margin: 0;
 		white-space: pre-wrap;
+	}
+
+	.error .msg-text {
+		display: inline;
 	}
 
 	.tool-calls {

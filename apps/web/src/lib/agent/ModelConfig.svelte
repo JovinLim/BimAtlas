@@ -4,15 +4,28 @@
 		DEFAULT_MODELS,
 		needsApiKey,
 		needsBaseUrl,
+		type AgentConfigDraft,
 		type AgentConfig
 	} from './protocol';
 
 	let {
 		config = $bindable(),
-		collapsed = $bindable(false)
+		collapsed = $bindable(false),
+		savedAgents = [],
+		selectedAgentId = null,
+		onselectAgent,
+		onsaveAgent,
+		ondeleteAgent,
+		savingAgent = false
 	}: {
-		config: AgentConfig;
+		config: AgentConfigDraft;
 		collapsed: boolean;
+		savedAgents: AgentConfig[];
+		selectedAgentId: string | null;
+		onselectAgent: (agent: AgentConfig) => void;
+		onsaveAgent: () => void;
+		ondeleteAgent: (id: string) => void;
+		savingAgent: boolean;
 	} = $props();
 
 	let showApiKey = $state(false);
@@ -36,6 +49,30 @@
 
 	{#if !collapsed}
 		<div class="config-body">
+			<!-- Saved agents -->
+			{#if savedAgents.length > 0}
+				<div class="saved-agents">
+					<span class="config-label">Saved Agents</span>
+					<div class="agent-list">
+						{#each savedAgents as agent}
+							<div class="agent-item" class:selected={agent.agent_config_id === selectedAgentId}>
+								<button
+									class="agent-item-name"
+									onclick={() => onselectAgent(agent)}
+								>
+									{agent.name}
+								</button>
+								<button
+									class="agent-item-delete"
+									onclick={() => ondeleteAgent(agent.agent_config_id)}
+									title="Delete"
+								>×</button>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
 			<label class="config-field">
 				<span class="config-label">Provider</span>
 				<select class="config-select" bind:value={config.provider}>
@@ -94,6 +131,15 @@
 					/>
 				</label>
 			{/if}
+
+			<button
+				type="button"
+				class="save-agent-btn"
+				onclick={onsaveAgent}
+				disabled={savingAgent || !config.model}
+			>
+				{savingAgent ? 'Saving...' : 'Save as Agent'}
+			</button>
 		</div>
 	{/if}
 </section>
@@ -215,5 +261,78 @@
 
 	.key-toggle:hover {
 		background: rgba(255, 255, 255, 0.1);
+	}
+
+	.saved-agents {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.agent-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+
+	.agent-item {
+		display: flex;
+		align-items: center;
+		padding: 0.2rem 0.35rem;
+		border-radius: 0.25rem;
+		background: rgba(255, 255, 255, 0.03);
+	}
+
+	.agent-item.selected {
+		background: rgba(255, 136, 102, 0.12);
+		border: 1px solid rgba(255, 136, 102, 0.25);
+	}
+
+	.agent-item-name {
+		flex: 1;
+		background: none;
+		border: none;
+		color: var(--color-text-secondary, #ccc);
+		font-size: 0.72rem;
+		text-align: left;
+		cursor: pointer;
+		font-family: inherit;
+		padding: 0.15rem 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.agent-item-delete {
+		background: none;
+		border: none;
+		color: var(--color-text-muted, #666);
+		cursor: pointer;
+		font-size: 0.8rem;
+		padding: 0 0.15rem;
+	}
+
+	.agent-item-delete:hover {
+		color: var(--color-danger, #ff6b6b);
+	}
+
+	.save-agent-btn {
+		padding: 0.35rem 0.6rem;
+		font-size: 0.72rem;
+		background: rgba(255, 136, 102, 0.15);
+		border: 1px solid rgba(255, 136, 102, 0.25);
+		border-radius: 0.3rem;
+		color: var(--color-brand-500, #ff8866);
+		cursor: pointer;
+		font-family: inherit;
+	}
+
+	.save-agent-btn:hover:not(:disabled) {
+		background: rgba(255, 136, 102, 0.3);
+	}
+
+	.save-agent-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 </style>
