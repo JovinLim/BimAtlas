@@ -24,6 +24,12 @@ features:
       Popup table view of currently filtered IFC entities with lock/unlock rows, protected columns (e.g. IfcClass), and a split layout: top entity table, bottom sheet for quantity surveying or other spreadsheet-style interactions. Data source is searchState.products.
     status: implemented
     priority: high
+  - feature_id: feature_004_validation_schema_management
+    name: Validation Schema Management & Subgraph Validation Engine
+    description: |
+      Integrated IFC validation framework where validation rules (IfcValidation) and grouping schemas (IfcValidationSchema) are first-class graph citizens stored in ifc_entity. Supports attribute checks, inheritance-aware validation, and subgraph/relationship-scoped validation via Apache AGE Cypher traversals. Includes a Schema Browser UI popup and MCP tool stubs for agentic workflows.
+    status: draft
+    priority: high
 ---
 
 BimAtlas Product Overview
