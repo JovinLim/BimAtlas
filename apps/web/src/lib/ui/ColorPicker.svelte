@@ -181,7 +181,7 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.2);
+    border: 2px solid var(--color-border-default);
     cursor: pointer;
     padding: 0;
     flex-shrink: 0;
@@ -189,7 +189,7 @@
   }
 
   .color-swatch:hover {
-    border-color: rgba(255, 255, 255, 0.5);
+    border-color: var(--color-border-strong);
     transform: scale(1.1);
   }
 
@@ -204,14 +204,14 @@
     top: calc(100% + 6px);
     left: 0;
     z-index: 1000;
-    background: #1e1e30;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.5rem;
     padding: 0.6rem;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
     min-width: 210px;
   }
 
@@ -234,7 +234,7 @@
   }
 
   .native-picker::-webkit-color-swatch {
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
   }
 
@@ -248,7 +248,7 @@
     width: 20px;
     height: 20px;
     border-radius: 3px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--color-border-default);
     cursor: pointer;
     padding: 0;
     transition: transform 0.1s, border-color 0.1s;
@@ -256,12 +256,12 @@
 
   .preset-swatch:hover {
     transform: scale(1.15);
-    border-color: rgba(255, 255, 255, 0.4);
+    border-color: var(--color-border-strong);
   }
 
   .preset-swatch.active {
-    border-color: #fff;
-    box-shadow: 0 0 0 1px #fff;
+    border-color: var(--color-text-primary);
+    box-shadow: 0 0 0 1px var(--color-text-primary);
   }
 
   .input-row {
@@ -282,17 +282,17 @@
 
   .input-label span {
     font-size: 0.6rem;
-    color: #888;
+    color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
   .hex-input,
   .rgb-input {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.25rem;
-    color: #ddd;
+    color: var(--color-text-primary);
     padding: 0.25rem 0.35rem;
     font-size: 0.72rem;
     outline: none;
@@ -303,7 +303,7 @@
 
   .hex-input:focus,
   .rgb-input:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: var(--color-brand-500);
   }
 
   .rgb-input {

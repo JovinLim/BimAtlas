@@ -159,8 +159,8 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: radial-gradient(circle at top left, #1f2933, #050816);
-    color: #f3f4f6;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
     padding: 1rem 1.25rem;
     box-sizing: border-box;
     font-family: system-ui, -apple-system, sans-serif;
@@ -187,9 +187,9 @@
     padding: 0.15rem 0.6rem;
     border-radius: 999px;
     font-size: 0.72rem;
-    background: rgba(15, 23, 42, 0.9);
-    border: 1px solid rgba(148, 163, 184, 0.6);
-    color: #e5e7eb;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-primary);
     max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;

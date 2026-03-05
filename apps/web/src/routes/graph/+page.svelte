@@ -288,8 +288,8 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
     font-family: system-ui, -apple-system, sans-serif;
     overflow: hidden;
   }
@@ -301,7 +301,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .page-header h2 {
@@ -309,16 +309,16 @@
     font-size: 0.95rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .context-pill {
     padding: 0.15rem 0.6rem;
     border-radius: 999px;
     font-size: 0.72rem;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: #ccc;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
     max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -1191,8 +1191,8 @@
     max-height: 100vh;
     overflow: hidden;
     padding: 1rem;
-    background: #12121e;
-    color: #e0e0e0;
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
     font-family:
       system-ui,
       -apple-system,
@@ -1216,19 +1216,19 @@
   .btn-guide {
     font-size: 0.72rem;
     padding: 0.25rem 0.5rem;
-    background: rgba(255, 255, 255, 0.06);
-    color: #aaa;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-muted);
   }
 
   .btn-guide:hover {
-    background: rgba(255, 136, 102, 0.15);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+    color: var(--color-brand-500);
   }
 
   .guide-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.5);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1236,14 +1236,15 @@
   }
 
   .guide-modal {
-    background: #1a1a28;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.5rem;
     width: 75%;
     height: 75%;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   }
 
   .guide-header {
@@ -1251,13 +1252,13 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .guide-header h3 {
     font-size: 0.95rem;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     margin: 0;
   }
 
@@ -1266,13 +1267,13 @@
     overflow-y: auto;
     font-size: 0.8rem;
     line-height: 1.5;
-    color: #bbb;
+    color: var(--color-text-secondary);
   }
 
   .guide-body h4 {
     font-size: 0.82rem;
     font-weight: 600;
-    color: #ccc;
+    color: var(--color-text-secondary);
     margin: 1rem 0 0.4rem;
   }
 
@@ -1285,7 +1286,7 @@
   }
 
   .guide-body code {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--color-bg-elevated);
     padding: 0.1rem 0.35rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
@@ -1294,22 +1295,22 @@
   .page-header h2 {
     font-size: 1.05rem;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
   }
 
   .result-count {
     font-size: 0.78rem;
-    color: #ff8866;
+    color: var(--color-brand-500);
     font-variant-numeric: tabular-nums;
   }
 
   /* ---- Sections ---- */
 
   .section {
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 0.5rem;
     padding: 0.75rem;
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-bg-elevated);
     display: flex;
     flex-direction: column;
     gap: 1rem;
@@ -1344,7 +1345,7 @@
 
   .section-chevron {
     font-size: 0.6rem;
-    color: #888;
+    color: var(--color-text-muted);
     transition: transform 0.15s;
   }
 
@@ -1359,7 +1360,7 @@
   .section-header h3 {
     font-size: 0.85rem;
     font-weight: 600;
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   /* ---- Search input ---- */
@@ -1367,21 +1368,21 @@
   .search-input {
     width: 100%;
     box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     padding: 0.4rem 0.55rem;
     font-size: 0.78rem;
     outline: none;
   }
 
   .search-input:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
   }
 
   .search-input::placeholder {
-    color: #555;
+    color: var(--color-text-muted);
   }
 
   /* ---- Scope selector ---- */
@@ -1391,10 +1392,10 @@
   }
 
   .scope-select {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.3rem;
-    color: #aaa;
+    color: var(--color-text-muted);
     padding: 0.2rem 0.4rem;
     font-size: 0.7rem;
     cursor: pointer;
@@ -1402,8 +1403,8 @@
   }
 
   .scope-select option {
-    background: #1e1e30;
-    color: #ddd;
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
   }
 
   /* ---- Filter set list ---- */
@@ -1423,15 +1424,15 @@
   }
 
   .set-row:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   }
 
   .set-row.selected {
-    background: rgba(255, 136, 102, 0.08);
+    background: color-mix(in srgb, var(--color-brand-500) 6%, transparent);
   }
 
   .set-checkbox input {
-    accent-color: #ff8866;
+    accent-color: var(--color-brand-500);
     cursor: pointer;
   }
 
@@ -1444,7 +1445,7 @@
 
   .set-name {
     font-size: 0.8rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1452,7 +1453,7 @@
 
   .set-meta {
     font-size: 0.68rem;
-    color: #666;
+    color: var(--color-text-muted);
   }
 
   .set-actions {
@@ -1464,7 +1465,7 @@
   .icon-btn {
     background: none;
     border: none;
-    color: #666;
+    color: var(--color-text-muted);
     cursor: pointer;
     padding: 0.2rem;
     border-radius: 0.2rem;
@@ -1474,11 +1475,11 @@
   }
 
   .icon-btn:hover {
-    color: #ff8866;
+    color: var(--color-brand-500);
   }
 
   .icon-btn--danger:hover {
-    color: #ff6b6b;
+    color: var(--color-danger);
   }
 
   /* ---- Apply bar ---- */
@@ -1487,7 +1488,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   /* ---- Applied filter sets panel ---- */
@@ -1509,7 +1510,7 @@
 
   .applied-logic {
     font-size: 0.7rem;
-    color: #888;
+    color: var(--color-text-muted);
     font-weight: 500;
   }
 
@@ -1524,8 +1525,8 @@
 
   .applied-item {
     border-radius: 0.45rem;
-    background: rgba(255, 255, 255, 0.015);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
     font-size: 0.78rem;
     outline: none;
     transition:
@@ -1552,7 +1553,7 @@
     flex-shrink: 0;
     background: none;
     border: none;
-    color: #888;
+    color: var(--color-text-muted);
     cursor: pointer;
     padding: 0.2rem;
     border-radius: 0.25rem;
@@ -1563,7 +1564,7 @@
   }
 
   .applied-item-toggle:hover {
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   .applied-item-toggle .chevron {
@@ -1575,17 +1576,17 @@
   }
 
   .applied-item:hover {
-    border-color: rgba(255, 136, 102, 0.24);
-    background: rgba(255, 136, 102, 0.03);
+    border-color: color-mix(in srgb, var(--color-brand-500) 24%, transparent);
+    background: color-mix(in srgb, var(--color-brand-500) 3%, transparent);
   }
 
   .applied-name {
-    color: #ddd;
+    color: var(--color-text-secondary);
     cursor: text;
   }
 
   .applied-name:focus {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-border-default);
   }
 
   .applied-filter-line {
@@ -1595,14 +1596,14 @@
     font-size: 0.75rem;
     padding: 0.28rem 0.35rem;
     border-radius: 0.28rem;
-    color: #bbb;
-    background: rgba(255, 255, 255, 0.015);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
   }
 
   .applied-filter-mode {
     flex-shrink: 0;
-    color: #888;
+    color: var(--color-text-muted);
     font-size: 0.7rem;
     text-transform: uppercase;
     width: 4rem;
@@ -1628,9 +1629,9 @@
     width: 1.5rem;
     height: 1.5rem;
     border-radius: 0.28rem;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.03);
-    color: #999;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-muted);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1642,9 +1643,9 @@
   }
 
   .icon-btn:hover:not(:disabled) {
-    color: #ddd;
-    border-color: rgba(255, 255, 255, 0.22);
-    background: rgba(255, 255, 255, 0.07);
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-strong);
+    background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   }
 
   .icon-btn:disabled {
@@ -1653,15 +1654,15 @@
   }
 
   .icon-btn-danger:hover:not(:disabled) {
-    color: #ff6b6b;
-    border-color: rgba(255, 107, 107, 0.4);
-    background: rgba(255, 107, 107, 0.09);
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+    background: color-mix(in srgb, var(--color-danger) 9%, transparent);
   }
 
   .applied-filter-edit {
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-bg-elevated);
     padding: 0.15rem 0.45rem 0.45rem;
   }
 
@@ -1671,7 +1672,7 @@
 
   .applied-toolbar {
     padding-top: 0.45rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   /* ---- Logic toggle (shared) ---- */
@@ -1683,10 +1684,10 @@
   }
 
   .mode-btn {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.25rem;
-    color: #888;
+    color: var(--color-text-muted);
     padding: 0.2rem 0.5rem;
     font-size: 0.68rem;
     cursor: pointer;
@@ -1696,13 +1697,13 @@
   }
 
   .mode-btn:hover {
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   .mode-btn.active {
-    background: rgba(255, 136, 102, 0.18);
-    color: #ff8866;
-    border-color: rgba(255, 136, 102, 0.3);
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    color: var(--color-brand-500);
+    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
   }
 
   /* ---- Editor ---- */
@@ -1715,21 +1716,21 @@
 
   .editor-name {
     flex: 1;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
-    color: #ddd;
+    color: var(--color-text-secondary);
     padding: 0.4rem 0.55rem;
     font-size: 0.78rem;
     outline: none;
   }
 
   .editor-name:focus {
-    border-color: rgba(255, 136, 102, 0.4);
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
   }
 
   .editor-name::placeholder {
-    color: #555;
+    color: var(--color-text-muted);
   }
 
   .filter-list {
@@ -1758,10 +1759,10 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px dashed rgba(255, 255, 255, 0.15);
+    background: var(--color-bg-elevated);
+    border: 1px dashed var(--color-border-default);
     border-radius: 0.35rem;
-    color: #888;
+    color: var(--color-text-muted);
     padding: 0.35rem 0.7rem;
     font-size: 0.78rem;
     cursor: pointer;
@@ -1771,16 +1772,16 @@
   }
 
   .add-btn:hover {
-    background: rgba(255, 136, 102, 0.1);
-    color: #ff8866;
-    border-color: rgba(255, 136, 102, 0.3);
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    color: var(--color-brand-500);
+    border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
   }
 
   .empty-hint {
     padding: 0.75rem 0;
     text-align: center;
     font-size: 0.78rem;
-    color: #555;
+    color: var(--color-text-muted);
   }
 
   .btn {
@@ -1801,33 +1802,33 @@
   }
 
   .btn-secondary {
-    background: rgba(255, 255, 255, 0.06);
-    color: #aaa;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-    color: #ccc;
+    background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    color: var(--color-text-primary);
   }
 
   .btn-primary {
-    background: rgba(255, 136, 102, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    color: var(--color-brand-500);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: rgba(255, 136, 102, 0.35);
-    color: #ffaa88;
+    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
+    color: var(--color-brand-400);
   }
 
   .btn-danger {
-    background: rgba(255, 107, 107, 0.16);
-    color: #ff8f8f;
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+    color: var(--color-danger);
   }
 
   .btn-danger:hover:not(:disabled) {
-    background: rgba(255, 107, 107, 0.3);
-    color: #ffb1b1;
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+    color: var(--color-danger);
   }
 
   /* ---- Color toggle bar ---- */
@@ -1836,8 +1837,8 @@
     display: flex;
     align-items: center;
     padding: 0.4rem 0.55rem;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 0.35rem;
   }
 
@@ -1846,12 +1847,12 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.78rem;
-    color: #bbb;
+    color: var(--color-text-secondary);
     cursor: pointer;
   }
 
   .color-toggle-label input {
-    accent-color: #ff8866;
+    accent-color: var(--color-brand-500);
     cursor: pointer;
   }
 

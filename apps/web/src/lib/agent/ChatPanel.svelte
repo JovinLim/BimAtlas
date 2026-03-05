@@ -1393,6 +1393,7 @@
     padding: 0.6rem;
     display: flex;
     flex-direction: column;
+    gap: 0.5rem;
   }
 
   .empty-hint {

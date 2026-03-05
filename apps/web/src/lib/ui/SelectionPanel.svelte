@@ -41,8 +41,8 @@
 		top: 1rem;
 		right: 1rem;
 		bottom: 1rem;
-		background: rgba(26, 26, 46, 0.92);
-		color: #e0e0e0;
+		background: rgba(255, 255, 255, 0.96);
+		color: var(--color-text-primary);
 		padding: 1rem;
 		border-radius: 0.5rem;
 		min-width: 260px;
@@ -53,7 +53,7 @@
 		min-height: 0;
 		font-family: system-ui, -apple-system, sans-serif;
 		font-size: 0.85rem;
-		box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+		box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 		backdrop-filter: blur(8px);
 		z-index: 10;
 		user-select: text;
@@ -67,7 +67,7 @@
 		justify-content: space-between;
 		align-items: center;
 		margin-bottom: 0.75rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+		border-bottom: 1px solid var(--color-border-default);
 		padding-bottom: 0.5rem;
 	}
 
@@ -85,20 +85,20 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: #ff6644;
+		color: var(--color-brand-500);
 	}
 
 	.close-btn {
 		background: none;
 		border: none;
-		color: #888;
+		color: var(--color-text-muted);
 		font-size: 1.2rem;
 		cursor: pointer;
 		padding: 0 0.25rem;
 		line-height: 1;
 	}
 	.close-btn:hover {
-		color: #fff;
+		color: var(--color-text-primary);
 	}
 
 	.panel-body .detail {
@@ -125,26 +125,26 @@
 		flex-shrink: 0;
 		background: none;
 		border: none;
-		color: #888;
+		color: var(--color-text-muted);
 		cursor: pointer;
 		padding: 0.2rem;
 		line-height: 0;
 		border-radius: 0.25rem;
 	}
 	.copy-btn:hover {
-		color: #ff6644;
-		background: rgba(255, 102, 68, 0.1);
+		color: var(--color-brand-500);
+		background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
 	}
 
 	.label {
 		font-size: 0.7rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: #888;
+		color: var(--color-text-muted);
 	}
 
 	.value {
-		color: #ddd;
+		color: var(--color-text-primary);
 		word-break: break-all;
 	}
 
@@ -155,8 +155,8 @@
 
 	.badge {
 		display: inline-block;
-		background: rgba(255, 102, 68, 0.15);
-		color: #ff8866;
+		background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+		color: var(--color-brand-500);
 		padding: 0.1rem 0.4rem;
 		border-radius: 0.25rem;
 		font-size: 0.78rem;
@@ -164,14 +164,14 @@
 	}
 
 	.badge.secondary {
-		background: rgba(100, 181, 246, 0.18);
-		color: #64b5f6;
+		background: color-mix(in srgb, var(--color-info) 12%, transparent);
+		color: var(--color-info);
 	}
 
 	.link-btn {
 		background: none;
 		border: none;
-		color: #5dade2;
+		color: var(--color-info);
 		cursor: pointer;
 		padding: 0;
 		font-size: 0.82rem;
@@ -179,13 +179,13 @@
 	}
 	.link-btn:hover {
 		text-decoration: underline;
-		color: #85c1e9;
+		color: color-mix(in srgb, var(--color-info) 70%, white);
 	}
 
 	.relations-section {
 		margin-top: 0.5rem;
 		padding-top: 0.5rem;
-		border-top: 1px solid rgba(255, 255, 255, 0.08);
+		border-top: 1px solid var(--color-border-subtle);
 	}
 
 	.relation-list {
@@ -211,7 +211,7 @@
 
 	.rel-type {
 		font-size: 0.65rem;
-		color: #666;
+		color: var(--color-text-muted);
 		text-align: right;
 		white-space: normal;
 		word-break: break-word;
@@ -227,14 +227,14 @@
 	}
 
 	.pset-list details {
-		background: rgba(255, 255, 255, 0.02);
+		background: var(--color-bg-elevated);
 		border-radius: 0.25rem;
 		padding: 0.25rem 0.4rem;
 	}
 
 	.pset-list summary {
 		cursor: pointer;
-		color: #ccc;
+		color: var(--color-text-secondary);
 	}
 
 	.pset-props {
@@ -248,24 +248,24 @@
 
 	.pset-key {
 		font-size: 0.75rem;
-		color: #aaa;
+		color: var(--color-text-muted);
 		margin-right: 0.4rem;
 	}
 
 	.pset-value {
 		font-size: 0.8rem;
-		color: #ddd;
+		color: var(--color-text-primary);
 		word-break: break-all;
 	}
 
 	.panel-body .status-msg {
 		flex-shrink: 0;
-		color: #888;
+		color: var(--color-text-muted);
 		margin: 0.5rem 0;
 		font-size: 0.82rem;
 	}
 
 	.error {
-		color: #e57373;
+		color: var(--color-danger);
 	}
 </style>

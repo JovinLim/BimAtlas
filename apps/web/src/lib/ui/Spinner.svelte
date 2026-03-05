@@ -28,8 +28,8 @@
 	}
 
 	.spinner {
-		border: 3px solid rgba(255, 255, 255, 0.1);
-		border-top-color: #ff8866;
+		border: 3px solid var(--color-border-default);
+		border-top-color: var(--color-brand-500);
 		border-radius: 50%;
 		animation: spin 0.8s linear infinite;
 	}
@@ -43,7 +43,7 @@
 	.spinner-message {
 		margin: 0;
 		font-size: 0.85rem;
-		color: #aaa;
+		color: var(--color-text-muted);
 		text-align: center;
 	}
 </style>

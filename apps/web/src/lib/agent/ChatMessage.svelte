@@ -64,7 +64,6 @@
 <style>
 	.chat-msg {
 		display: flex;
-		margin-bottom: 0.5rem;
 	}
 
 	.chat-msg.user {
@@ -89,20 +88,20 @@
 	}
 
 	.user .msg-bubble {
-		background: rgba(255, 136, 102, 0.18);
-		color: var(--color-text-primary, #e0e0e0);
+		background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+		color: var(--color-text-primary, #0f172a);
 		border-bottom-right-radius: 0.15rem;
 	}
 
 	.assistant .msg-bubble {
-		background: var(--color-bg-elevated, rgba(255, 255, 255, 0.06));
-		color: var(--color-text-primary, #e0e0e0);
+		background: var(--color-bg-elevated, #efefe9);
+		color: var(--color-text-primary, #0f172a);
 		border-bottom-left-radius: 0.15rem;
 	}
 
 	.error .msg-bubble {
-		background: rgba(255, 107, 107, 0.12);
-		border: 1px solid rgba(255, 107, 107, 0.25);
+		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-danger) 20%, transparent);
 		color: var(--color-danger-soft, #ee8888);
 		border-bottom-left-radius: 0.15rem;
 	}
@@ -135,9 +134,9 @@
 
 	.meta-bubble {
 		margin-bottom: 0.45rem;
-		border: 1px solid color-mix(in srgb, var(--color-brand-500, #ff8866) 22%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-brand-500, #334155) 22%, transparent);
 		border-radius: 0.45rem;
-		background: color-mix(in srgb, var(--color-brand-500, #ff8866) 8%, transparent);
+		background: color-mix(in srgb, var(--color-brand-500, #334155) 8%, transparent);
 	}
 
 	.meta-toggle {
