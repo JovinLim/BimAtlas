@@ -2544,6 +2544,9 @@
     padding: 0;
     max-height: 160px;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
   }
 
   .revision-item {
@@ -2562,7 +2565,6 @@
     border-radius: 0.25rem;
     color: var(--color-text-secondary);
     cursor: pointer;
-    margin-bottom: 0.2rem;
   }
 
   .revision-item:hover {

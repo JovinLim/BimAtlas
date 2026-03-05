@@ -5,9 +5,9 @@
 	let expanded = $state(false);
 
 	const statusColor: Record<string, string> = {
-		complete: 'var(--color-brand-500, #ff8866)',
-		pending: 'var(--color-warning, #c9a227)',
-		error: 'var(--color-danger, #ff6b6b)'
+		complete: 'var(--color-brand-500, #334155)',
+		pending: 'var(--color-warning, #b45309)',
+		error: 'var(--color-danger, #991b1b)'
 	};
 </script>
 

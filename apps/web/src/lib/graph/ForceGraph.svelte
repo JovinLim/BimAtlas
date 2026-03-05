@@ -38,9 +38,9 @@
   let graph: any;
   let graphReady = $state(false);
 
-  const NODE_COLOR_SELECTED = "#ff8866";
+  const NODE_COLOR_SELECTED = "#334155";
   const NODE_COLOR_DEFAULT = "#8899aa";
-  const LINK_COLOR = "rgba(135, 206, 235, 0.8)";
+  const LINK_COLOR = "rgba(3, 105, 161, 0.7)";
 
   const SPATIAL_CLASSES = new Set([
     "IfcProject",
@@ -105,7 +105,7 @@
           sprite.material.depthWrite = false;
           (sprite as any).material.depthTest = false;
           sprite.textHeight = 1.2;
-          sprite.color = "#e0e0e0";
+          sprite.color = "#0f172a";
           // Lift text above the node so it never intersects the sphere visually.
           sprite.position.y = getNodeSize(node) + 2.0;
           (sprite as any).renderOrder = 999;
@@ -121,7 +121,7 @@
           sprite.material.depthWrite = false;
           (sprite as any).material.depthTest = false;
           sprite.textHeight = 0.8;
-          sprite.color = "#87CEEB";
+          sprite.color = "#0369a1";
           (sprite as any).renderOrder = 999;
           return sprite;
         })
