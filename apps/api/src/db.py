@@ -1718,11 +1718,12 @@ def add_chat_message(
             f"VALUES (%s, %s, %s, %s) RETURNING {_MSG_COLS}",
             (chat_id, role, content, json.dumps(tool_calls) if tool_calls else None),
         )
+        row = dict(cur.fetchone())
         cur.execute(
             "UPDATE agent_chat SET updated_at = now() WHERE chat_id = %s",
             (chat_id,),
         )
-        return dict(cur.fetchone())
+        return row
 
 
 def fetch_chat_messages(chat_id: str) -> list[dict]:
