@@ -46,7 +46,7 @@
 		align-items: center;
 		gap: 0.3rem;
 		padding: 0.2rem 0.5rem;
-		background: rgba(255, 255, 255, 0.04);
+		background: var(--color-bg-elevated);
 		border: 1px solid;
 		border-radius: 0.25rem;
 		color: var(--color-text-secondary, #ccc);
@@ -56,7 +56,7 @@
 	}
 
 	.tool-badge:hover {
-		background: rgba(255, 255, 255, 0.08);
+		background: color-mix(in srgb, var(--color-text-primary) 6%, var(--color-bg-elevated));
 	}
 
 	.tool-icon {
@@ -80,7 +80,7 @@
 	.tool-detail {
 		margin-top: 0.35rem;
 		padding: 0.5rem;
-		background: rgba(0, 0, 0, 0.2);
+		background: var(--color-bg-elevated);
 		border-radius: 0.25rem;
 		font-size: 0.7rem;
 	}
@@ -105,7 +105,7 @@
 	.tool-json {
 		margin: 0;
 		padding: 0.3rem;
-		background: rgba(0, 0, 0, 0.15);
+		background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
 		border-radius: 0.2rem;
 		font-size: 0.65rem;
 		color: var(--color-text-secondary, #ccc);

@@ -143,7 +143,7 @@
             selection.activeGlobalId = node.id;
           }
         })
-        .backgroundColor("#1a1a2e")
+        .backgroundColor("#f7f7f2")
         .width(w)
         .height(h);
 
@@ -315,11 +315,11 @@
     flex-direction: column;
     gap: 0.35rem;
     padding: 0.5rem 0.75rem;
-    background: rgba(26, 26, 46, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
     font-size: 0.75rem;
-    color: #ccc;
+    color: var(--color-text-secondary);
     pointer-events: none;
   }
 
@@ -355,7 +355,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #999;
+    color: var(--color-text-muted);
     font-family:
       system-ui,
       -apple-system,
@@ -370,20 +370,20 @@
   }
 
   .overlay-msg.error {
-    color: #e57373;
+    color: var(--color-danger);
   }
 
   .retry-btn {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: #ccc;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
     padding: 0.4rem 1rem;
     border-radius: 0.3rem;
     cursor: pointer;
     font-size: 0.82rem;
   }
   .retry-btn:hover {
-    background: rgba(255, 255, 255, 0.14);
-    color: #fff;
+    background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
+    color: var(--color-text-primary);
   }
 </style>

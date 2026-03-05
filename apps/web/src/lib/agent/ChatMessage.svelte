@@ -89,7 +89,7 @@
 	}
 
 	.user .msg-bubble {
-		background: rgba(255, 136, 102, 0.18);
+		background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
 		color: var(--color-text-primary, #e0e0e0);
 		border-bottom-right-radius: 0.15rem;
 	}
@@ -101,8 +101,8 @@
 	}
 
 	.error .msg-bubble {
-		background: rgba(255, 107, 107, 0.12);
-		border: 1px solid rgba(255, 107, 107, 0.25);
+		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-danger) 20%, transparent);
 		color: var(--color-danger-soft, #ee8888);
 		border-bottom-left-radius: 0.15rem;
 	}

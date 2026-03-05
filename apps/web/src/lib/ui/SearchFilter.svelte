@@ -736,10 +736,10 @@
 		--control-padding-x: 0.45rem;
 		--control-padding-y: 0.25rem;
 		--control-font-size: 0.78rem;
-		--control-border: 1px solid rgba(255, 255, 255, 0.1);
+		--control-border: 1px solid var(--color-border-default);
 		--control-radius: 0.3rem;
-		--control-bg: rgba(255, 255, 255, 0.06);
-		--control-focus-border: rgba(255, 136, 102, 0.4);
+		--control-bg: var(--color-bg-elevated);
+		--control-focus-border: var(--color-brand-500);
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -757,9 +757,9 @@
 
 	.mode-btn {
 		height: 100%;
-		background: rgba(255, 255, 255, 0.04);
+		background: var(--color-bg-elevated);
 		border: none;
-		color: #888;
+		color: var(--color-text-muted);
 		padding: 0 var(--control-padding-x);
 		font-size: var(--control-font-size);
 		cursor: pointer;
@@ -769,12 +769,12 @@
 	}
 
 	.mode-btn:hover {
-		color: #ccc;
+		color: var(--color-text-secondary);
 	}
 
 	.mode-btn.active {
-		background: rgba(255, 136, 102, 0.18);
-		color: #ff8866;
+		background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+		color: var(--color-brand-500);
 	}
 
 	.filter-fields {
@@ -800,7 +800,7 @@
 		background: var(--control-bg);
 		border: var(--control-border);
 		border-radius: var(--control-radius);
-		color: #ddd;
+		color: var(--color-text-primary);
 		padding: var(--control-padding-y) var(--control-padding-x);
 		font-size: var(--control-font-size);
 		outline: none;
@@ -822,13 +822,13 @@
 	}
 
 	.filter-select option {
-		background: #1e1e30;
-		color: #ddd;
+		background: var(--color-bg-surface);
+		color: var(--color-text-primary);
 		white-space: pre;
 	}
 
 	.filter-input::placeholder {
-		color: #555;
+		color: var(--color-text-muted);
 	}
 
 	.filter-combobox-list {
@@ -841,10 +841,10 @@
 		max-height: 220px;
 		overflow-y: auto;
 		list-style: none;
-		background: #1e1e30;
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: var(--color-bg-surface);
+		border: 1px solid var(--color-border-default);
 		border-radius: var(--control-radius);
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 		z-index: 20;
 	}
 
@@ -859,25 +859,25 @@
 	.filter-combobox-option {
 		padding: 0.3rem 0.45rem;
 		font-size: var(--control-font-size);
-		color: #ddd;
+		color: var(--color-text-primary);
 		cursor: pointer;
 		white-space: pre;
 	}
 
 	.filter-combobox-option:hover,
 	.filter-combobox-option.highlighted {
-		background: rgba(255, 136, 102, 0.15);
-		color: #ff8866;
+		background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+		color: var(--color-brand-500);
 	}
 
 	.filter-combobox-option--empty {
-		color: #666;
+		color: var(--color-text-muted);
 		cursor: default;
 	}
 
 	.filter-combobox-option--empty:hover {
 		background: transparent;
-		color: #666;
+		color: var(--color-text-muted);
 	}
 
 	.filter-combobox--attr {
@@ -908,7 +908,7 @@
 	.remove-btn {
 		background: none;
 		border: none;
-		color: #666;
+		color: var(--color-text-muted);
 		cursor: pointer;
 		padding: 0.2rem;
 		border-radius: 0.25rem;
@@ -919,6 +919,6 @@
 	}
 
 	.remove-btn:hover {
-		color: #ff6b6b;
+		color: var(--color-danger);
 	}
 </style>

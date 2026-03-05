@@ -580,7 +580,7 @@
     flex-shrink: 0;
     background: none;
     border: none;
-    color: #888;
+    color: var(--color-text-muted);
     cursor: pointer;
     padding: 0.2rem;
     line-height: 0;
@@ -588,19 +588,19 @@
   }
 
   .copy-btn:hover {
-    color: #ff6644;
-    background: rgba(255, 102, 68, 0.1);
+    color: var(--color-brand-500);
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
   }
 
   .label {
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #888;
+    color: var(--color-text-muted);
   }
 
   .value {
-    color: #ddd;
+    color: var(--color-text-primary);
     word-break: break-all;
   }
 
@@ -611,8 +611,8 @@
 
   .badge {
     display: inline-block;
-    background: rgba(255, 102, 68, 0.15);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    color: var(--color-brand-500);
     padding: 0.1rem 0.4rem;
     border-radius: 0.25rem;
     font-size: 0.78rem;
@@ -620,14 +620,14 @@
   }
 
   .badge.secondary {
-    background: rgba(100, 181, 246, 0.18);
-    color: #64b5f6;
+    background: color-mix(in srgb, var(--color-info) 12%, transparent);
+    color: var(--color-info);
   }
 
   .link-btn {
     background: none;
     border: none;
-    color: #5dade2;
+    color: var(--color-info);
     cursor: pointer;
     padding: 0;
     font-size: 0.82rem;
@@ -636,13 +636,13 @@
 
   .link-btn:hover {
     text-decoration: underline;
-    color: #85c1e9;
+    color: color-mix(in srgb, var(--color-info) 70%, white);
   }
 
   .view-btn {
-    background: rgba(255, 102, 68, 0.15);
-    border: 1px solid rgba(255, 102, 68, 0.3);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-brand-500) 20%, transparent);
+    color: var(--color-brand-500);
     padding: 0.15rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
@@ -650,14 +650,14 @@
   }
 
   .view-btn:hover {
-    background: rgba(255, 102, 68, 0.25);
-    border-color: rgba(255, 102, 68, 0.5);
+    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
   }
 
   .relations-section {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   .relation-list {
@@ -683,7 +683,7 @@
 
   .rel-type {
     font-size: 0.65rem;
-    color: #666;
+    color: var(--color-text-muted);
     text-align: right;
     white-space: normal;
     word-break: break-word;
@@ -699,14 +699,14 @@
   }
 
   .pset-list details {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--color-bg-elevated);
     border-radius: 0.25rem;
     padding: 0.25rem 0.4rem;
   }
 
   .pset-list summary {
     cursor: pointer;
-    color: #ccc;
+    color: var(--color-text-secondary);
   }
 
   .pset-props {
@@ -720,7 +720,7 @@
 
   .pset-key {
     font-size: 0.75rem;
-    color: #aaa;
+    color: var(--color-text-muted);
     margin-right: 0.4rem;
   }
 
@@ -734,30 +734,30 @@
   }
 
   .attr-badge.required {
-    background: rgba(233, 30, 99, 0.2);
-    color: #e91e63;
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+    color: var(--color-danger);
   }
 
   .attr-badge.optional {
-    background: rgba(100, 181, 246, 0.15);
-    color: #64b5f6;
+    background: color-mix(in srgb, var(--color-info) 10%, transparent);
+    color: var(--color-info);
   }
 
   .pset-value {
     font-size: 0.8rem;
-    color: #ddd;
+    color: var(--color-text-primary);
     word-break: break-all;
   }
 
   .panel-body .status-msg {
     flex-shrink: 0;
-    color: #888;
+    color: var(--color-text-muted);
     margin: 0.5rem 0;
     font-size: 0.82rem;
   }
 
   .error {
-    color: #e57373;
+    color: var(--color-danger);
   }
 </style>
 

@@ -182,13 +182,13 @@
 	}
 
 	.modal {
-		background: #1e1e30;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: var(--color-bg-surface);
+		border: 1px solid var(--color-border-default);
 		border-radius: 0.75rem;
 		width: 90%;
 		max-width: 480px;
 		padding: 1.5rem;
-		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
 	}
 
 	/* ---- Header ---- */
@@ -204,13 +204,13 @@
 		margin: 0;
 		font-size: 1.05rem;
 		font-weight: 600;
-		color: #e0e0e0;
+		color: var(--color-text-primary);
 	}
 
 	.close-btn {
 		background: none;
 		border: none;
-		color: #666;
+		color: var(--color-text-muted);
 		cursor: pointer;
 		padding: 0.25rem;
 		border-radius: 0.25rem;
@@ -220,13 +220,13 @@
 	}
 
 	.close-btn:hover {
-		color: #ccc;
+		color: var(--color-text-primary);
 	}
 
 	/* ---- Drop zone ---- */
 
 	.drop-zone {
-		border: 2px dashed rgba(255, 255, 255, 0.12);
+		border: 2px dashed var(--color-border-default);
 		border-radius: 0.6rem;
 		padding: 2.5rem 1.5rem;
 		text-align: center;
@@ -234,25 +234,25 @@
 		transition:
 			border-color 0.2s,
 			background 0.2s;
-		color: #888;
+		color: var(--color-text-muted);
 		outline: none;
 	}
 
 	.drop-zone:hover,
 	.drop-zone:focus-visible {
-		border-color: rgba(255, 136, 102, 0.3);
-		background: rgba(255, 136, 102, 0.04);
+		border-color: color-mix(in srgb, var(--color-brand-500) 30%, transparent);
+		background: color-mix(in srgb, var(--color-brand-500) 3%, transparent);
 	}
 
 	.drop-zone.drag-over {
-		border-color: #ff8866;
-		background: rgba(255, 136, 102, 0.08);
+		border-color: var(--color-brand-500);
+		background: color-mix(in srgb, var(--color-brand-500) 6%, transparent);
 	}
 
 	.drop-zone.has-file {
 		border-style: solid;
-		border-color: rgba(255, 136, 102, 0.25);
-		background: rgba(255, 136, 102, 0.04);
+		border-color: color-mix(in srgb, var(--color-brand-500) 25%, transparent);
+		background: color-mix(in srgb, var(--color-brand-500) 3%, transparent);
 	}
 
 	.upload-icon {
@@ -263,13 +263,13 @@
 	.drop-label {
 		margin: 0 0 0.25rem;
 		font-size: 0.9rem;
-		color: #bbb;
+		color: var(--color-text-secondary);
 	}
 
 	.drop-hint {
 		margin: 0;
 		font-size: 0.78rem;
-		color: #666;
+		color: var(--color-text-muted);
 	}
 
 	/* ---- File info ---- */
@@ -287,13 +287,13 @@
 
 	.file-name {
 		font-size: 0.9rem;
-		color: #e0e0e0;
+		color: var(--color-text-primary);
 		word-break: break-all;
 	}
 
 	.file-size {
 		font-size: 0.75rem;
-		color: #666;
+		color: var(--color-text-muted);
 	}
 
 	/* ---- Import warning ---- */
@@ -302,10 +302,10 @@
 		margin: 1rem 0 0;
 		padding: 0.5rem 0.75rem;
 		font-size: 0.8rem;
-		color: #c9a227;
-		background: rgba(201, 162, 39, 0.1);
+		color: var(--color-warning);
+		background: color-mix(in srgb, var(--color-warning) 8%, transparent);
 		border-radius: 0.35rem;
-		border-left: 3px solid rgba(201, 162, 39, 0.5);
+		border-left: 3px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
 	}
 
 	/* ---- Error ---- */
@@ -314,8 +314,8 @@
 		margin: 0.75rem 0 0;
 		padding: 0.5rem 0.75rem;
 		font-size: 0.8rem;
-		color: #ff6b6b;
-		background: rgba(255, 107, 107, 0.08);
+		color: var(--color-danger);
+		background: color-mix(in srgb, var(--color-danger) 6%, transparent);
 		border-radius: 0.35rem;
 	}
 
@@ -346,22 +346,22 @@
 	}
 
 	.btn-secondary {
-		background: rgba(255, 255, 255, 0.06);
-		color: #aaa;
+		background: var(--color-bg-elevated);
+		color: var(--color-text-muted);
 	}
 
 	.btn-secondary:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.1);
-		color: #ccc;
+		background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
+		color: var(--color-text-secondary);
 	}
 
 	.btn-primary {
-		background: rgba(255, 136, 102, 0.2);
-		color: #ff8866;
+		background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
+		color: var(--color-brand-500);
 	}
 
 	.btn-primary:hover:not(:disabled) {
-		background: rgba(255, 136, 102, 0.35);
-		color: #ffaa88;
+		background: color-mix(in srgb, var(--color-brand-500) 25%, transparent);
+		color: var(--color-brand-400);
 	}
 </style>

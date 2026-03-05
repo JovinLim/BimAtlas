@@ -450,8 +450,8 @@
     position: sticky;
     left: 0;
     z-index: 6;
-    background: #1a1a2e;
-    border-right: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
+    background: var(--color-bg-surface);
+    border-right: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
     flex-shrink: 0;
   }
   .lock-rail-corner {
@@ -460,8 +460,8 @@
     z-index: 7;
     height: calc(var(--table-header-height, 28px) + var(--table-grid-border-width, 1px));
     min-height: calc(var(--table-header-height, 28px) + var(--table-grid-border-width, 1px));
-    background: #1a1a2e;
-    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
+    background: var(--color-bg-surface);
+    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
     box-sizing: border-box;
   }
   .lock-rail-header {
@@ -476,17 +476,17 @@
     justify-content: center;
     font-size: 0.72rem;
     letter-spacing: 0.03em;
-    color: #ccccd8;
-    background: #1a1a2e;
-    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
+    color: var(--color-text-secondary);
+    background: var(--color-bg-surface);
+    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
   }
 
   .entity-grid { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.78rem; }
   .entity-grid col.col-rownum { width: 2.8rem; }
 
   .entity-grid th, .entity-grid td {
-    border-right: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
-    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
+    border-right: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
+    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
     padding: 0;
     height: var(--table-row-height, 34px);
     overflow: hidden;
@@ -506,18 +506,18 @@
     background: transparent;
     font: inherit;
   }
-  .col-resize-handle:hover { background: rgba(255, 136, 102, 0.2); }
+  .col-resize-handle:hover { background: color-mix(in srgb, var(--color-brand-500) 15%, transparent); }
   .col-resize-handle-letters { bottom: calc(-1 * (var(--table-subheader-height, 34px) + var(--table-grid-border-width, 1px))); }
   .letters-row th {
     position: sticky;
     top: 0;
     z-index: 4;
     height: var(--table-header-height, 28px);
-    background: #1a1a2e;
-    color: #c0c0d0;
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
     font-weight: 600;
     text-align: center;
-    box-shadow: 0 calc(var(--table-grid-border-width, 1px) + 1px) 0 0 #1a1a2e;
+    box-shadow: 0 calc(var(--table-grid-border-width, 1px) + 1px) 0 0 var(--color-bg-surface);
   }
   .corner {
     left: var(--lock-rail-width, 3rem);
@@ -528,8 +528,8 @@
     position: sticky;
     top: var(--table-header-height, 28px);
     z-index: 3;
-    background: #1a1a2e;
-    color: #ccccd8;
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -566,16 +566,16 @@
     border: none;
     border-radius: 0.25rem;
     background: transparent;
-    color: #a0a0b0;
+    color: var(--color-text-muted);
     cursor: pointer;
   }
   .th-sort-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #e0e0e0;
+    background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+    color: var(--color-text-primary);
   }
   .th-sort-btn[aria-expanded="true"] {
-    background: rgba(255, 136, 102, 0.15);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    color: var(--color-brand-500);
   }
   .th-sort-icon {
     display: block;
@@ -588,9 +588,9 @@
     min-width: 8rem;
     padding: 0.25rem 0;
     border-radius: 0.35rem;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: #252538;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     z-index: 20;
     list-style: none;
   }
@@ -601,17 +601,17 @@
     border: none;
     border-radius: 0;
     background: transparent;
-    color: #e0e0e0;
+    color: var(--color-text-primary);
     font-size: 0.8rem;
     text-align: left;
     cursor: pointer;
   }
   .th-sort-option:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   }
   .th-sort-option.active {
-    background: rgba(255, 136, 102, 0.15);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+    color: var(--color-brand-500);
   }
 
   .header-formula-input {
@@ -619,10 +619,10 @@
     min-width: 0;
     width: 100%;
     height: 1.6rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.25rem;
-    background: rgba(255, 255, 255, 0.04);
-    color: #e0e0e0;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-primary);
     font-size: 0.75rem;
     padding: 0 0.45rem;
     font-family: inherit;
@@ -631,45 +631,45 @@
   }
   .header-formula-input:focus {
     outline: none;
-    border-color: rgba(255, 136, 102, 0.55);
-    box-shadow: 0 0 0 2px rgba(255, 136, 102, 0.15);
+    border-color: var(--color-brand-500);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-500) 12%, transparent);
   }
   .header-delete-btn {
     width: 1.6rem;
     height: 1.6rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.25rem;
-    background: rgba(255, 255, 255, 0.04);
-    color: #d8d8e2;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
     cursor: pointer;
     padding: 0;
     line-height: 1;
   }
   .header-delete-btn:hover {
-    color: #ff8866;
-    border-color: rgba(255, 136, 102, 0.45);
-    background: rgba(255, 136, 102, 0.12);
+    color: var(--color-brand-500);
+    border-color: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
   }
   .header-add-col {
     width: 8rem;
     min-width: 8rem;
-    background: #1a1a2e;
+    background: var(--color-bg-surface);
   }
   .header-add-btn {
     width: calc(100% - 0.7rem);
     margin: 0.2rem 0.35rem;
     height: 1.8rem;
-    border: 1px dashed rgba(255, 255, 255, 0.25);
+    border: 1px dashed var(--color-border-default);
     border-radius: 0.3rem;
-    background: rgba(255, 255, 255, 0.02);
-    color: #d0d0de;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
     font-size: 0.72rem;
     cursor: pointer;
   }
   .header-add-btn:hover {
-    border-color: rgba(255, 136, 102, 0.5);
-    background: rgba(255, 136, 102, 0.1);
-    color: #ffd8cf;
+    border-color: color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
+    color: var(--color-brand-500);
   }
 
   .entity-grid thead th.row-index {
@@ -684,14 +684,14 @@
     box-shadow: 2px 0 4px rgba(0, 0, 0, 0.15);
   }
   .row-index {
-    background: #1a1a2e;
-    color: #c0c0d0;
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
     text-align: center !important;
     font-weight: 500;
     padding: 0;
   }
-  .corner { background: #1a1a2e; }
-  .entity-row:hover td { background: rgba(255,255,255,0.02); }
+  .corner { background: var(--color-bg-surface); }
+  .entity-row:hover td { background: color-mix(in srgb, var(--color-text-primary) 2%, transparent); }
   .entity-row.selected td,
   .entity-row.selected th.row-index { background: rgba(102, 171, 255, 0.12); }
   .entity-row.selected:hover td,
@@ -701,26 +701,26 @@
   .entity-row.find-highlight:hover td,
   .entity-row.find-highlight:hover th.row-index { background: rgba(255, 136, 102, 0.24); }
 
-  .cell-input { box-sizing: border-box; width: 100%; height: 100%; border: none; background: transparent; color: #e0e0e0; font-size: 0.78rem; padding: 0 0.5rem; font-family: inherit; }
-  .cell-input:focus { outline: none; background: rgba(255,136,102,0.08); box-shadow: inset 0 0 0 1px rgba(255,136,102,0.45); }
+  .cell-input { box-sizing: border-box; width: 100%; height: 100%; border: none; background: transparent; color: var(--color-text-primary); font-size: 0.78rem; padding: 0 0.5rem; font-family: inherit; }
+  .cell-input:focus { outline: none; background: color-mix(in srgb, var(--color-brand-500) 6%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-500) 35%, transparent); }
   .cell-input.active-cell { box-shadow: inset 0 0 0 1px rgba(102, 171, 255, 0.65); background: rgba(102, 171, 255, 0.09); }
   .cell-input.selected-range { background: rgba(102, 171, 255, 0.12); }
-  .cell-input[readonly] { color: #b9b9c5; }
-  .readonly-cell { background: rgba(255,255,255,0.02); }
+  .cell-input[readonly] { color: var(--color-text-muted); }
+  .readonly-cell { background: color-mix(in srgb, var(--color-text-primary) 2%, transparent); }
 
   .lock-btn {
     box-sizing: border-box;
     width: 100%;
     height: calc(var(--table-row-height, 34px) + var(--table-grid-border-width, 1px));
     border: none;
-    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, rgba(255,255,255,0.06));
+    border-bottom: var(--table-grid-border-width, 1px) solid var(--table-grid-border-color, var(--color-border-subtle));
     background: transparent;
-    color: #c8c8d3;
+    color: var(--color-text-muted);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
   }
-  .lock-btn:hover { background: rgba(255,255,255,0.08); color: #ff8866; }
+  .lock-btn:hover { background: color-mix(in srgb, var(--color-text-primary) 6%, transparent); color: var(--color-brand-500); }
   .lock-icon { display: block; }
 </style>

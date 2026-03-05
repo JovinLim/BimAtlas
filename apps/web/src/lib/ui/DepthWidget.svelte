@@ -88,7 +88,7 @@
     font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #888;
+    color: var(--color-text-muted);
   }
 
   .stepper {
@@ -96,8 +96,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 0;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
     overflow: hidden;
   }
@@ -105,7 +105,7 @@
   .step-btn {
     background: none;
     border: none;
-    color: #ccc;
+    color: var(--color-text-secondary);
     width: 28px;
     height: 28px;
     display: flex;
@@ -120,8 +120,8 @@
   }
 
   .step-btn:hover:not(:disabled) {
-    background: rgba(255, 102, 68, 0.2);
-    color: #ff8866;
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    color: var(--color-brand-500);
   }
 
   .step-btn:disabled {
@@ -135,7 +135,7 @@
     text-align: center;
     font-size: 0.82rem;
     font-weight: 600;
-    color: #ff8866;
+    color: var(--color-brand-500);
     font-variant-numeric: tabular-nums;
     background: transparent;
     border: none;
@@ -152,6 +152,6 @@
   }
 
   .value-input:focus {
-    background: rgba(255, 136, 102, 0.1);
+    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
   }
 </style>
