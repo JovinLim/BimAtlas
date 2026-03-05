@@ -78,6 +78,7 @@
   let graphChannel: BroadcastChannel | null = null;
   let tablePopup: Window | null = null;
   let tableChannel: BroadcastChannel | null = null;
+  let schemaPopup: Window | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -133,6 +134,7 @@
   let loadingGeometryTotal = $state(0);
   let totalCountKey = $state<string | null>(null);
   let productTreeKey = $state<string | null>(null);
+  let geometryAbort: AbortController | null = null;
 
   // ---- Project / Branch state ----
   interface ProjectData {
@@ -667,6 +669,23 @@
     }
   }
 
+  function openSchemaPopup() {
+    if (!schemaPopup || schemaPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/schema?${query}` : "/schema";
+      schemaPopup = window.open(url, "bimatlas-schema", "width=900,height=700");
+    } else {
+      schemaPopup.focus();
+    }
+  }
+
   function filtersToQueryVars(
     filters: SearchFilter[],
   ): Record<string, unknown> {
@@ -706,6 +725,8 @@
 
     const extraVars = filters.length > 0 ? filtersToQueryVars(filters) : {};
     await loadGeometry(mgr, rev, branchId, extraVars);
+    if (projectState.activeBranchId !== branchId) return;
+
     await ensureTotalProductCount(branchId, rev);
 
     searchChannel?.postMessage({
@@ -753,7 +774,10 @@
         ? filterSetsToQueryVars(filterSets, combinationLogic)
         : {};
     await loadGeometry(mgr, rev, branchId, extraVars);
+    if (projectState.activeBranchId !== branchId) return;
+
     await ensureTotalProductCount(branchId, rev);
+    if (projectState.activeBranchId !== branchId) return;
 
     if (filterSetColorsEnabled && filterSets.length > 0) {
       await applyFilterSetColorsToScene(mgr, branchId, rev);
@@ -812,8 +836,11 @@
     }
 
     await ensureProductTree(branchId, revision);
+    if (projectState.activeBranchId !== branchId) return;
 
     const hasAppliedSets = await autoLoadAppliedFilterSets(branchId);
+    if (projectState.activeBranchId !== branchId) return;
+
     if (!hasAppliedSets) {
       await loadGeometry(mgr, revision, branchId);
       return;
@@ -827,7 +854,8 @@
     try {
       const params = streamQueryParams(branchId, revision, {});
       const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
-      const res = await fetch(url);
+      const signal = geometryAbort?.signal;
+      const res = await fetch(url, signal ? { signal } : undefined);
       if (!res.ok || !res.body) return;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -850,7 +878,8 @@
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
       console.warn("Failed to fetch unfiltered total count:", err);
     }
   }
@@ -1129,13 +1158,26 @@
     return params;
   }
 
+  function cancelGeometryLoad() {
+    if (geometryAbort) {
+      geometryAbort.abort();
+      geometryAbort = null;
+    }
+    loadingGeometry = false;
+    loadingGeometryCurrent = 0;
+    loadingGeometryTotal = 0;
+  }
+
   async function loadGeometry(
     mgr: SceneManager,
     revision: number,
     branchId: string,
     filterVars: Record<string, unknown> = {},
   ) {
-    if (loadingGeometry) return;
+    cancelGeometryLoad();
+    const abort = new AbortController();
+    geometryAbort = abort;
+
     loadingGeometry = true;
     loadingGeometryCurrent = 0;
     loadingGeometryTotal = 0;
@@ -1143,7 +1185,7 @@
     try {
       const params = streamQueryParams(branchId, revision, filterVars);
       const url = `${API_BASE}/stream/ifc-products?${params.toString()}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: abort.signal });
 
       if (!res.ok) {
         console.error("Failed to fetch geometry stream:", res.status);
@@ -1164,6 +1206,7 @@
       }
 
       while (!streamEnded) {
+        if (abort.signal.aborted) break;
         const { done, value } = await reader.read();
         if (done && !buffer.trim()) break;
         if (value) buffer += decoder.decode(value, { stream: true });
@@ -1215,6 +1258,7 @@
                   );
                 }
               }
+              if (abort.signal.aborted) break;
               await new Promise((r) => requestAnimationFrame(r));
               continue;
             }
@@ -1226,7 +1270,7 @@
             console.warn("Parse stream chunk:", e);
           }
         }
-        if (done || streamEnded) break;
+        if (done || streamEnded || abort.signal.aborted) break;
       }
 
       if (buffer.trim()) {
@@ -1263,10 +1307,10 @@
         }
       }
 
+      if (abort.signal.aborted) return;
+
       searchState.setProducts(metaList);
 
-      // If the Table popup is open, push updated context so it sees
-      // the latest filtered entities instead of only the initial snapshot.
       try {
         sendTableContext();
       } catch {
@@ -1281,12 +1325,16 @@
       if (mgr.elementCount > 0) {
         mgr.fitToContent();
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
       console.error("Failed to load geometry:", err);
     } finally {
-      loadingGeometry = false;
-      loadingGeometryCurrent = 0;
-      loadingGeometryTotal = 0;
+      if (geometryAbort === abort) {
+        loadingGeometry = false;
+        loadingGeometryCurrent = 0;
+        loadingGeometryTotal = 0;
+        geometryAbort = null;
+      }
     }
   }
 
@@ -1380,6 +1428,10 @@
         aria-label="BimAtlas – go to project selection"
         title="Go to project selection"
         onclick={() => {
+          cancelGeometryLoad();
+          sceneManager?.clearAll();
+          lastFetchedRev = null;
+          lastFetchedBranchId = null;
           projectState.activeProjectId = null;
           projectState.activeBranchId = null;
           revisionState.activeRevision = null;
@@ -2013,6 +2065,28 @@
               />
             </svg>
             Table
+          </button>
+          <!-- Schema Browser popup button -->
+          <button
+            class="schema-btn"
+            onclick={openSchemaPopup}
+            aria-label="Open schema browser"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                d="M9 5a2 2 0 012-2h2a2 2 0 012 2v0a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Schema
           </button>
           <!-- Attribute panel pop-out button -->
           <button
@@ -3066,6 +3140,7 @@
   .search-btn,
   .graph-btn,
   .table-btn,
+  .schema-btn,
   .attributes-btn,
   .agent-btn {
     display: inline-flex;
@@ -3088,6 +3163,7 @@
   .search-btn:hover,
   .graph-btn:hover,
   .table-btn:hover,
+  .schema-btn:hover,
   .attributes-btn:hover,
   .agent-btn:hover {
     background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);

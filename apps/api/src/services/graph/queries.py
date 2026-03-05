@@ -75,3 +75,53 @@ ELEMENT_RELATIONS = (
     "RETURN a.ifc_global_id AS src, label(a) AS src_lbl, a.name AS src_name, "
     "b.ifc_global_id AS dst, label(b) AS dst_lbl, b.name AS dst_name, type(r) AS rel"
 )
+
+# ---------------------------------------------------------------------------
+# Validation schema management
+# ---------------------------------------------------------------------------
+
+RULES_FOR_SCHEMA = (
+    "MATCH (schema {{ifc_global_id: '{schema_gid}'}})"
+    "<-[r:IfcRelValidationToSchema]-(rule) "
+    "WHERE {schema_filter} AND {r_filter} AND {rule_filter} "
+    "RETURN rule.ifc_global_id AS gid"
+)
+
+SCHEMA_FOR_RULE = (
+    "MATCH (rule {{ifc_global_id: '{rule_gid}'}})"
+    "-[r:IfcRelValidationToSchema]->(schema) "
+    "WHERE {rule_filter} AND {r_filter} AND {schema_filter} "
+    "RETURN schema.ifc_global_id AS gid"
+)
+
+# ---------------------------------------------------------------------------
+# Subgraph validation scoping queries
+# ---------------------------------------------------------------------------
+
+ENTITIES_IN_SPATIAL_SCOPE = (
+    "MATCH (spatial {{ifc_global_id: '{scope_gid}'}})"
+    "<-[r:IfcRelContainedInSpatialStructure]-(elem) "
+    "WHERE {spatial_filter} AND {r_filter} AND {elem_filter} "
+    "RETURN elem.ifc_global_id AS gid"
+)
+
+ENTITIES_IN_SPATIAL_SCOPE_BY_NAME = (
+    "MATCH (spatial {{name: '{scope_name}'}})"
+    "<-[r:IfcRelContainedInSpatialStructure]-(elem) "
+    "WHERE {spatial_filter} AND {r_filter} AND {elem_filter} "
+    "RETURN elem.ifc_global_id AS gid"
+)
+
+ENTITIES_IN_AGGREGATE_SCOPE = (
+    "MATCH (parent {{ifc_global_id: '{parent_gid}'}})"
+    "-[r:IfcRelAggregates]->(child) "
+    "WHERE {parent_filter} AND {r_filter} AND {child_filter} "
+    "RETURN child.ifc_global_id AS gid"
+)
+
+ENTITIES_CONNECTED_VIA = (
+    "MATCH (source {{ifc_global_id: '{source_gid}'}})"
+    "-[r:{rel_type}]-(target) "
+    "WHERE {source_filter} AND {r_filter} AND {target_filter} "
+    "RETURN target.ifc_global_id AS gid"
+)

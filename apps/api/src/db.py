@@ -1651,6 +1651,116 @@ def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Validation entity CRUD (IfcValidation / IfcValidationSchema / IfcValidationResult)
+# ---------------------------------------------------------------------------
+
+_VALIDATION_CLASSES = frozenset(
+    {"IfcValidation", "IfcValidationSchema", "IfcValidationResult"}
+)
+
+_VALIDATION_ENTITY_COLS = (
+    "e.entity_id, e.ifc_global_id, e.ifc_class, e.attributes"
+)
+
+
+def _content_hash(attributes: dict) -> str:
+    """SHA-256 of canonical JSON for SCD change detection."""
+    canonical = json.dumps(attributes, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def create_validation_revision(
+    branch_id: str, commit_message: str = "validation change",
+) -> dict:
+    """Create a lightweight revision for validation entity changes."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO revision (branch_id, author_id, commit_message) "
+            "VALUES (%s, %s, %s) "
+            "RETURNING revision_id, revision_seq",
+            (branch_id, "system", commit_message),
+        )
+        row = cur.fetchone()
+        return {"revision_id": str(row["revision_id"]),
+                "revision_seq": row["revision_seq"]}
+
+
+def create_validation_entity(
+    branch_id: str,
+    revision_id: str,
+    ifc_class: str,
+    attributes: dict,
+) -> dict:
+    """Insert a validation entity into ``ifc_entity``. Returns the created row."""
+    if ifc_class not in _VALIDATION_CLASSES:
+        raise ValueError(f"ifc_class must be one of {_VALIDATION_CLASSES}")
+
+    global_id = str(uuid4())
+    ch = _content_hash(attributes)
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO ifc_entity "
+            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, "
+            " created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING entity_id, ifc_global_id, ifc_class, attributes",
+            (branch_id, global_id, ifc_class,
+             json.dumps(attributes), ch, revision_id),
+        )
+        row = cur.fetchone()
+        return dict(row)
+
+
+def update_validation_entity(
+    branch_id: str,
+    global_id: str,
+    revision_id: str,
+    new_attributes: dict,
+) -> dict | None:
+    """SCD Type 2 update: close old row, insert new one. Returns new entity."""
+    ch = _content_hash(new_attributes)
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
+            "WHERE branch_id = %s AND ifc_global_id = %s "
+            "  AND obsoleted_in_revision_id IS NULL "
+            "RETURNING ifc_class",
+            (revision_id, branch_id, global_id),
+        )
+        old = cur.fetchone()
+        if old is None:
+            return None
+
+        cur.execute(
+            "INSERT INTO ifc_entity "
+            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, "
+            " created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING entity_id, ifc_global_id, ifc_class, attributes",
+            (branch_id, global_id, old["ifc_class"],
+             json.dumps(new_attributes), ch, revision_id),
+        )
+        row = cur.fetchone()
+        return dict(row)
+
+
+def delete_validation_entity(
+    branch_id: str, global_id: str, revision_id: str,
+) -> bool:
+    """SCD Type 2 delete: close the current row. Returns True if found."""
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
+            "WHERE branch_id = %s AND ifc_global_id = %s "
+            "  AND obsoleted_in_revision_id IS NULL",
+            (revision_id, branch_id, global_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
 # Agent CRUD (IfcAgent as ifc_entity)
 # ---------------------------------------------------------------------------
 # Agents are stored as ifc_entity rows with ifc_class='IfcAgent'. Attributes
@@ -1726,8 +1836,10 @@ def create_agent_config(
         revision_id = cur.fetchone()["revision_id"]
         cur.execute(
             "INSERT INTO ifc_entity "
-            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, created_in_revision_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING entity_id, attributes",
+            "(branch_id, ifc_global_id, ifc_class, attributes, "
+            " content_hash, created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING entity_id, attributes",
             (
                 branch_id,
                 ifc_global_id,
@@ -1824,8 +1936,10 @@ def update_agent_config(
         )
         cur.execute(
             "INSERT INTO ifc_entity "
-            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, created_in_revision_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING entity_id, attributes",
+            "(branch_id, ifc_global_id, ifc_class, attributes, "
+            " content_hash, created_in_revision_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING entity_id, attributes",
             (
                 branch_id,
                 ifc_global_id,
@@ -1866,6 +1980,60 @@ def delete_agent_config(entity_id: str) -> bool:
             (revision_id, entity_id),
         )
         return cur.rowcount > 0
+
+
+def fetch_validation_entities(
+    branch_id: str,
+    ifc_class: str,
+    revision_seq: int | None = None,
+) -> list[dict]:
+    """Fetch all current validation entities of *ifc_class* on *branch_id*."""
+    if revision_seq is None:
+        with get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                f"SELECT {_VALIDATION_ENTITY_COLS} FROM ifc_entity e "
+                "WHERE e.branch_id = %s AND e.ifc_class = %s "
+                "  AND e.obsoleted_in_revision_id IS NULL",
+                (branch_id, ifc_class),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_VALIDATION_ENTITY_COLS} FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s AND e.ifc_class = %s AND {_REV_FILTER}",
+            (branch_id, ifc_class, revision_seq, revision_seq),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_validation_entity(
+    branch_id: str,
+    global_id: str,
+    revision_seq: int | None = None,
+) -> dict | None:
+    """Fetch a single validation entity by global_id."""
+    if revision_seq is None:
+        with get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                f"SELECT {_VALIDATION_ENTITY_COLS} FROM ifc_entity e "
+                "WHERE e.branch_id = %s AND e.ifc_global_id = %s "
+                "  AND e.obsoleted_in_revision_id IS NULL "
+                "LIMIT 1",
+                (branch_id, global_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_VALIDATION_ENTITY_COLS} FROM {_ENTITY_FROM} "
+            f"WHERE e.branch_id = %s AND e.ifc_global_id = %s AND {_REV_FILTER} "
+            f"LIMIT 1",
+            (branch_id, global_id, revision_seq, revision_seq),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------

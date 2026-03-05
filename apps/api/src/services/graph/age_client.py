@@ -502,3 +502,158 @@ def _build_subtree(node: dict, rev: int, branch_id: str) -> dict:
         "children": [_build_subtree(c, rev, branch_id) for c in children_data],
         "contained_elements": contained,
     }
+
+
+# ---------------------------------------------------------------------------
+# Validation schema management
+# ---------------------------------------------------------------------------
+
+_VALIDATION_CLASSES = frozenset(
+    {"IfcValidation", "IfcValidationSchema", "IfcValidationResult"}
+)
+
+
+def create_validation_node(
+    ifc_class: str,
+    global_id: str,
+    name: str | None,
+    rev_id: int,
+    branch_id: str,
+) -> None:
+    """Create a graph node for a validation entity."""
+    if ifc_class not in _VALIDATION_CLASSES:
+        raise ValueError(f"ifc_class must be one of {_VALIDATION_CLASSES}")
+    create_node(ifc_class, global_id, name, rev_id, branch_id)
+
+
+def link_rule_to_schema(
+    rule_global_id: str,
+    schema_global_id: str,
+    rev_id: int,
+    branch_id: str,
+) -> None:
+    """Create an IfcRelValidationToSchema edge from rule to schema."""
+    create_edge(rule_global_id, schema_global_id,
+                "IfcRelValidationToSchema", rev_id, branch_id)
+
+
+def unlink_rule_from_schema(
+    rule_global_id: str,
+    schema_global_id: str,
+    rev_id: int,
+    branch_id: str,
+) -> None:
+    """Close the IfcRelValidationToSchema edge between rule and schema."""
+    r_gid = _validate_id(rule_global_id)
+    s_gid = _validate_id(schema_global_id)
+    r = int(rev_id)
+    b = _escape_cypher_string(str(branch_id))
+    cypher = (
+        f"MATCH (rule {{ifc_global_id: '{r_gid}', branch_id: '{b}'}})"
+        f"-[r:IfcRelValidationToSchema {{branch_id: '{b}', valid_to_rev: -1}}]->"
+        f"(schema {{ifc_global_id: '{s_gid}', branch_id: '{b}'}}) "
+        f"SET r.valid_to_rev = {r} "
+        f"RETURN id(r)"
+    )
+    _exec_cypher_write(cypher)
+
+
+def get_rules_for_schema(
+    schema_global_id: str, rev: int, branch_id: str,
+) -> list[str]:
+    """Return global_ids of IfcValidation nodes linked to a schema."""
+    gid = _validate_id(schema_global_id)
+    cypher = cypher_tpl.RULES_FOR_SCHEMA.format(
+        schema_gid=gid,
+        schema_filter=_rev_filter("schema", rev, branch_id),
+        r_filter=_rev_filter("r", rev, branch_id),
+        rule_filter=_rev_filter("rule", rev, branch_id),
+    )
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]
+
+
+def get_schema_for_rule(
+    rule_global_id: str, rev: int, branch_id: str,
+) -> str | None:
+    """Return the schema global_id a rule belongs to, if any."""
+    gid = _validate_id(rule_global_id)
+    cypher = cypher_tpl.SCHEMA_FOR_RULE.format(
+        rule_gid=gid,
+        rule_filter=_rev_filter("rule", rev, branch_id),
+        r_filter=_rev_filter("r", rev, branch_id),
+        schema_filter=_rev_filter("schema", rev, branch_id),
+    )
+    cols = ["gid"]
+    rows = _exec_cypher(cypher, cols)
+    return rows[0][0] if rows else None
+
+
+# ---------------------------------------------------------------------------
+# Subgraph validation scoping
+# ---------------------------------------------------------------------------
+
+
+def get_entities_in_spatial_scope(
+    scope_global_id: str | None,
+    scope_name: str | None,
+    rev: int,
+    branch_id: str,
+) -> list[str]:
+    """Return global_ids of entities contained in a spatial container."""
+    if scope_global_id:
+        gid = _validate_id(scope_global_id)
+        cypher = cypher_tpl.ENTITIES_IN_SPATIAL_SCOPE.format(
+            scope_gid=gid,
+            spatial_filter=_rev_filter("spatial", rev, branch_id),
+            r_filter=_rev_filter("r", rev, branch_id),
+            elem_filter=_rev_filter("elem", rev, branch_id),
+        )
+    elif scope_name:
+        safe_name = _escape_cypher_string(scope_name)
+        cypher = cypher_tpl.ENTITIES_IN_SPATIAL_SCOPE_BY_NAME.format(
+            scope_name=safe_name,
+            spatial_filter=_rev_filter("spatial", rev, branch_id),
+            r_filter=_rev_filter("r", rev, branch_id),
+            elem_filter=_rev_filter("elem", rev, branch_id),
+        )
+    else:
+        return []
+
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]
+
+
+def get_entities_in_aggregate_scope(
+    parent_global_id: str, rev: int, branch_id: str,
+) -> list[str]:
+    """Return global_ids of children via IfcRelAggregates."""
+    gid = _validate_id(parent_global_id)
+    cypher = cypher_tpl.ENTITIES_IN_AGGREGATE_SCOPE.format(
+        parent_gid=gid,
+        parent_filter=_rev_filter("parent", rev, branch_id),
+        r_filter=_rev_filter("r", rev, branch_id),
+        child_filter=_rev_filter("child", rev, branch_id),
+    )
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]
+
+
+def get_entities_connected_via(
+    source_global_id: str,
+    rel_type: str,
+    rev: int,
+    branch_id: str,
+) -> list[str]:
+    """Return global_ids of entities connected via a specific relationship."""
+    gid = _validate_id(source_global_id)
+    label = _validate_label(rel_type)
+    cypher = cypher_tpl.ENTITIES_CONNECTED_VIA.format(
+        source_gid=gid,
+        rel_type=label,
+        source_filter=_rev_filter("source", rev, branch_id),
+        r_filter=_rev_filter("r", rev, branch_id),
+        target_filter=_rev_filter("target", rev, branch_id),
+    )
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]

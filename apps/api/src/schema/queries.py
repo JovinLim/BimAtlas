@@ -27,11 +27,14 @@ from ..db import (
     create_filter_set as db_create_filter_set,
     create_project,
     create_sheet_template as db_create_sheet_template,
+    create_validation_entity as db_create_validation_entity,
+    create_validation_revision as db_create_validation_revision,
     delete_branch as db_delete_branch,
     delete_sheet_template as db_delete_sheet_template,
     delete_filter_set as db_delete_filter_set,
     delete_project as db_delete_project,
     delete_revision as db_delete_revision,
+    delete_validation_entity as db_delete_validation_entity,
     fetch_applied_filter_sets,
     fetch_branch,
     fetch_branches,
@@ -53,13 +56,27 @@ from ..db import (
     fetch_sheet_templates_for_project,
     fetch_sheet_templates_opened,
     fetch_spatial_container,
+    fetch_validation_entities as db_fetch_validation_entities,
+    fetch_validation_entity as db_fetch_validation_entity,
     update_sheet_template as db_update_sheet_template,
+    update_validation_entity as db_update_validation_entity,
     get_latest_revision_seq,
     search_filter_sets,
     search_sheet_templates,
     update_filter_set as db_update_filter_set,
 )
-from ..services.graph.age_client import build_spatial_tree, get_element_relations, get_relations
+from ..services.graph.age_client import (
+    build_spatial_tree,
+    create_validation_node,
+    get_element_relations,
+    get_relations,
+    get_rules_for_schema,
+    link_rule_to_schema as age_link_rule,
+    unlink_rule_from_schema as age_unlink_rule,
+)
+from ..services.validation.engine import (
+    run_validation as engine_run_validation,
+)
 from .ifc_enums import IfcRelationshipType
 from . import ifc_schema_loader
 from .ifc_types import (
@@ -70,6 +87,10 @@ from .ifc_types import (
     FilterSet,
     FilterSetFilter,
     FilterSetMatch,
+    IfcValidationCondition,
+    IfcValidationRule,
+    IfcValidationSchemaType,
+    IfcValidationSpatialContext,
     SheetTemplate,
     IfcMeshRepresentation,
     IfcProduct,
@@ -83,6 +104,11 @@ from .ifc_types import (
     Revision,
     RevisionDiff,
     RevisionDiffEntry,
+    ValidationConditionInput,
+    ValidationRuleResult,
+    ValidationRunResultType,
+    ValidationSpatialContextInput,
+    ValidationViolation,
 )
 
 
@@ -340,6 +366,68 @@ def _dict_to_spatial_node(d: dict) -> IfcSpatialNode:
 def _to_iso(dt) -> str:
     """Convert a datetime to ISO 8601 string."""
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+# ---------------------------------------------------------------------------
+# Validation entity helpers
+# ---------------------------------------------------------------------------
+
+
+def _row_to_validation_rule(row: dict) -> IfcValidationRule:
+    """Convert a DB row for an IfcValidation entity into a GraphQL type."""
+    attrs = row.get("attributes") or {}
+    if isinstance(attrs, str):
+        attrs = json.loads(attrs)
+
+    conditions_raw = attrs.get("Conditions") or []
+    conditions = [
+        IfcValidationCondition(
+            path=c.get("path", ""),
+            operator=c.get("operator", "exists"),
+            value=c.get("value"),
+        )
+        for c in conditions_raw
+        if isinstance(c, dict)
+    ]
+
+    spatial_ctx = None
+    sc_raw = attrs.get("SpatialContext")
+    if isinstance(sc_raw, dict):
+        spatial_ctx = IfcValidationSpatialContext(
+            traversal=sc_raw.get("traversal", ""),
+            scope_class=sc_raw.get("scope_class"),
+            scope_name=sc_raw.get("scope_name"),
+            scope_global_id=sc_raw.get("scope_global_id"),
+        )
+
+    return IfcValidationRule(
+        global_id=row["ifc_global_id"],
+        name=attrs.get("Name", ""),
+        description=attrs.get("Description"),
+        rule_type=attrs.get("RuleType"),
+        target_class=attrs.get("TargetClass"),
+        severity=attrs.get("Severity", "Error"),
+        conditions=conditions,
+        spatial_context=spatial_ctx,
+        include_subtypes=bool(attrs.get("IncludeSubtypes", False)),
+    )
+
+
+def _row_to_validation_schema(
+    row: dict, rules: list[IfcValidationRule] | None = None,
+) -> IfcValidationSchemaType:
+    """Convert a DB row for an IfcValidationSchema entity into a GraphQL type."""
+    attrs = row.get("attributes") or {}
+    if isinstance(attrs, str):
+        attrs = json.loads(attrs)
+    return IfcValidationSchemaType(
+        global_id=row["ifc_global_id"],
+        name=attrs.get("Name", ""),
+        description=attrs.get("Description"),
+        version=attrs.get("Version"),
+        is_active=bool(attrs.get("IsActive", True)),
+        rules=rules or [],
+    )
 
 
 def _row_to_filter_set(row: dict) -> FilterSet:
@@ -780,6 +868,135 @@ class Query:
         row = fetch_sheet_template(id)
         return _row_to_sheet_template(row) if row else None
 
+    # ---- Validation queries ------------------------------------------------
+
+    @strawberry.field
+    async def validation_schemas(
+        self,
+        branch_id: str,
+        revision: Optional[int] = None,
+    ) -> list[IfcValidationSchemaType]:
+        """List all validation schemas on a branch."""
+        rev = revision
+        rows = db_fetch_validation_entities(branch_id, "IfcValidationSchema", rev)
+        result = []
+        for row in rows:
+            actual_rev = revision or get_latest_revision_seq(branch_id)
+            rules_gids = []
+            if actual_rev is not None:
+                try:
+                    rules_gids = get_rules_for_schema(
+                        row["ifc_global_id"], actual_rev, branch_id,
+                    )
+                except Exception:
+                    pass
+            rule_rows = []
+            for rgid in rules_gids:
+                rrow = db_fetch_validation_entity(branch_id, rgid, revision)
+                if rrow:
+                    rule_rows.append(_row_to_validation_rule(rrow))
+            result.append(_row_to_validation_schema(row, rule_rows))
+        return result
+
+    @strawberry.field
+    async def validation_schema(
+        self,
+        branch_id: str,
+        global_id: str,
+        revision: Optional[int] = None,
+    ) -> Optional[IfcValidationSchemaType]:
+        """Fetch a single validation schema by global_id."""
+        row = db_fetch_validation_entity(branch_id, global_id, revision)
+        if row is None:
+            return None
+        actual_rev = revision or get_latest_revision_seq(branch_id)
+        rules_gids = []
+        if actual_rev is not None:
+            try:
+                rules_gids = get_rules_for_schema(global_id, actual_rev, branch_id)
+            except Exception:
+                pass
+        rule_rows = []
+        for rgid in rules_gids:
+            rrow = db_fetch_validation_entity(branch_id, rgid, revision)
+            if rrow:
+                rule_rows.append(_row_to_validation_rule(rrow))
+        return _row_to_validation_schema(row, rule_rows)
+
+    @strawberry.field
+    async def validation_rules(
+        self,
+        branch_id: str,
+        schema_global_id: Optional[str] = None,
+        revision: Optional[int] = None,
+    ) -> list[IfcValidationRule]:
+        """List validation rules, optionally filtered by schema."""
+        if schema_global_id:
+            actual_rev = revision or get_latest_revision_seq(branch_id)
+            if actual_rev is None:
+                return []
+            try:
+                rules_gids = get_rules_for_schema(
+                    schema_global_id, actual_rev, branch_id,
+                )
+            except Exception:
+                return []
+            rules = []
+            for rgid in rules_gids:
+                rrow = db_fetch_validation_entity(branch_id, rgid, revision)
+                if rrow:
+                    rules.append(_row_to_validation_rule(rrow))
+            return rules
+        rows = db_fetch_validation_entities(branch_id, "IfcValidation", revision)
+        return [_row_to_validation_rule(r) for r in rows]
+
+    @strawberry.field
+    async def validation_results(
+        self,
+        branch_id: str,
+        revision: Optional[int] = None,
+    ) -> list[ValidationRunResultType]:
+        """List validation run results on a branch."""
+        rows = db_fetch_validation_entities(
+            branch_id, "IfcValidationResult", revision,
+        )
+        results = []
+        for row in rows:
+            attrs = row.get("attributes") or {}
+            if isinstance(attrs, str):
+                attrs = json.loads(attrs)
+            summary = attrs.get("Summary") or {}
+            raw_results = attrs.get("Results") or []
+            rule_results = []
+            for rr in raw_results:
+                violations = [
+                    ValidationViolation(
+                        global_id=v.get("global_id", ""),
+                        ifc_class=v.get("ifc_class", ""),
+                        message=v.get("message", ""),
+                    )
+                    for v in (rr.get("violations") or [])
+                ]
+                rule_results.append(ValidationRuleResult(
+                    rule_global_id=rr.get("rule_global_id", ""),
+                    rule_name=rr.get("rule_name", ""),
+                    severity=rr.get("severity", "Error"),
+                    passed=rr.get("passed", False),
+                    violations=violations,
+                ))
+            results.append(ValidationRunResultType(
+                schema_global_id=attrs.get("SchemaGlobalId", ""),
+                schema_name=attrs.get("SchemaName", ""),
+                branch_id=branch_id,
+                revision_seq=0,
+                results=rule_results,
+                error_count=summary.get("errors", 0),
+                warning_count=summary.get("warnings", 0),
+                info_count=summary.get("info", 0),
+                passed_count=summary.get("passed", 0),
+            ))
+        return results
+
 
 # ---------------------------------------------------------------------------
 # Mutations
@@ -945,3 +1162,264 @@ class Mutation:
     async def delete_sheet_template(self, id: str) -> bool:
         """Delete a sheet template by id."""
         return db_delete_sheet_template(id)
+
+    # ---- Validation mutations ----------------------------------------------
+
+    @strawberry.mutation
+    async def create_validation_schema(
+        self,
+        branch_id: str,
+        name: str,
+        description: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> IfcValidationSchemaType:
+        """Create a new validation schema entity."""
+        attrs = {
+            "Name": name,
+            "Description": description,
+            "Version": version,
+            "IsActive": True,
+        }
+        rev_info = db_create_validation_revision(
+            branch_id, f"Create validation schema: {name}",
+        )
+        row = db_create_validation_entity(
+            branch_id, rev_info["revision_id"],
+            "IfcValidationSchema", attrs,
+        )
+        try:
+            create_validation_node(
+                "IfcValidationSchema", row["ifc_global_id"],
+                name, rev_info["revision_seq"], branch_id,
+            )
+        except Exception:
+            pass
+        return _row_to_validation_schema(row)
+
+    @strawberry.mutation
+    async def update_validation_schema(
+        self,
+        branch_id: str,
+        global_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> Optional[IfcValidationSchemaType]:
+        """Update a validation schema entity."""
+        existing = db_fetch_validation_entity(branch_id, global_id)
+        if existing is None:
+            return None
+        attrs = existing.get("attributes") or {}
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+        if name is not None:
+            attrs["Name"] = name
+        if description is not None:
+            attrs["Description"] = description
+        if version is not None:
+            attrs["Version"] = version
+        rev_info = db_create_validation_revision(
+            branch_id, f"Update validation schema: {attrs.get('Name', '')}",
+        )
+        row = db_update_validation_entity(
+            branch_id, global_id, rev_info["revision_id"], attrs,
+        )
+        return _row_to_validation_schema(row) if row else None
+
+    @strawberry.mutation
+    async def delete_validation_schema(
+        self, branch_id: str, global_id: str,
+    ) -> bool:
+        """Delete a validation schema entity."""
+        rev_info = db_create_validation_revision(
+            branch_id, "Delete validation schema",
+        )
+        return db_delete_validation_entity(
+            branch_id, global_id, rev_info["revision_id"],
+        )
+
+    @strawberry.mutation
+    async def create_validation_rule(
+        self,
+        branch_id: str,
+        name: str,
+        target_class: str,
+        severity: str = "Error",
+        description: Optional[str] = None,
+        rule_type: Optional[str] = None,
+        include_subtypes: bool = False,
+        conditions: Optional[list[ValidationConditionInput]] = None,
+        spatial_context: Optional[ValidationSpatialContextInput] = None,
+    ) -> IfcValidationRule:
+        """Create a new validation rule entity."""
+        attrs: dict = {
+            "Name": name,
+            "Description": description,
+            "RuleType": rule_type or "attribute_check",
+            "TargetClass": target_class,
+            "Severity": severity,
+            "IncludeSubtypes": include_subtypes,
+            "Conditions": [
+                {"path": c.path, "operator": c.operator, "value": c.value}
+                for c in (conditions or [])
+            ],
+        }
+        if spatial_context:
+            attrs["SpatialContext"] = {
+                "traversal": spatial_context.traversal,
+                "scope_class": spatial_context.scope_class,
+                "scope_name": spatial_context.scope_name,
+                "scope_global_id": spatial_context.scope_global_id,
+            }
+        rev_info = db_create_validation_revision(
+            branch_id, f"Create validation rule: {name}",
+        )
+        row = db_create_validation_entity(
+            branch_id, rev_info["revision_id"], "IfcValidation", attrs,
+        )
+        try:
+            create_validation_node(
+                "IfcValidation", row["ifc_global_id"],
+                name, rev_info["revision_seq"], branch_id,
+            )
+        except Exception:
+            pass
+        return _row_to_validation_rule(row)
+
+    @strawberry.mutation
+    async def update_validation_rule(
+        self,
+        branch_id: str,
+        global_id: str,
+        name: Optional[str] = None,
+        target_class: Optional[str] = None,
+        severity: Optional[str] = None,
+        description: Optional[str] = None,
+        include_subtypes: Optional[bool] = None,
+        conditions: Optional[list[ValidationConditionInput]] = None,
+        spatial_context: Optional[ValidationSpatialContextInput] = None,
+    ) -> Optional[IfcValidationRule]:
+        """Update a validation rule entity."""
+        existing = db_fetch_validation_entity(branch_id, global_id)
+        if existing is None:
+            return None
+        attrs = existing.get("attributes") or {}
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+        if name is not None:
+            attrs["Name"] = name
+        if target_class is not None:
+            attrs["TargetClass"] = target_class
+        if severity is not None:
+            attrs["Severity"] = severity
+        if description is not None:
+            attrs["Description"] = description
+        if include_subtypes is not None:
+            attrs["IncludeSubtypes"] = include_subtypes
+        if conditions is not None:
+            attrs["Conditions"] = [
+                {"path": c.path, "operator": c.operator, "value": c.value}
+                for c in conditions
+            ]
+        if spatial_context is not None:
+            attrs["SpatialContext"] = {
+                "traversal": spatial_context.traversal,
+                "scope_class": spatial_context.scope_class,
+                "scope_name": spatial_context.scope_name,
+                "scope_global_id": spatial_context.scope_global_id,
+            }
+        rev_info = db_create_validation_revision(
+            branch_id, f"Update validation rule: {attrs.get('Name', '')}",
+        )
+        row = db_update_validation_entity(
+            branch_id, global_id, rev_info["revision_id"], attrs,
+        )
+        return _row_to_validation_rule(row) if row else None
+
+    @strawberry.mutation
+    async def delete_validation_rule(
+        self, branch_id: str, global_id: str,
+    ) -> bool:
+        """Delete a validation rule entity."""
+        rev_info = db_create_validation_revision(
+            branch_id, "Delete validation rule",
+        )
+        return db_delete_validation_entity(
+            branch_id, global_id, rev_info["revision_id"],
+        )
+
+    @strawberry.mutation
+    async def link_rule_to_schema(
+        self,
+        branch_id: str,
+        rule_global_id: str,
+        schema_global_id: str,
+    ) -> bool:
+        """Link a validation rule to a schema via graph edge."""
+        rev = get_latest_revision_seq(branch_id)
+        if rev is None:
+            rev_info = db_create_validation_revision(
+                branch_id, "Link rule to schema",
+            )
+            rev = rev_info["revision_seq"]
+        try:
+            age_link_rule(rule_global_id, schema_global_id, rev, branch_id)
+            return True
+        except Exception:
+            return False
+
+    @strawberry.mutation
+    async def unlink_rule_from_schema(
+        self,
+        branch_id: str,
+        rule_global_id: str,
+        schema_global_id: str,
+    ) -> bool:
+        """Unlink a validation rule from a schema."""
+        rev = get_latest_revision_seq(branch_id)
+        if rev is None:
+            return False
+        try:
+            age_unlink_rule(rule_global_id, schema_global_id, rev, branch_id)
+            return True
+        except Exception:
+            return False
+
+    @strawberry.mutation
+    async def run_validation(
+        self,
+        branch_id: str,
+        schema_global_id: str,
+        revision: Optional[int] = None,
+    ) -> ValidationRunResultType:
+        """Execute all rules in a validation schema against a branch."""
+        result = engine_run_validation(
+            schema_global_id, branch_id, revision,
+        )
+        return ValidationRunResultType(
+            schema_global_id=result.schema_global_id,
+            schema_name=result.schema_name,
+            branch_id=result.branch_id,
+            revision_seq=result.revision_seq,
+            results=[
+                ValidationRuleResult(
+                    rule_global_id=r.rule_global_id,
+                    rule_name=r.rule_name,
+                    severity=r.severity,
+                    passed=r.passed,
+                    violations=[
+                        ValidationViolation(
+                            global_id=v.global_id,
+                            ifc_class=v.ifc_class,
+                            message=v.message,
+                        )
+                        for v in r.violations
+                    ],
+                )
+                for r in result.results
+            ],
+            error_count=result.summary.get("errors", 0),
+            warning_count=result.summary.get("warnings", 0),
+            info_count=result.summary.get("info", 0),
+            passed_count=result.summary.get("passed", 0),
+        )
