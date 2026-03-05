@@ -27,6 +27,7 @@ BimAtlas is a monorepo with two apps and infrastructure:
 - **`psycopg2` build dependency:** `apache-age-python` depends on `psycopg2` (not binary). Building it requires `libpq-dev` and `python3-dev` system packages.
 - **`esbuild` build script:** pnpm blocks esbuild's postinstall by default. Add `"pnpm": {"onlyBuiltDependencies": ["esbuild"]}` to `apps/web/package.json` or run `pnpm install` after the first install triggers the esbuild binary download.
 - **PATH for `uv`:** After `pip install uv`, the binary lands in `~/.local/bin/`. Ensure `PATH` includes it.
+- **Reload hang with SSE:** With `--reload`, uvicorn waits for connections to close before restarting. SSE endpoints (`/stream/agent-events`, `/stream/ifc-products`) keep connections open indefinitely, so without `--timeout-graceful-shutdown` the server would hang until Ctrl+C. `run.sh` sets a 5s timeout (override via `UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN`).
 
 ### Running tests
 

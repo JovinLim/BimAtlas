@@ -5,6 +5,7 @@ Run with::
     uvicorn src.main:app --reload
 """
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -19,10 +20,19 @@ from fastapi.responses import StreamingResponse
 from strawberry.fastapi import GraphQLRouter
 
 from .db import (
+    add_chat_message,
     close_pool,
+    create_agent_chat,
+    create_agent_config,
+    delete_agent_chat,
+    delete_agent_config,
     delete_ifc_schema_with_rules,
-    fetch_branch,
+    fetch_agent_chats,
+    fetch_agent_configs_for_project,
     fetch_applied_filter_sets,
+    fetch_branch,
+    fetch_chat_messages,
+    fetch_project,
     fetch_entities_at_revision,
     fetch_entities_with_filter_sets,
     fetch_entity_attributes_for_global_ids,
@@ -30,10 +40,13 @@ from .db import (
     get_latest_revision_seq,
     init_pool,
     insert_validation_rules,
+    update_agent_chat,
+    update_agent_config,
     validation_schema_exists,
 )
 from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
 from .services.ifc.ingestion import ingest_ifc
+from .services.agent.live_streams import live_chat_streams
 
 logger = logging.getLogger("bimatlas")
 
@@ -353,3 +366,410 @@ async def delete_ifc_schema(schema_name: str):
             detail=f"Schema '{schema_name}' not found.",
         )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agent endpoints (FEAT-004 Agentic Filtering Framework)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/agent/chat")
+async def agent_chat(body: dict = Body(...)):
+    """Stream an agentic filtering conversation turn.
+
+    Supports persistent chat history via ``chatId``. When provided, the
+    backend loads prior messages from the DB, appends the user message
+    before streaming, and saves the assistant reply on completion.
+    """
+    message = body.get("message")
+    provider = body.get("provider")
+    model = body.get("model")
+    api_key = body.get("apiKey")
+    branch_id = body.get("branchId")
+    revision = body.get("revision")
+    base_url = body.get("baseUrl")
+    pre_prompt = body.get("prePrompt")
+    chat_id = body.get("chatId")
+
+    if not message or not provider or not model or not branch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="message, provider, model, and branchId are required",
+        )
+    if not api_key and provider not in ("ollama",):
+        raise HTTPException(status_code=400, detail="apiKey is required for this provider")
+
+    try:
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Invalid branchId")
+
+    chat_history: list[dict[str, str]] | None = None
+    if chat_id:
+        try:
+            UUID(chat_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid chatId")
+        msgs = fetch_chat_messages(chat_id)
+        chat_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in msgs
+            if m["role"] in ("user", "assistant")
+        ]
+
+    from .services.agent.workflow import run_agent_streaming
+
+    # Chats are resumable across page refresh. For persisted chats, run the
+    # agent in a background task and stream through live_chat_streams.
+    if chat_id:
+        started = await live_chat_streams.start(chat_id)
+        if not started:
+            raise HTTPException(status_code=409, detail="A response is already running for this chat")
+        add_chat_message(chat_id, "user", message)
+
+        async def run_in_background() -> None:
+            collected_content = ""
+            collected_error = ""
+            collected_tools: list[dict] = []
+            try:
+                async for event in run_agent_streaming(
+                    message=message,
+                    branch_id=branch_id,
+                    provider=provider,
+                    model=model,
+                    api_key=api_key or "",
+                    revision=revision,
+                    base_url=base_url,
+                    pre_prompt=pre_prompt,
+                    chat_history=chat_history,
+                ):
+                    etype = event.get("type")
+                    if etype == "message":
+                        collected_content = event.get("content", "")
+                    elif etype == "error":
+                        collected_error = event.get("content", "")
+                    elif etype == "tool_call":
+                        collected_tools.append({
+                            "name": event.get("name"),
+                            "arguments": event.get("arguments"),
+                            "result": event.get("result"),
+                        })
+                    await live_chat_streams.publish(chat_id, event)
+            except Exception as exc:
+                logger.exception("Background chat stream failed")
+                err_event = {"type": "error", "content": f"Agent error: {exc}"}
+                await live_chat_streams.publish(chat_id, err_event)
+                collected_error = err_event["content"]
+            finally:
+                try:
+                    if collected_content:
+                        add_chat_message(
+                            chat_id, "assistant", collected_content,
+                            tool_calls=collected_tools if collected_tools else None,
+                        )
+                    elif collected_error:
+                        add_chat_message(chat_id, "assistant", collected_error)
+                finally:
+                    await live_chat_streams.finish(chat_id)
+
+        asyncio.create_task(run_in_background())
+
+        async def event_generator():
+            queue = await live_chat_streams.subscribe(chat_id)
+            if queue is None:
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+            try:
+                while True:
+                    event = await queue.get()
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("type") == "done":
+                        break
+            except asyncio.CancelledError:
+                pass
+            finally:
+                await live_chat_streams.unsubscribe(chat_id, queue)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Non-persistent ad-hoc chat request (no chat_id): stream directly.
+    async def event_generator():
+        async for event in run_agent_streaming(
+            message=message,
+            branch_id=branch_id,
+            provider=provider,
+            model=model,
+            api_key=api_key or "",
+            revision=revision,
+            base_url=base_url,
+            pre_prompt=pre_prompt,
+            chat_history=chat_history,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# -- Agent context (project/branch names for UI) ---
+
+@app.get("/agent/context")
+async def agent_context(
+    project_id: str = Query(..., description="Project ID"),
+    branch_id: str = Query(..., description="Branch ID"),
+):
+    """Return project and branch display names for the agent chat UI."""
+    try:
+        UUID(project_id)
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id or branch_id")
+    proj = fetch_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    branch = fetch_branch(branch_id)
+    if not branch or str(branch.get("project_id")) != str(project_id):
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return {
+        "project_name": proj.get("name", "Unknown"),
+        "branch_name": branch.get("name", "Unknown"),
+    }
+
+
+# -- Agent config (IfcAgent saved models) CRUD ---
+
+@app.get("/agent/configs")
+async def list_agent_configs(
+    project_id: str = Query(..., description="Project ID"),
+):
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    return fetch_agent_configs_for_project(project_id)
+
+
+@app.post("/agent/configs", status_code=201)
+async def create_config(body: dict = Body(...)):
+    project_id = body.get("projectId")
+    name = body.get("name")
+    provider = body.get("provider")
+    model_name = body.get("model")
+    api_key = body.get("apiKey", "")
+    base_url = body.get("baseUrl")
+    pre_prompt = body.get("prePrompt")
+
+    if not project_id or not name or not provider or not model_name:
+        raise HTTPException(status_code=400, detail="projectId, name, provider, model required")
+    if provider == "custom" and not base_url:
+        raise HTTPException(status_code=400, detail="baseUrl required for custom provider")
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid projectId")
+
+    return create_agent_config(project_id, name, provider, model_name, api_key, base_url, pre_prompt)
+
+
+@app.put("/agent/configs/{config_id}")
+async def update_config(config_id: str, body: dict = Body(...)):
+    try:
+        UUID(config_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid config_id")
+    row = update_agent_config(
+        config_id,
+        name=body.get("name"),
+        provider=body.get("provider"),
+        model=body.get("model"),
+        api_key=body.get("apiKey"),
+        base_url=body.get("baseUrl"),
+        pre_prompt=body.get("prePrompt"),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Config not found")
+    return row
+
+
+@app.delete("/agent/configs/{config_id}")
+async def delete_config(config_id: str):
+    try:
+        UUID(config_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid config_id")
+    if not delete_agent_config(config_id):
+        raise HTTPException(status_code=404, detail="Config not found")
+    return {"deleted": True}
+
+
+# -- Agent chat CRUD ---
+
+@app.get("/agent/chats")
+async def list_agent_chats(
+    project_id: str = Query(...),
+    branch_id: str | None = Query(None),
+):
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    return fetch_agent_chats(project_id, branch_id)
+
+
+@app.post("/agent/chats", status_code=201)
+async def create_chat(body: dict = Body(...)):
+    project_id = body.get("projectId")
+    branch_id = body.get("branchId")
+    title = body.get("title", "New chat")
+    if not project_id or not branch_id:
+        raise HTTPException(status_code=400, detail="projectId and branchId required")
+    try:
+        UUID(project_id)
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid IDs")
+    return create_agent_chat(project_id, branch_id, title)
+
+
+@app.put("/agent/chats/{chat_id}")
+async def rename_chat(chat_id: str, body: dict = Body(...)):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    title = body.get("title")
+    if not title:
+        raise HTTPException(status_code=400, detail="title required")
+    row = update_agent_chat(chat_id, title)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return row
+
+
+@app.delete("/agent/chats/{chat_id}")
+async def remove_chat(chat_id: str):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    if not delete_agent_chat(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {"deleted": True}
+
+
+@app.get("/agent/chats/{chat_id}/messages")
+async def get_chat_messages(chat_id: str):
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    return fetch_chat_messages(chat_id)
+
+
+@app.get("/agent/chats/{chat_id}/live-state")
+async def get_chat_live_state(chat_id: str):
+    """Return in-flight stream snapshot for a chat, if currently running."""
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    snapshot = await live_chat_streams.snapshot(chat_id)
+    if not snapshot or snapshot.get("status") != "running":
+        return {"running": False}
+    return {"running": True, **snapshot}
+
+
+@app.get("/agent/chats/{chat_id}/live-stream")
+async def stream_chat_live(chat_id: str):
+    """SSE stream for an in-progress chat response (refresh-resumable)."""
+    try:
+        UUID(chat_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+
+    async def event_generator():
+        queue = await live_chat_streams.subscribe(chat_id)
+        if queue is None:
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("type") == "done":
+                        break
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await live_chat_streams.unsubscribe(chat_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/stream/agent-events")
+async def stream_agent_events(
+    branch_id: str = Query(..., description="Branch ID (UUID) to subscribe to"),
+):
+    """SSE endpoint for real-time agent event notifications.
+
+    Pushes events when the agent applies filters (filter-applied),
+    reports progress (agent-thinking), or encounters errors (agent-error).
+    """
+    try:
+        UUID(branch_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+    from .services.agent.events import event_bus
+
+    queue = event_bus.subscribe(branch_id)
+
+    async def event_generator():
+        try:
+            yield f"data: {json.dumps({'type': 'connected', 'branchId': branch_id})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            event_bus.unsubscribe(branch_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
