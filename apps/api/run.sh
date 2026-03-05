@@ -26,4 +26,8 @@ elif ! nc -z -w 2 "$DB_HOST" "$DB_PORT" 2>/dev/null; then
   exit 1
 fi
 
-exec uvicorn src.main:app --reload --host $DB_HOST --port "${PORT:-8000}"
+# Timeout graceful shutdown so reloads complete even with open SSE connections
+# (e.g. /stream/agent-events, /stream/ifc-products). Without this, uvicorn waits
+# indefinitely for connections to close and hangs until Ctrl+C.
+exec uvicorn src.main:app --reload --host $DB_HOST --port "${PORT:-8000}" \
+  --timeout-graceful-shutdown "${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-5}"

@@ -9,6 +9,11 @@
   import Sidebar from "$lib/ui/Sidebar.svelte";
   import DepthWidget from "$lib/ui/DepthWidget.svelte";
   import {
+    AGENT_CHANNEL,
+    type AgentMessage as AgentChannelMessage,
+  } from "$lib/agent/protocol";
+  import type { AgentBusEvent } from "$lib/agent/protocol";
+  import {
     getSelection,
     getRevisionState,
     getProjectState,
@@ -88,6 +93,37 @@
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
     : "/api";
+
+  let agentPopup: Window | null = null;
+  let agentChannel: BroadcastChannel | null = null;
+  let agentEventSource: EventSource | null = null;
+
+  // Agent events SSE: subscribe when branchId changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    if (agentEventSource) {
+      agentEventSource.close();
+      agentEventSource = null;
+    }
+    if (!branchId || typeof window === "undefined") return;
+    const url = `${API_BASE}/stream/agent-events?branch_id=${encodeURIComponent(branchId)}`;
+    const es = new EventSource(url);
+    agentEventSource = es;
+    es.onmessage = (e) => {
+      try {
+        const event: AgentBusEvent = JSON.parse(e.data);
+        if (event.type === "filter-applied") {
+          autoLoadAppliedFilterSets(event.branchId);
+        }
+      } catch {}
+    };
+    es.onerror = () => {
+      // Reconnect is automatic with EventSource
+    };
+    return () => {
+      es.close();
+    };
+  });
 
   let showImportModal = $state(false);
   let importing = $state(false);
@@ -382,6 +418,13 @@
         selection.activeGlobalId = e.data.globalId;
       }
     };
+
+    agentChannel = new BroadcastChannel(AGENT_CHANNEL);
+    agentChannel.onmessage = (e: MessageEvent<AgentChannelMessage>) => {
+      if (e.data.type === "request-context") {
+        sendAgentContext();
+      }
+    };
   });
 
   onDestroy(() => {
@@ -389,6 +432,7 @@
     attributesChannel?.close();
     graphChannel?.close();
     tableChannel?.close();
+    agentChannel?.close();
   });
 
   // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
@@ -494,6 +538,44 @@
         type: "selection-sync",
         globalId: selection.activeGlobalId,
       } satisfies TableMessage);
+    }
+  }
+
+  function sendAgentContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
+    agentChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+      projectName: project?.name ?? null,
+      branchName: branch?.name ?? null,
+    } satisfies AgentChannelMessage);
+  }
+
+  function openAgentPopup() {
+    if (!agentPopup || agentPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/agent?${query}` : "/agent";
+      agentPopup = window.open(url, "bimatlas-agent", "width=460,height=700");
+      setTimeout(sendAgentContext, 500);
+    } else {
+      agentPopup.focus();
+      sendAgentContext();
     }
   }
 
@@ -1958,6 +2040,25 @@
             </svg>
             Attributes
           </button>
+          <!-- Agent popup button -->
+          <button
+            class="agent-btn"
+            onclick={openAgentPopup}
+            aria-label="Open AI agent"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2C6.48 2 2 6.02 2 11c0 2.62 1.2 4.98 3.09 6.61L4 22l4.54-2.27A10.9 10.9 0 0012 20c5.52 0 10-3.58 10-8s-4.48-9-10-9z"
+                stroke="currentColor"
+                stroke-width="2"
+                fill="none"
+              />
+              <circle cx="8" cy="11" r="1" fill="currentColor" />
+              <circle cx="12" cy="11" r="1" fill="currentColor" />
+              <circle cx="16" cy="11" r="1" fill="currentColor" />
+            </svg>
+            Agent
+          </button>
         </div>
         <!-- Element count -->
         <span class="element-count"
@@ -2959,7 +3060,8 @@
   .search-btn,
   .graph-btn,
   .table-btn,
-  .attributes-btn {
+  .attributes-btn,
+  .agent-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -2980,7 +3082,8 @@
   .search-btn:hover,
   .graph-btn:hover,
   .table-btn:hover,
-  .attributes-btn:hover {
+  .attributes-btn:hover,
+  .agent-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);
     color: #fff;

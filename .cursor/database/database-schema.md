@@ -102,11 +102,12 @@ Table ifc_entity {
 entity_id UUID [pk, note: "Unique ID for this specific state/version"]
 branch_id UUID
 ifc_global_id varchar [note: "Indexed. The persistent identity from IfcRoot"]
-ifc_class varchar [note: "e.g., 'IfcWall', 'IfcPropertySet'"]
-attributes jsonb [note: "EXPRESS attributes, flattened properties, and entity_refs"]
+ifc_class varchar [note: "e.g., 'IfcWall', 'IfcPropertySet', 'IfcAgent'"]
+attributes jsonb [note: "EXPRESS attributes, flattened properties, entity_refs. IfcAgent: name, provider, model, api_key, base_url, pre_prompt"]
 geometry bytea [null]
 created_in_revision_id UUID
 obsoleted_in_revision_id UUID [null, note: "NULL means active state"]
+Note: 'IfcAgent entities store saved LLM configs (project-scoped, on main branch). No geometry.'
 }
 
 // -----------------------------------------------------------------------------

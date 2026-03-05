@@ -42,6 +42,7 @@
   let totalCount = $state(0);
   let filterGuideOpen = $state(false);
   let filterSetColorsEnabled = $state(false);
+  let filterSetsSectionCollapsed = $state(false);
   let editorColor = $state('#4A90D9');
 
   let nextId = 0;
@@ -193,11 +194,12 @@
     }
   }
 
-  async function loadApplied() {
+  async function loadApplied(forceNetwork = false) {
     if (!branchId) return;
+    const context = forceNetwork ? { requestPolicy: "network-only" as const } : undefined;
     try {
       const result = await client
-        .query(APPLIED_FILTER_SETS_QUERY, { branchId })
+        .query(APPLIED_FILTER_SETS_QUERY, { branchId }, context)
         .toPromise();
       const data = result.data?.appliedFilterSets;
       if (data) {
@@ -326,8 +328,8 @@
       const next = new Set(selectedSetIds);
       next.delete(id);
       selectedSetIds = next;
-      await loadFilterSets();
-      await loadApplied();
+      await loadFilterSets(true);
+      await loadApplied(true);
       channel?.postMessage({
         type: "apply-filter-sets",
         filterSets: filterSetsToPlain(appliedFilterSets),
@@ -733,8 +735,20 @@
 
   <!-- ═══════ Filter Set Browser ═══════ -->
   <section class="section">
-    <div class="section-header">
-      <h3>Filter Sets</h3>
+    <button
+      type="button"
+      class="section-header section-header--collapsible"
+      onclick={(e) => {
+        if ((e.target as HTMLElement).closest('.scope-selector')) return;
+        filterSetsSectionCollapsed = !filterSetsSectionCollapsed;
+      }}
+      aria-expanded={!filterSetsSectionCollapsed}
+      aria-label={filterSetsSectionCollapsed ? 'Expand Filter Sets' : 'Collapse Filter Sets'}
+    >
+      <span class="section-header-title">
+        <span class="section-chevron" class:open={!filterSetsSectionCollapsed}>▸</span>
+        <h3>Filter Sets</h3>
+      </span>
       {#if branchId}
         <div class="scope-selector">
           <select class="scope-select" bind:value={searchScope}>
@@ -744,8 +758,9 @@
           </select>
         </div>
       {/if}
-    </div>
+    </button>
 
+    {#if !filterSetsSectionCollapsed}
     <input
       class="search-input"
       type="text"
@@ -809,6 +824,7 @@
           Apply {selectedSetIds.size} Set{selectedSetIds.size === 1 ? "" : "s"}
         </button>
       </div>
+    {/if}
     {/if}
   </section>
 
@@ -1303,6 +1319,37 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .section-header--collapsible {
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+  }
+
+  .section-header--collapsible:hover {
+    opacity: 0.9;
+  }
+
+  .section-header-title {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .section-chevron {
+    font-size: 0.6rem;
+    color: #888;
+    transition: transform 0.15s;
+  }
+
+  .section-chevron.open {
+    transform: rotate(90deg);
   }
 
   .section-header--with-close .icon-btn-close {
