@@ -73,6 +73,7 @@
   let graphChannel: BroadcastChannel | null = null;
   let tablePopup: Window | null = null;
   let tableChannel: BroadcastChannel | null = null;
+  let schemaPopup: Window | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -582,6 +583,23 @@
     } else {
       tablePopup.focus();
       sendTableContext();
+    }
+  }
+
+  function openSchemaPopup() {
+    if (!schemaPopup || schemaPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/schema?${query}` : "/schema";
+      schemaPopup = window.open(url, "bimatlas-schema", "width=900,height=700");
+    } else {
+      schemaPopup.focus();
     }
   }
 
@@ -1932,6 +1950,28 @@
             </svg>
             Table
           </button>
+          <!-- Schema Browser popup button -->
+          <button
+            class="schema-btn"
+            onclick={openSchemaPopup}
+            aria-label="Open schema browser"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+              <path
+                d="M9 5a2 2 0 012-2h2a2 2 0 012 2v0a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Schema
+          </button>
           <!-- Attribute panel pop-out button -->
           <button
             class="attributes-btn"
@@ -2959,6 +2999,7 @@
   .search-btn,
   .graph-btn,
   .table-btn,
+  .schema-btn,
   .attributes-btn {
     display: inline-flex;
     align-items: center;
@@ -2980,6 +3021,7 @@
   .search-btn:hover,
   .graph-btn:hover,
   .table-btn:hover,
+  .schema-btn:hover,
   .attributes-btn:hover {
     background: rgba(255, 102, 68, 0.2);
     border-color: rgba(255, 136, 102, 0.3);

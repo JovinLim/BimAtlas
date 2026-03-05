@@ -273,3 +273,109 @@ class SheetTemplate:
     open: bool
     created_at: str
     updated_at: str
+
+
+# -- Validation types (FEAT-004) -------------------------------------------
+
+
+@strawberry.type
+class IfcValidationCondition:
+    """A single condition in a validation rule."""
+
+    path: str
+    operator: str
+    value: Optional[str] = None
+
+
+@strawberry.type
+class IfcValidationSpatialContext:
+    """Subgraph scope for a validation rule."""
+
+    traversal: str
+    scope_class: Optional[str] = None
+    scope_name: Optional[str] = None
+    scope_global_id: Optional[str] = None
+
+
+@strawberry.type
+class IfcValidationRule:
+    """A validation rule stored as an IfcValidation entity."""
+
+    global_id: str
+    name: str
+    description: Optional[str] = None
+    rule_type: Optional[str] = None
+    target_class: Optional[str] = None
+    severity: str = "Error"
+    conditions: list[IfcValidationCondition] = strawberry.field(default_factory=list)
+    spatial_context: Optional[IfcValidationSpatialContext] = None
+    include_subtypes: bool = False
+
+
+@strawberry.type
+class IfcValidationSchemaType:
+    """A validation schema (named rule container) stored as an entity."""
+
+    global_id: str
+    name: str
+    description: Optional[str] = None
+    version: Optional[str] = None
+    is_active: bool = True
+    rules: list[IfcValidationRule] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class ValidationViolation:
+    """A single entity violating a rule."""
+
+    global_id: str
+    ifc_class: str
+    message: str
+
+
+@strawberry.type
+class ValidationRuleResult:
+    """Result of evaluating a single rule."""
+
+    rule_global_id: str
+    rule_name: str
+    severity: str
+    passed: bool
+    violations: list[ValidationViolation] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class ValidationRunResultType:
+    """Result of a full validation run."""
+
+    schema_global_id: str
+    schema_name: str
+    branch_id: str
+    revision_seq: int
+    results: list[ValidationRuleResult] = strawberry.field(default_factory=list)
+    error_count: int = 0
+    warning_count: int = 0
+    info_count: int = 0
+    passed_count: int = 0
+
+
+# -- Validation input types --
+
+
+@strawberry.input
+class ValidationConditionInput:
+    """Input for a rule condition."""
+
+    path: str
+    operator: str
+    value: Optional[str] = None
+
+
+@strawberry.input
+class ValidationSpatialContextInput:
+    """Input for a rule's spatial context."""
+
+    traversal: str
+    scope_class: Optional[str] = None
+    scope_name: Optional[str] = None
+    scope_global_id: Optional[str] = None
