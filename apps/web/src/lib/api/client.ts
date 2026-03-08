@@ -52,6 +52,18 @@ export const PROJECT_QUERY = gql`
 	}
 `;
 
+/** Fetch a single branch by id. */
+export const BRANCH_QUERY = gql`
+	query Branch($branchId: String!) {
+		branch(branchId: $branchId) {
+			id
+			projectId
+			name
+			createdAt
+		}
+	}
+`;
+
 /** Fetch branches for a project. */
 export const BRANCHES_QUERY = gql`
 	query Branches($projectId: String!) {
@@ -543,6 +555,45 @@ export const DELETE_SHEET_TEMPLATE_MUTATION = gql`
 	}
 `;
 
+// ---- Uploaded IFC Schemas (from POST /ifc-schema) ----
+
+export const UPLOADED_SCHEMAS_QUERY = gql`
+	query UploadedSchemas {
+		uploadedSchemas {
+			id
+			versionName
+			ruleCount
+			projectIds
+		}
+	}
+`;
+
+export const APPLY_SCHEMA_TO_PROJECT_MUTATION = gql`
+	mutation ApplySchemaToProject($projectId: String!, $schemaId: String!) {
+		applySchemaToProject(projectId: $projectId, schemaId: $schemaId)
+	}
+`;
+
+export const UNAPPLY_SCHEMA_FROM_PROJECT_MUTATION = gql`
+	mutation UnapplySchemaFromProject($projectId: String!, $schemaId: String!) {
+		unapplySchemaFromProject(projectId: $projectId, schemaId: $schemaId)
+	}
+`;
+
+export const UPDATE_UPLOADED_SCHEMA_RULE_MUTATION = gql`
+	mutation UpdateUploadedSchemaRule($ruleId: String!, $effectiveRequiredAttributesJson: String!) {
+		updateUploadedSchemaRule(ruleId: $ruleId, effectiveRequiredAttributesJson: $effectiveRequiredAttributesJson)
+	}
+`;
+
+export const VALIDATION_RULES_FOR_UPLOADED_SCHEMA_QUERY = gql`
+	query ValidationRulesForUploadedSchema($schemaId: String!) {
+		validationRulesForUploadedSchema(schemaId: $schemaId) {
+			ruleId name description targetIfcClass effectiveRequiredAttributes displaySeverity severity
+		}
+	}
+`;
+
 // ---- Validation Schema Management (FEAT-004) ----
 
 const VALIDATION_CONDITION_FIELDS = `path operator value`;
@@ -669,6 +720,19 @@ export const UNLINK_RULE_FROM_SCHEMA_MUTATION = gql`
 export const RUN_VALIDATION_MUTATION = gql`
 	mutation RunValidation($branchId: String!, $schemaGlobalId: String!, $revision: Int) {
 		runValidation(branchId: $branchId, schemaGlobalId: $schemaGlobalId, revision: $revision) {
+			schemaGlobalId schemaName branchId revisionSeq
+			errorCount warningCount infoCount passedCount
+			results {
+				ruleGlobalId ruleName severity passed
+				violations { globalId ifcClass message }
+			}
+		}
+	}
+`;
+
+export const RUN_VALIDATION_BY_UPLOADED_SCHEMA_MUTATION = gql`
+	mutation RunValidationByUploadedSchema($branchId: String!, $schemaId: String!, $revision: Int) {
+		runValidationByUploadedSchema(branchId: $branchId, schemaId: $schemaId, revision: $revision) {
 			schemaGlobalId schemaName branchId revisionSeq
 			errorCount warningCount infoCount passedCount
 			results {

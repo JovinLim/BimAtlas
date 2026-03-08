@@ -1495,6 +1495,115 @@ def validation_schema_exists(schema_name: str) -> bool:
         return cur.fetchone() is not None
 
 
+def fetch_all_ifc_schemas() -> list[dict]:
+    """Return all uploaded IFC schemas with rule counts and applied project IDs."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            """
+            SELECT s.schema_id, s.version_name,
+                   (SELECT COUNT(*) FROM validation_rule vr WHERE vr.schema_id = s.schema_id) AS rule_count,
+                   COALESCE(
+                       (SELECT array_agg(ps.project_id) FROM project_schema ps WHERE ps.schema_id = s.schema_id),
+                       ARRAY[]::uuid[]
+                   ) AS project_ids
+            FROM ifc_schema s
+            ORDER BY s.version_name
+            """
+        )
+        rows = cur.fetchall()
+    result = []
+    for r in rows:
+        raw = r.get("project_ids") or []
+        if hasattr(raw, "tolist"):
+            project_ids = [str(pid) for pid in raw.tolist()]
+        elif isinstance(raw, list):
+            project_ids = [str(pid) for pid in raw]
+        elif isinstance(raw, str):
+            project_ids = [
+                x.strip().strip('"') for x in raw.strip("{}").split(",")
+                if x.strip()
+            ]
+        else:
+            project_ids = []
+        result.append({
+            "schema_id": str(r["schema_id"]),
+            "version_name": r["version_name"],
+            "rule_count": r["rule_count"] or 0,
+            "project_ids": project_ids,
+        })
+    return result
+
+
+def apply_schema_to_project(project_id: str, schema_id: str) -> bool:
+    """Link an IFC schema to a project. Returns True if applied, False if already linked."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO project_schema (project_id, schema_id)
+            VALUES (%s, %s)
+            ON CONFLICT (project_id, schema_id) DO NOTHING
+            """,
+            (project_id, schema_id),
+        )
+        return cur.rowcount > 0
+
+
+def unapply_schema_from_project(project_id: str, schema_id: str) -> bool:
+    """Remove an IFC schema from a project. Returns True if removed."""
+    with get_cursor() as cur:
+        cur.execute(
+            "DELETE FROM project_schema WHERE project_id = %s AND schema_id = %s",
+            (project_id, schema_id),
+        )
+        return cur.rowcount > 0
+
+
+def fetch_ifc_schema_by_id(schema_id: str) -> dict | None:
+    """Fetch ifc_schema row by schema_id. Returns None if not found."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT schema_id, version_name FROM ifc_schema WHERE schema_id = %s",
+            (schema_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def fetch_validation_rules_by_schema_id(schema_id: str) -> list[dict]:
+    """Fetch validation_rule rows for an uploaded schema. Returns list of rule dicts."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            """
+            SELECT rule_id, name, description, target_ifc_class, rule_schema, severity
+            FROM validation_rule
+            WHERE schema_id = %s AND project_id IS NULL AND is_active = TRUE
+            """,
+            (schema_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_validation_rule_rule_schema(rule_id: str, new_rule_schema: dict) -> bool:
+    """Update rule_schema for a validation_rule. Returns True if updated."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT rule_schema FROM validation_rule WHERE rule_id = %s",
+            (rule_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        existing = row.get("rule_schema")
+        if isinstance(existing, str):
+            existing = json.loads(existing)
+        merged = {**existing, **new_rule_schema}
+        cur.execute(
+            "UPDATE validation_rule SET rule_schema = %s WHERE rule_id = %s",
+            (json.dumps(merged), rule_id),
+        )
+        return cur.rowcount > 0
+
+
 def insert_validation_rules(schema_name: str, rules: dict) -> None:
     """Insert normalized validation rules per entity for a schema version.
 

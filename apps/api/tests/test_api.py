@@ -427,6 +427,98 @@ class TestGraphQLEndpoint:
             f"Tree should contain IfcWall/IfcSlab or at least IfcElement; got: {names}"
         )
 
+    def test_graphql_uploaded_schemas_and_apply(self, client, db_pool, test_project, ifc_schema_seeded):
+        """Test uploadedSchemas query and applySchemaToProject mutation."""
+        project_id = str(test_project["project_id"])
+        query = """
+        query {
+            uploadedSchemas {
+                id
+                versionName
+                ruleCount
+                projectIds
+            }
+        }
+        """
+        response = client.post("/graphql", json={"query": query})
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        if "errors" in data:
+            raise AssertionError(f"GraphQL errors: {data['errors']}")
+        schemas = data["data"]["uploadedSchemas"]
+        assert isinstance(schemas, list)
+        assert len(schemas) >= 1, "ifc_schema_seeded should have inserted at least one schema"
+        schema = schemas[0]
+        assert "id" in schema
+        assert "versionName" in schema
+        assert "ruleCount" in schema
+        assert "projectIds" in schema
+        schema_id = schema["id"]
+        assert schema["projectIds"] == [] or project_id not in schema["projectIds"]
+
+        apply_mutation = """
+        mutation ($projectId: String!, $schemaId: String!) {
+            applySchemaToProject(projectId: $projectId, schemaId: $schemaId)
+        }
+        """
+        response = client.post(
+            "/graphql",
+            json={
+                "query": apply_mutation,
+                "variables": {"projectId": project_id, "schemaId": schema_id},
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        apply_data = response.json()
+        if "errors" in apply_data:
+            raise AssertionError(f"GraphQL errors: {apply_data['errors']}")
+        assert apply_data["data"]["applySchemaToProject"] is True
+
+        response = client.post("/graphql", json={"query": query})
+        assert response.status_code == status.HTTP_200_OK
+        schemas_after = response.json()["data"]["uploadedSchemas"]
+        applied_schema = next(s for s in schemas_after if s["id"] == schema_id)
+        assert project_id in applied_schema["projectIds"]
+
+        unapply_mutation = """
+        mutation ($projectId: String!, $schemaId: String!) {
+            unapplySchemaFromProject(projectId: $projectId, schemaId: $schemaId)
+        }
+        """
+        response = client.post(
+            "/graphql",
+            json={
+                "query": unapply_mutation,
+                "variables": {"projectId": project_id, "schemaId": schema_id},
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["data"]["unapplySchemaFromProject"] is True
+
+    def test_graphql_branch_query(self, client, test_branch, test_project):
+        """Test branch query returns projectId for a given branchId."""
+        query = """
+        query ($branchId: String!) {
+            branch(branchId: $branchId) {
+                id
+                projectId
+                name
+            }
+        }
+        """
+        response = client.post(
+            "/graphql",
+            json={"query": query, "variables": {"branchId": str(test_branch)}},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        if "errors" in data:
+            raise AssertionError(f"GraphQL errors: {data['errors']}")
+        branch = data["data"]["branch"]
+        assert branch is not None
+        assert branch["projectId"] == str(test_project["project_id"])
+        assert branch["id"] == str(test_branch)
+
     def test_graphql_no_create_revision_mutation(self, client):
         """Regression: ensure no mutation exists to create a revision manually.
 

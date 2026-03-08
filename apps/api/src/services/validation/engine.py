@@ -15,7 +15,10 @@ from typing import Any
 from ...db import (
     create_validation_entity,
     create_validation_revision,
+    fetch_entities_at_revision,
+    fetch_ifc_schema_by_id,
     fetch_validation_entity,
+    fetch_validation_rules_by_schema_id,
     get_latest_revision_seq,
 )
 from ...schema import ifc_schema_loader
@@ -385,3 +388,135 @@ def run_validation(
             logger.exception("Failed to persist validation result")
 
     return run_result
+
+
+def run_validation_by_uploaded_schema(
+    schema_id: str,
+    branch_id: str,
+    revision_seq: int | None = None,
+) -> ValidationRunResult:
+    """Execute validation rules from an uploaded IFC schema against a branch.
+
+    Uses validation_rule rows (required_attributes, inheritance) linked to
+    the schema. Returns ValidationRunResult with schema_global_id set to
+    schema_id for API compatibility.
+    """
+    import json
+
+    if revision_seq is None:
+        revision_seq = get_latest_revision_seq(branch_id)
+        if revision_seq is None:
+            raise ValueError("No revisions on branch")
+
+    schema_row = fetch_ifc_schema_by_id(schema_id)
+    if schema_row is None:
+        raise ValueError(f"Uploaded schema {schema_id} not found")
+    schema_name = schema_row.get("version_name", "Unknown")
+
+    rule_rows = fetch_validation_rules_by_schema_id(schema_id)
+    if not rule_rows:
+        return ValidationRunResult(
+            schema_global_id=schema_id,
+            schema_name=schema_name,
+            branch_id=branch_id,
+            revision_seq=revision_seq,
+            results=[],
+            summary={"errors": 0, "warnings": 0, "info": 0, "passed": 0},
+        )
+
+    results: list[RuleResult] = []
+    for row in rule_rows:
+        rule_id = str(row.get("rule_id", ""))
+        rule_name = row.get("name", "Unnamed rule")
+        severity = row.get("severity", "Error") or "Error"
+        target_class = row.get("target_ifc_class", "")
+        payload = row.get("rule_schema")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                results.append(
+                    RuleResult(
+                        rule_global_id=rule_id,
+                        rule_name=rule_name,
+                        severity=severity,
+                        passed=True,
+                    )
+                )
+                continue
+        if not isinstance(payload, dict):
+            results.append(
+                RuleResult(
+                    rule_global_id=rule_id,
+                    rule_name=rule_name,
+                    severity=severity,
+                    passed=True,
+                )
+            )
+            continue
+
+        rule_type = payload.get("ruleType")
+        if rule_type == "required_attributes":
+            required_attrs = payload.get("effectiveRequiredAttributes") or []
+            if not isinstance(required_attrs, list):
+                required_attrs = []
+            attr_names = [
+                a.get("name") for a in required_attrs
+                if isinstance(a, dict) and a.get("name")
+            ]
+            entities = fetch_entities_at_revision(
+                revision_seq, branch_id, ifc_class=target_class,
+            )
+            violations: list[Violation] = []
+            for entity in entities:
+                attrs = entity.get("attributes", {})
+                if isinstance(attrs, str):
+                    try:
+                        attrs = json.loads(attrs)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        attrs = {}
+                if not isinstance(attrs, dict):
+                    attrs = {}
+                for attr_name in attr_names:
+                    val = _resolve_nested_value(attrs, attr_name)
+                    if val is _MISSING or val is None:
+                        violations.append(
+                            Violation(
+                                global_id=entity.get("ifc_global_id", ""),
+                                ifc_class=entity.get("ifc_class", ""),
+                                message=f"Missing required attribute: {attr_name}",
+                            )
+                        )
+            results.append(
+                RuleResult(
+                    rule_global_id=rule_id,
+                    rule_name=rule_name,
+                    severity=severity,
+                    passed=len(violations) == 0,
+                    violations=violations,
+                )
+            )
+        else:
+            results.append(
+                RuleResult(
+                    rule_global_id=rule_id,
+                    rule_name=rule_name,
+                    severity=severity,
+                    passed=True,
+                )
+            )
+
+    errors = sum(1 for r in results if not r.passed and r.severity == "Error")
+    warnings = sum(1 for r in results if not r.passed and r.severity == "Warning")
+    info = sum(1 for r in results if not r.passed and r.severity == "Info")
+    passed = sum(1 for r in results if r.passed)
+    summary = {"errors": errors, "warnings": warnings, "info": info, "passed": passed}
+
+    return ValidationRunResult(
+        schema_global_id=schema_id,
+        schema_name=schema_name,
+        branch_id=branch_id,
+        revision_seq=revision_seq,
+        results=results,
+        summary=summary,
+    )

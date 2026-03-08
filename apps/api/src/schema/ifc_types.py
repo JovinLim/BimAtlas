@@ -313,6 +313,29 @@ class IfcValidationRule:
 
 
 @strawberry.type
+class UploadedSchema:
+    """An IFC schema uploaded via POST /ifc-schema, stored in ifc_schema + validation_rule."""
+
+    id: str  # schema_id UUID
+    version_name: str
+    rule_count: int
+    project_ids: list[str] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class UploadedSchemaRule:
+    """A validation rule from an uploaded IFC schema (validation_rule table)."""
+
+    rule_id: str
+    name: str
+    description: Optional[str] = None
+    target_ifc_class: str
+    effective_required_attributes: Optional[str] = None  # JSON string, only for required_attributes rules
+    display_severity: str  # "Required" or "Info" - Required when required: true, else Info
+    severity: str  # Original DB severity (kept for compatibility)
+
+
+@strawberry.type
 class IfcValidationSchemaType:
     """A validation schema (named rule container) stored as an entity."""
 

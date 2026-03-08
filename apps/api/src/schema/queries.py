@@ -23,6 +23,9 @@ import strawberry
 
 from ..db import (
     apply_filter_sets,
+    apply_schema_to_project as db_apply_schema_to_project,
+    fetch_all_ifc_schemas,
+    unapply_schema_from_project as db_unapply_schema_from_project,
     create_branch,
     create_filter_set as db_create_filter_set,
     create_project,
@@ -58,7 +61,9 @@ from ..db import (
     fetch_spatial_container,
     fetch_validation_entities as db_fetch_validation_entities,
     fetch_validation_entity as db_fetch_validation_entity,
+    fetch_validation_rules_by_schema_id,
     update_sheet_template as db_update_sheet_template,
+    update_validation_rule_rule_schema as db_update_validation_rule_rule_schema,
     update_validation_entity as db_update_validation_entity,
     get_latest_revision_seq,
     search_filter_sets,
@@ -76,11 +81,14 @@ from ..services.graph.age_client import (
 )
 from ..services.validation.engine import (
     run_validation as engine_run_validation,
+    run_validation_by_uploaded_schema as engine_run_validation_by_uploaded_schema,
 )
 from .ifc_enums import IfcRelationshipType
 from . import ifc_schema_loader
 from .ifc_types import (
     AppliedFilterSets,
+    UploadedSchema,
+    UploadedSchemaRule,
     Branch,
     ChangeType,
     FilterInput,
@@ -546,6 +554,19 @@ class Query:
             for b in rows
         ]
 
+    @strawberry.field
+    async def branch(self, branch_id: str) -> Optional[Branch]:
+        """Fetch a single branch by id (e.g. to resolve projectId from branchId)."""
+        row = fetch_branch(branch_id)
+        if row is None:
+            return None
+        return Branch(
+            id=row["branch_id"],
+            project_id=row["project_id"],
+            name=row["name"],
+            created_at=_to_iso(row["created_at"]),
+        )
+
     # ---- IFC queries (branch-scoped) ---------------------------------------
 
     @strawberry.field
@@ -869,6 +890,56 @@ class Query:
         return _row_to_sheet_template(row) if row else None
 
     # ---- Validation queries ------------------------------------------------
+
+    @strawberry.field
+    async def uploaded_schemas(self) -> list[UploadedSchema]:
+        """List all IFC schemas uploaded via POST /ifc-schema, with rule counts and applied projects."""
+        rows = fetch_all_ifc_schemas()
+        return [
+            UploadedSchema(
+                id=r["schema_id"],
+                version_name=r["version_name"],
+                rule_count=r["rule_count"],
+                project_ids=r.get("project_ids") or [],
+            )
+            for r in rows
+        ]
+
+    @strawberry.field
+    async def validation_rules_for_uploaded_schema(
+        self, schema_id: str,
+    ) -> list[UploadedSchemaRule]:
+        """List validation rules for an uploaded IFC schema."""
+        rows = fetch_validation_rules_by_schema_id(schema_id)
+        result = []
+        for r in rows:
+            raw_schema = r.get("rule_schema")
+            eff_attrs = None
+            display_severity = "Info"
+            if isinstance(raw_schema, dict):
+                rule_type = raw_schema.get("ruleType")
+                eff_list = raw_schema.get("effectiveRequiredAttributes")
+                if isinstance(eff_list, list) and eff_list:
+                    has_required = any(
+                        isinstance(a, dict) and a.get("required", False)
+                        for a in eff_list
+                    )
+                    eff_attrs = json.dumps(eff_list, indent=2)
+                    display_severity = "Required" if has_required else "Info"
+                elif rule_type == "required_attributes":
+                    display_severity = "Required"
+            result.append(
+                UploadedSchemaRule(
+                    rule_id=str(r["rule_id"]),
+                    name=r.get("name", ""),
+                    description=r.get("description"),
+                    target_ifc_class=r.get("target_ifc_class", ""),
+                    effective_required_attributes=eff_attrs,
+                    display_severity=display_severity,
+                    severity=r.get("severity") or "Error",
+                )
+            )
+        return result
 
     @strawberry.field
     async def validation_schemas(
@@ -1386,6 +1457,40 @@ class Mutation:
             return False
 
     @strawberry.mutation
+    async def apply_schema_to_project(
+        self, project_id: str, schema_id: str,
+    ) -> bool:
+        """Link an uploaded IFC schema to a project. Idempotent."""
+        return db_apply_schema_to_project(project_id, schema_id)
+
+    @strawberry.mutation
+    async def unapply_schema_from_project(
+        self, project_id: str, schema_id: str,
+    ) -> bool:
+        """Remove an uploaded IFC schema from a project."""
+        return db_unapply_schema_from_project(project_id, schema_id)
+
+    @strawberry.mutation
+    async def update_uploaded_schema_rule(
+        self, rule_id: str, effective_required_attributes_json: str,
+    ) -> bool:
+        """Update effectiveRequiredAttributes for an uploaded schema rule. Validates JSON before saving."""
+        try:
+            parsed = json.loads(effective_required_attributes_json)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {e}") from e
+        if not isinstance(parsed, list):
+            raise ValueError("effectiveRequiredAttributes must be a JSON array")
+        for i, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"effectiveRequiredAttributes[{i}] must be an object"
+                )
+        return db_update_validation_rule_rule_schema(
+            rule_id, {"effectiveRequiredAttributes": parsed}
+        )
+
+    @strawberry.mutation
     async def run_validation(
         self,
         branch_id: str,
@@ -1395,6 +1500,45 @@ class Mutation:
         """Execute all rules in a validation schema against a branch."""
         result = engine_run_validation(
             schema_global_id, branch_id, revision,
+        )
+        return ValidationRunResultType(
+            schema_global_id=result.schema_global_id,
+            schema_name=result.schema_name,
+            branch_id=result.branch_id,
+            revision_seq=result.revision_seq,
+            results=[
+                ValidationRuleResult(
+                    rule_global_id=r.rule_global_id,
+                    rule_name=r.rule_name,
+                    severity=r.severity,
+                    passed=r.passed,
+                    violations=[
+                        ValidationViolation(
+                            global_id=v.global_id,
+                            ifc_class=v.ifc_class,
+                            message=v.message,
+                        )
+                        for v in r.violations
+                    ],
+                )
+                for r in result.results
+            ],
+            error_count=result.summary.get("errors", 0),
+            warning_count=result.summary.get("warnings", 0),
+            info_count=result.summary.get("info", 0),
+            passed_count=result.summary.get("passed", 0),
+        )
+
+    @strawberry.mutation
+    async def run_validation_by_uploaded_schema(
+        self,
+        branch_id: str,
+        schema_id: str,
+        revision: Optional[int] = None,
+    ) -> ValidationRunResultType:
+        """Execute validation rules from an uploaded IFC schema against a branch."""
+        result = engine_run_validation_by_uploaded_schema(
+            schema_id, branch_id, revision,
         )
         return ValidationRunResultType(
             schema_global_id=result.schema_global_id,
