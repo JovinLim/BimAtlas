@@ -153,7 +153,7 @@ class Revision:
     branch_id: str
     revision_seq: int  # monotonic sequence for ordering and querying at revision
     label: Optional[str]
-    ifc_filename: str
+    ifc_filename: Optional[str]
     author_id: Optional[str]
     created_at: str  # ISO 8601
 
@@ -279,49 +279,27 @@ class SheetTemplate:
 
 
 @strawberry.type
-class IfcValidationCondition:
-    """A single condition in a validation rule."""
+class UploadedSchema:
+    """An IFC schema uploaded via POST /ifc-schema, stored in ifc_schema + validation_rule."""
 
-    path: str
-    operator: str
-    value: Optional[str] = None
-
-
-@strawberry.type
-class IfcValidationSpatialContext:
-    """Subgraph scope for a validation rule."""
-
-    traversal: str
-    scope_class: Optional[str] = None
-    scope_name: Optional[str] = None
-    scope_global_id: Optional[str] = None
+    id: str  # schema_id UUID
+    version_name: str
+    rule_count: int
+    project_ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
-class IfcValidationRule:
-    """A validation rule stored as an IfcValidation entity."""
+class UploadedSchemaRule:
+    """A validation rule from an uploaded IFC schema (validation_rule table)."""
 
-    global_id: str
+    rule_id: str
     name: str
     description: Optional[str] = None
-    rule_type: Optional[str] = None
-    target_class: Optional[str] = None
-    severity: str = "Error"
-    conditions: list[IfcValidationCondition] = strawberry.field(default_factory=list)
-    spatial_context: Optional[IfcValidationSpatialContext] = None
-    include_subtypes: bool = False
-
-
-@strawberry.type
-class IfcValidationSchemaType:
-    """A validation schema (named rule container) stored as an entity."""
-
-    global_id: str
-    name: str
-    description: Optional[str] = None
-    version: Optional[str] = None
-    is_active: bool = True
-    rules: list[IfcValidationRule] = strawberry.field(default_factory=list)
+    target_ifc_class: str
+    effective_required_attributes: Optional[str] = None  # JSON string, only for required_attributes rules
+    rule_schema_json: Optional[str] = None  # Full rule_schema for edit
+    display_severity: str  # "Required" or "Info" - Required when required: true, else Info
+    severity: str  # Original DB severity (kept for compatibility)
 
 
 @strawberry.type
@@ -359,23 +337,3 @@ class ValidationRunResultType:
     passed_count: int = 0
 
 
-# -- Validation input types --
-
-
-@strawberry.input
-class ValidationConditionInput:
-    """Input for a rule condition."""
-
-    path: str
-    operator: str
-    value: Optional[str] = None
-
-
-@strawberry.input
-class ValidationSpatialContextInput:
-    """Input for a rule's spatial context."""
-
-    traversal: str
-    scope_class: Optional[str] = None
-    scope_name: Optional[str] = None
-    scope_global_id: Optional[str] = None

@@ -45,7 +45,7 @@ isProject: false
 
 ## References
 
-- **PRD:** `.cursor/product/features/feature_004_validation_schema_management/prd.md`
+- **PRD:** `.cursor/product/features/feature_005_validation_schema_management/prd.md`
 - **Product Overview:** `.cursor/product/overview.md`
 - **Existing validation code:** `apps/api/src/schema/ifc_schema_loader.py`, `apps/api/src/db.py` (fetch/insert_validation_rules)
 - **Graph client:** `apps/api/src/services/graph/age_client.py`, `apps/api/src/services/graph/queries.py`

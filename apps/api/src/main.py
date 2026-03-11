@@ -122,7 +122,10 @@ async def table_entity_attributes(
     rev = revision if revision is not None else get_latest_revision_seq(branch_id)
     if rev is None:
         raise HTTPException(status_code=404, detail="No revisions on branch")
-    rows = fetch_entity_attributes_for_global_ids(rev, branch_id, global_ids)
+    include_validations = (
+        paths is None or len(paths) == 0 or "Validations" in (paths or [])
+    )
+    rows = fetch_entity_attributes_for_global_ids(rev, branch_id, global_ids, include_validations=include_validations)
     attributes_by_global_id = {}
     for row in rows:
         gid = row["ifc_global_id"]

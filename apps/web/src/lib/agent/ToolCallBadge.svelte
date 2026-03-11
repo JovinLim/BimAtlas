@@ -68,15 +68,6 @@
 		font-size: 0.68rem;
 	}
 
-	.tool-chevron {
-		font-size: 0.6rem;
-		transition: transform 0.15s;
-	}
-
-	.tool-chevron.open {
-		transform: rotate(90deg);
-	}
-
 	.tool-detail {
 		margin-top: 0.35rem;
 		padding: 0.5rem;

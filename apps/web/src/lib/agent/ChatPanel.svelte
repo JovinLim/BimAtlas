@@ -1251,16 +1251,6 @@
     color: var(--color-danger);
   }
 
-  .chevron {
-    font-size: 0.55rem;
-    transition: transform 0.15s;
-    color: var(--color-text-muted);
-  }
-
-  .chevron.open {
-    transform: rotate(90deg);
-  }
-
   .chat-main {
     flex: 1;
     display: flex;

@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-  <title>BimAtlas Schema Browser</title>
+  <title>Schema • BimAtlas</title>
 </svelte:head>
 
 {@render children()}

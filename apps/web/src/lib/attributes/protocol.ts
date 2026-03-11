@@ -8,6 +8,8 @@ export const ATTRIBUTES_CHANNEL = "bimatlas-attributes";
 export interface AttributesContextPayload {
   branchId: string | null;
   projectId: string | null;
+  branchName: string | null;
+  projectName: string | null;
   revision: number | null;
   globalId: string | null;
 }

@@ -85,7 +85,8 @@ TEST_DB_CONFIG = {
 # ---------------------------------------------------------------------------
 
 SCHEMA_SQL = """
--- Drop existing tables (reverse dependency order)
+-- Drop existing objects (reverse dependency order)
+DROP MATERIALIZED VIEW IF EXISTS mv_entity_validations CASCADE;
 DROP TABLE IF EXISTS merge_conflict_log CASCADE;
 DROP TABLE IF EXISTS merge_request CASCADE;
 DROP TABLE IF EXISTS validation_rule CASCADE;
@@ -167,6 +168,19 @@ CREATE INDEX IF NOT EXISTS idx_ifc_entity_current ON ifc_entity(branch_id, ifc_g
 CREATE INDEX IF NOT EXISTS idx_ifc_entity_class ON ifc_entity(branch_id, ifc_class) WHERE obsoleted_in_revision_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_ifc_entity_attributes ON ifc_entity USING GIN (attributes);
 
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_validation_attrs_gin
+  ON ifc_entity USING GIN (attributes jsonb_path_ops)
+  WHERE ifc_class = 'IfcValidationResults' AND obsoleted_in_revision_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_validation_run
+  ON ifc_entity (
+    branch_id,
+    ((attributes->>'TargetRevisionSeq')::int),
+    (attributes->>'SchemaGlobalId'),
+    (attributes->>'rule_id')
+  )
+  WHERE ifc_class = 'IfcValidationResults' AND obsoleted_in_revision_id IS NULL;
+
 CREATE TABLE IF NOT EXISTS filter_sets (
     filter_set_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     branch_id     UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
@@ -223,6 +237,8 @@ CREATE TABLE IF NOT EXISTS merge_conflict_log (
 
 CREATE TABLE IF NOT EXISTS validation_rule (
     rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    logical_rule_id  UUID,
+    version          INTEGER NOT NULL DEFAULT 1,
     name             VARCHAR NOT NULL,
     description      TEXT,
     schema_id        UUID REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
@@ -232,6 +248,30 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     severity         rule_severity NOT NULL DEFAULT 'Error',
     is_active        BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_rule_logical_version
+  ON validation_rule (logical_rule_id, version)
+  WHERE logical_rule_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_rule_active_per_logical
+  ON validation_rule (logical_rule_id)
+  WHERE is_active = TRUE AND logical_rule_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION set_validation_rule_logical_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.logical_rule_id IS NULL THEN
+    NEW.logical_rule_id := NEW.rule_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_validation_rule_logical_id ON validation_rule;
+CREATE TRIGGER tr_validation_rule_logical_id
+  BEFORE INSERT ON validation_rule
+  FOR EACH ROW
+  EXECUTE FUNCTION set_validation_rule_logical_id();
 
 CREATE TABLE IF NOT EXISTS agent_chat (
     chat_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -250,6 +290,45 @@ CREATE TABLE IF NOT EXISTS agent_chat_message (
     tool_calls JSONB,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE MATERIALIZED VIEW mv_entity_validations AS
+WITH validation_rows AS (
+  SELECT
+    e.branch_id,
+    (e.attributes->>'TargetRevisionSeq')::int AS revision_seq,
+    e.attributes->>'rule_id' AS rule_id,
+    COALESCE((e.attributes->>'rule_version')::int, 1) AS rule_version,
+    vr.name AS rule_name,
+    vr.severity::text AS severity,
+    e.attributes->>'SchemaName' AS schema_name,
+    jsonb_array_elements_text(COALESCE(e.attributes->'results'->'failed_global_ids', '[]'::jsonb)) AS entity_global_id,
+    false AS passed,
+    CASE WHEN COALESCE((e.attributes->>'rule_version')::int, 1) = vr.version THEN 'fresh' ELSE 'stale' END AS status
+  FROM ifc_entity e
+  JOIN validation_rule vr ON vr.rule_id::text = e.attributes->>'rule_id' AND vr.is_active = true
+  WHERE e.ifc_class = 'IfcValidationResults' AND e.obsoleted_in_revision_id IS NULL
+  UNION ALL
+  SELECT
+    e.branch_id,
+    (e.attributes->>'TargetRevisionSeq')::int AS revision_seq,
+    e.attributes->>'rule_id' AS rule_id,
+    COALESCE((e.attributes->>'rule_version')::int, 1) AS rule_version,
+    vr.name AS rule_name,
+    vr.severity::text AS severity,
+    e.attributes->>'SchemaName' AS schema_name,
+    jsonb_array_elements_text(COALESCE(e.attributes->'results'->'passed_global_ids', '[]'::jsonb)) AS entity_global_id,
+    true AS passed,
+    CASE WHEN COALESCE((e.attributes->>'rule_version')::int, 1) = vr.version THEN 'fresh' ELSE 'stale' END AS status
+  FROM ifc_entity e
+  JOIN validation_rule vr ON vr.rule_id::text = e.attributes->>'rule_id' AND vr.is_active = true
+  WHERE e.ifc_class = 'IfcValidationResults' AND e.obsoleted_in_revision_id IS NULL
+)
+SELECT branch_id, revision_seq, entity_global_id,
+  jsonb_object_agg(rule_id, jsonb_build_object('ruleName', rule_name, 'severity', severity, 'passed', passed, 'status', status, 'schemaName', schema_name)) AS validations
+FROM validation_rows
+GROUP BY branch_id, revision_seq, entity_global_id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_entity_validations_key ON mv_entity_validations (branch_id, revision_seq, entity_global_id);
 """
 
 GRAPH_SETUP_SQL = """
@@ -394,7 +473,13 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
             )
         except Exception:
             pass
-    
+
+        # Refresh materialized view after truncate
+        try:
+            cur.execute("REFRESH MATERIALIZED VIEW mv_entity_validations;")
+        except Exception:
+            pass
+
     yield conn
 
 

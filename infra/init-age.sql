@@ -121,6 +121,20 @@ CREATE INDEX idx_ifc_entity_rev_range  ON ifc_entity (branch_id, created_in_revi
 -- GIN index for JSONB attribute queries (FEAT-001 dynamic filter sets)
 CREATE INDEX idx_ifc_entity_attributes ON ifc_entity USING GIN (attributes);
 
+-- Partial indexes for IfcValidationResults (validation run lookups)
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_validation_attrs_gin
+  ON ifc_entity USING GIN (attributes jsonb_path_ops)
+  WHERE ifc_class = 'IfcValidationResults' AND obsoleted_in_revision_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ifc_entity_validation_run
+  ON ifc_entity (
+    branch_id,
+    ((attributes->>'TargetRevisionSeq')::int),
+    (attributes->>'SchemaGlobalId'),
+    (attributes->>'rule_id')
+  )
+  WHERE ifc_class = 'IfcValidationResults' AND obsoleted_in_revision_id IS NULL;
+
 -- ============================================================================
 -- Filter sets (named, reusable filter collections scoped to a branch)
 -- ============================================================================
@@ -199,6 +213,8 @@ CREATE TABLE IF NOT EXISTS merge_conflict_log (
 
 CREATE TABLE IF NOT EXISTS validation_rule (
     rule_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    logical_rule_id  UUID,
+    version          INTEGER NOT NULL DEFAULT 1,
     name             VARCHAR NOT NULL,
     description      TEXT,
     schema_id        UUID REFERENCES ifc_schema(schema_id) ON DELETE CASCADE,
@@ -208,6 +224,31 @@ CREATE TABLE IF NOT EXISTS validation_rule (
     severity         rule_severity NOT NULL DEFAULT 'Error',
     is_active        BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_rule_logical_version
+  ON validation_rule (logical_rule_id, version)
+  WHERE logical_rule_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_rule_active_per_logical
+  ON validation_rule (logical_rule_id)
+  WHERE is_active = TRUE AND logical_rule_id IS NOT NULL;
+
+-- Trigger: set logical_rule_id = rule_id when null (new rules are their own logical root)
+CREATE OR REPLACE FUNCTION set_validation_rule_logical_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.logical_rule_id IS NULL THEN
+    NEW.logical_rule_id := NEW.rule_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_validation_rule_logical_id ON validation_rule;
+CREATE TRIGGER tr_validation_rule_logical_id
+  BEFORE INSERT ON validation_rule
+  FOR EACH ROW
+  EXECUTE FUNCTION set_validation_rule_logical_id();
 
 -- ============================================================================
 -- Agent chat sessions (persistent conversation history)

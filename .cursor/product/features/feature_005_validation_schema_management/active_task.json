@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "feature_id": "feature_004_validation_schema_management",
+    "feature_id": "feature_005_validation_schema_management",
     "feature_description": "Integrated IFC validation framework where validation rules (IfcValidation) and grouping schemas (IfcValidationSchema) are first-class graph citizens stored in ifc_entity. Supports attribute checks, inheritance-aware validation, and subgraph/relationship-scoped validation via Apache AGE Cypher traversals. Includes a Schema Browser UI popup and MCP tool stubs for agentic workflows.",
     "plan_reference": "validation-schema-management_bfbf.plan.md",
     "assigned_agent": "execution_agent",

@@ -727,7 +727,7 @@
           <h3 id="guide-title">Filter Guide</h3>
           <button
             type="button"
-            class="icon-btn icon-btn-close"
+            class="btn-close"
             aria-label="Close"
             onclick={() => (filterGuideOpen = false)}
           >
@@ -860,7 +860,7 @@
             </div>
             <div class="set-actions">
               <button
-                class="icon-btn icon-btn--danger"
+                class="btn-icon btn-danger"
                 title="Delete"
                 onclick={() => handleDeleteFilterSet(fs.id)}
               >
@@ -906,7 +906,7 @@
         <h3>New Filter Set</h3>
         <button
           type="button"
-          class="icon-btn icon-btn-close"
+          class="btn-close"
           aria-label="Close filter set editor"
           onclick={() => (filterSetEditorOpen = false)}
         >
@@ -940,12 +940,12 @@
         />
         <div class="logic-toggle">
           <button
-            class="mode-btn"
+            class="btn-mode"
             class:active={editorLogic === "AND"}
             onclick={() => (editorLogic = "AND")}>AND</button
           >
           <button
-            class="mode-btn"
+            class="btn-mode"
             class:active={editorLogic === "OR"}
             onclick={() => (editorLogic = "OR")}>OR</button
           >
@@ -967,7 +967,7 @@
       </div>
 
       <div class="editor-toolbar">
-        <button class="add-btn" aria-label="Add filter" onclick={addFilter}>
+        <button class="btn-add" aria-label="Add filter" onclick={addFilter}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path
               d="M8 3v10M3 8h10"
@@ -1043,13 +1043,13 @@
                 />
                 <div class="logic-toggle">
                   <button
-                    class="mode-btn"
+                    class="btn-mode"
                     class:active={fs.logic === "AND"}
                     onclick={() => handleLogicChange(fs, "AND")}
                     >AND</button
                   >
                   <button
-                    class="mode-btn"
+                    class="btn-mode"
                     class:active={fs.logic === "OR"}
                     onclick={() => handleLogicChange(fs, "OR")}
                     >OR</button
@@ -1145,7 +1145,7 @@
                         <div class="applied-filter-actions">
                           <button
                             type="button"
-                            class="icon-btn"
+                            class="btn-icon"
                             aria-label="Edit filter"
                             onclick={() => beginEditAppliedFilter(fs, f, idx)}
                           >
@@ -1163,7 +1163,7 @@
                           </button>
                           <button
                             type="button"
-                            class="icon-btn icon-btn-danger"
+                            class="btn-icon btn-danger"
                             aria-label="Delete filter"
                             disabled={fs.filters.length <= 1}
                             onclick={() => deleteAppliedFilter(fs, idx)}
@@ -1191,7 +1191,7 @@
               <div class="editor-toolbar applied-toolbar">
                 <button
                   type="button"
-                  class="add-btn"
+                  class="btn-add"
                   onclick={() => addFilterToAppliedSet(fs)}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -1272,18 +1272,6 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  .btn-guide {
-    font-size: 0.72rem;
-    padding: 0.25rem 0.5rem;
-    background: var(--color-bg-elevated);
-    color: var(--color-text-muted);
-  }
-
-  .btn-guide:hover {
-    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
-    color: var(--color-action-primary);
   }
 
   .guide-backdrop {
@@ -1409,17 +1397,8 @@
     gap: 0.35rem;
   }
 
-  .section-chevron {
-    font-size: 0.6rem;
-    color: var(--color-text-muted);
-    transition: transform 0.15s;
-  }
 
-  .section-chevron.open {
-    transform: rotate(90deg);
-  }
-
-  .section-header--with-close .icon-btn-close {
+  .section-header--with-close .btn-close {
     margin-left: auto;
   }
 
@@ -1452,79 +1431,6 @@
   }
 
   /* ---- Scope selector ---- */
-
-  .scope-selector {
-    flex-shrink: 0;
-    position: relative;
-  }
-
-  .scope-trigger {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.5rem;
-    color: var(--color-text-primary);
-    padding: 0.2rem 0.4rem;
-    font-size: 0.7rem;
-    cursor: pointer;
-    outline: none;
-    font-family: inherit;
-    min-width: 6rem;
-  }
-
-  .scope-trigger:hover {
-    border-color: var(--color-border-strong);
-  }
-
-  .scope-trigger:focus-visible {
-    border-color: var(--color-border-strong);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-border-strong) 25%, transparent);
-  }
-
-  .scope-chevron {
-    font-size: 0.55rem;
-    color: var(--color-text-muted);
-    transition: transform 0.15s;
-  }
-
-  .scope-chevron.open {
-    transform: rotate(180deg);
-  }
-
-  .scope-dropdown {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin: 0.2rem 0 0;
-    padding: 0.25rem 0;
-    min-width: 100%;
-    list-style: none;
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-    z-index: 100;
-  }
-
-  .scope-option {
-    padding: 0.3rem 0.5rem;
-    font-size: 0.7rem;
-    color: var(--color-text-primary);
-    cursor: pointer;
-    transition: background 0.1s;
-  }
-
-  .scope-option:hover {
-    background: color-mix(in srgb, var(--color-action-primary) 10%, transparent);
-    color: var(--color-action-primary);
-  }
-
-  .scope-option.selected {
-    background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
-    color: var(--color-action-primary);
-  }
 
   /* ---- Filter set list ---- */
 
@@ -1581,26 +1487,6 @@
     display: flex;
     gap: 0.2rem;
     flex-shrink: 0;
-  }
-
-  .icon-btn {
-    background: none;
-    border: none;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 0.2rem;
-    border-radius: 0.2rem;
-    display: flex;
-    align-items: center;
-    transition: color 0.12s;
-  }
-
-  .icon-btn:hover {
-    color: var(--color-action-primary);
-  }
-
-  .icon-btn--danger:hover {
-    color: var(--color-danger);
   }
 
   /* ---- Apply bar ---- */
@@ -1746,40 +1632,6 @@
     flex-shrink: 0;
   }
 
-  .icon-btn {
-    width: 1.5rem;
-    height: 1.5rem;
-    border-radius: 0.28rem;
-    border: 1px solid var(--color-border-default);
-    background: var(--color-bg-elevated);
-    color: var(--color-text-muted);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition:
-      color 0.15s,
-      border-color 0.15s,
-      background 0.15s;
-  }
-
-  .icon-btn:hover:not(:disabled) {
-    color: var(--color-text-secondary);
-    border-color: var(--color-border-strong);
-    background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
-  }
-
-  .icon-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  .icon-btn-danger:hover:not(:disabled) {
-    color: var(--color-danger);
-    border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
-    background: color-mix(in srgb, var(--color-danger) 9%, transparent);
-  }
-
   .applied-filter-edit {
     border: 1px solid var(--color-border-default);
     border-radius: 0.35rem;
@@ -1802,29 +1654,6 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-  }
-
-  .mode-btn {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.25rem;
-    color: var(--color-text-muted);
-    padding: 0.2rem 0.5rem;
-    font-size: 0.68rem;
-    cursor: pointer;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-
-  .mode-btn:hover {
-    color: var(--color-text-secondary);
-  }
-
-  .mode-btn.active {
-    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
-    color: var(--color-action-primary);
-    border-color: color-mix(in srgb, var(--color-action-primary) 35%, transparent);
   }
 
   /* ---- Editor ---- */
@@ -1876,82 +1705,11 @@
     flex-wrap: wrap;
   }
 
-  .add-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    background: var(--color-bg-elevated);
-    border: 1px dashed var(--color-border-default);
-    border-radius: 0.35rem;
-    color: var(--color-text-muted);
-    padding: 0.35rem 0.7rem;
-    font-size: 0.78rem;
-    cursor: pointer;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-
-  .add-btn:hover {
-    background: color-mix(in srgb, var(--color-action-primary) 12%, transparent);
-    color: var(--color-action-primary);
-    border-color: color-mix(in srgb, var(--color-action-primary) 35%, transparent);
-  }
-
   .empty-hint {
     padding: 0.75rem 0;
     text-align: center;
     font-size: 0.78rem;
     color: var(--color-text-muted);
-  }
-
-  .btn {
-    padding: 0.45rem 1rem;
-    font-size: 0.78rem;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    cursor: pointer;
-    font-weight: 500;
-    transition:
-      background 0.15s,
-      opacity 0.15s;
-  }
-
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .btn-secondary {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-secondary);
-  }
-
-  .btn-secondary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
-    color: var(--color-text-primary);
-  }
-
-  .btn-primary {
-    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-action-primary) 35%, transparent);
-    color: var(--color-action-primary);
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    background: var(--color-action-primary);
-    border-color: var(--color-action-primary);
-    color: var(--color-bg-surface);
-  }
-
-  .btn-danger {
-    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
-    color: var(--color-danger);
-  }
-
-  .btn-danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-    color: var(--color-danger);
   }
 
   /* ---- Color toggle bar ---- */

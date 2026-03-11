@@ -52,6 +52,18 @@ export const PROJECT_QUERY = gql`
 	}
 `;
 
+/** Fetch a single branch by id. */
+export const BRANCH_QUERY = gql`
+	query Branch($branchId: String!) {
+		branch(branchId: $branchId) {
+			id
+			projectId
+			name
+			createdAt
+		}
+	}
+`;
+
 /** Fetch branches for a project. */
 export const BRANCHES_QUERY = gql`
 	query Branches($projectId: String!) {
@@ -543,43 +555,113 @@ export const DELETE_SHEET_TEMPLATE_MUTATION = gql`
 	}
 `;
 
-// ---- Validation Schema Management (FEAT-004) ----
+// ---- Uploaded IFC Schemas (from POST /ifc-schema) ----
 
-const VALIDATION_CONDITION_FIELDS = `path operator value`;
-const VALIDATION_SPATIAL_FIELDS = `traversal scopeClass scopeName scopeGlobalId`;
-const VALIDATION_RULE_FIELDS = `
-	globalId name description ruleType targetClass severity includeSubtypes
-	conditions { ${VALIDATION_CONDITION_FIELDS} }
-	spatialContext { ${VALIDATION_SPATIAL_FIELDS} }
-`;
-const VALIDATION_SCHEMA_FIELDS = `
-	globalId name description version isActive
-	rules { ${VALIDATION_RULE_FIELDS} }
-`;
-
-export const VALIDATION_SCHEMAS_QUERY = gql`
-	query ValidationSchemas($branchId: String!, $revision: Int) {
-		validationSchemas(branchId: $branchId, revision: $revision) {
-			${VALIDATION_SCHEMA_FIELDS}
+export const UPLOADED_SCHEMAS_QUERY = gql`
+	query UploadedSchemas {
+		uploadedSchemas {
+			id
+			versionName
+			ruleCount
+			projectIds
 		}
 	}
 `;
 
-export const VALIDATION_SCHEMA_QUERY = gql`
-	query ValidationSchema($branchId: String!, $globalId: String!, $revision: Int) {
-		validationSchema(branchId: $branchId, globalId: $globalId, revision: $revision) {
-			${VALIDATION_SCHEMA_FIELDS}
+export const APPLY_SCHEMA_TO_PROJECT_MUTATION = gql`
+	mutation ApplySchemaToProject($projectId: String!, $schemaId: String!) {
+		applySchemaToProject(projectId: $projectId, schemaId: $schemaId)
+	}
+`;
+
+export const UNAPPLY_SCHEMA_FROM_PROJECT_MUTATION = gql`
+	mutation UnapplySchemaFromProject($projectId: String!, $schemaId: String!) {
+		unapplySchemaFromProject(projectId: $projectId, schemaId: $schemaId)
+	}
+`;
+
+export const CREATE_UPLOADED_SCHEMA_MUTATION = gql`
+	mutation CreateUploadedSchema($name: String!) {
+		createUploadedSchema(name: $name) {
+			id
+			versionName
+			ruleCount
+			projectIds
 		}
 	}
 `;
 
-export const VALIDATION_RULES_QUERY = gql`
-	query ValidationRules($branchId: String!, $schemaGlobalId: String, $revision: Int) {
-		validationRules(branchId: $branchId, schemaGlobalId: $schemaGlobalId, revision: $revision) {
-			${VALIDATION_RULE_FIELDS}
+export const CREATE_UPLOADED_SCHEMA_RULE_MUTATION = gql`
+	mutation CreateUploadedSchemaRule(
+		$schemaId: String!
+		$name: String!
+		$targetIfcClass: String!
+		$description: String
+		$severity: String
+		$effectiveRequiredAttributesJson: String
+		$ruleSchemaJson: String
+	) {
+		createUploadedSchemaRule(
+			schemaId: $schemaId
+			name: $name
+			targetIfcClass: $targetIfcClass
+			description: $description
+			severity: $severity
+			effectiveRequiredAttributesJson: $effectiveRequiredAttributesJson
+			ruleSchemaJson: $ruleSchemaJson
+		) {
+			ruleId
+			name
+			description
+			targetIfcClass
+			effectiveRequiredAttributes
+			displaySeverity
+			severity
 		}
 	}
 `;
+
+export const UPDATE_UPLOADED_SCHEMA_RULE_MUTATION = gql`
+	mutation UpdateUploadedSchemaRule($ruleId: String!, $effectiveRequiredAttributesJson: String!) {
+		updateUploadedSchemaRule(ruleId: $ruleId, effectiveRequiredAttributesJson: $effectiveRequiredAttributesJson)
+	}
+`;
+
+export const VALIDATION_RULES_FOR_UPLOADED_SCHEMA_QUERY = gql`
+	query ValidationRulesForUploadedSchema($schemaId: String!) {
+		validationRulesForUploadedSchema(schemaId: $schemaId) {
+			ruleId name description targetIfcClass effectiveRequiredAttributes ruleSchemaJson displaySeverity severity
+		}
+	}
+`;
+
+export const UPDATE_UPLOADED_SCHEMA_RULE_FULL_MUTATION = gql`
+	mutation UpdateUploadedSchemaRuleFull(
+		$ruleId: String!
+		$name: String
+		$description: String
+		$targetIfcClass: String
+		$severity: String
+		$ruleSchemaJson: String
+	) {
+		updateUploadedSchemaRule(
+			ruleId: $ruleId
+			name: $name
+			description: $description
+			targetIfcClass: $targetIfcClass
+			severity: $severity
+			ruleSchemaJson: $ruleSchemaJson
+		)
+	}
+`;
+
+export const DELETE_UPLOADED_SCHEMA_RULE_MUTATION = gql`
+	mutation DeleteUploadedSchemaRule($ruleId: String!) {
+		deleteUploadedSchemaRule(ruleId: $ruleId)
+	}
+`;
+
+// ---- Validation (uploaded schema / validation_rule based) ----
 
 export const VALIDATION_RESULTS_QUERY = gql`
 	query ValidationResults($branchId: String!, $revision: Int) {
@@ -594,81 +676,9 @@ export const VALIDATION_RESULTS_QUERY = gql`
 	}
 `;
 
-export const CREATE_VALIDATION_SCHEMA_MUTATION = gql`
-	mutation CreateValidationSchema($branchId: String!, $name: String!, $description: String, $version: String) {
-		createValidationSchema(branchId: $branchId, name: $name, description: $description, version: $version) {
-			${VALIDATION_SCHEMA_FIELDS}
-		}
-	}
-`;
-
-export const UPDATE_VALIDATION_SCHEMA_MUTATION = gql`
-	mutation UpdateValidationSchema($branchId: String!, $globalId: String!, $name: String, $description: String, $version: String) {
-		updateValidationSchema(branchId: $branchId, globalId: $globalId, name: $name, description: $description, version: $version) {
-			${VALIDATION_SCHEMA_FIELDS}
-		}
-	}
-`;
-
-export const DELETE_VALIDATION_SCHEMA_MUTATION = gql`
-	mutation DeleteValidationSchema($branchId: String!, $globalId: String!) {
-		deleteValidationSchema(branchId: $branchId, globalId: $globalId)
-	}
-`;
-
-export const CREATE_VALIDATION_RULE_MUTATION = gql`
-	mutation CreateValidationRule(
-		$branchId: String!, $name: String!, $targetClass: String!, $severity: String,
-		$description: String, $ruleType: String, $includeSubtypes: Boolean,
-		$conditions: [ValidationConditionInput!], $spatialContext: ValidationSpatialContextInput
-	) {
-		createValidationRule(
-			branchId: $branchId, name: $name, targetClass: $targetClass, severity: $severity,
-			description: $description, ruleType: $ruleType, includeSubtypes: $includeSubtypes,
-			conditions: $conditions, spatialContext: $spatialContext
-		) {
-			${VALIDATION_RULE_FIELDS}
-		}
-	}
-`;
-
-export const UPDATE_VALIDATION_RULE_MUTATION = gql`
-	mutation UpdateValidationRule(
-		$branchId: String!, $globalId: String!, $name: String, $targetClass: String,
-		$severity: String, $description: String, $includeSubtypes: Boolean,
-		$conditions: [ValidationConditionInput!], $spatialContext: ValidationSpatialContextInput
-	) {
-		updateValidationRule(
-			branchId: $branchId, globalId: $globalId, name: $name, targetClass: $targetClass,
-			severity: $severity, description: $description, includeSubtypes: $includeSubtypes,
-			conditions: $conditions, spatialContext: $spatialContext
-		) {
-			${VALIDATION_RULE_FIELDS}
-		}
-	}
-`;
-
-export const DELETE_VALIDATION_RULE_MUTATION = gql`
-	mutation DeleteValidationRule($branchId: String!, $globalId: String!) {
-		deleteValidationRule(branchId: $branchId, globalId: $globalId)
-	}
-`;
-
-export const LINK_RULE_TO_SCHEMA_MUTATION = gql`
-	mutation LinkRuleToSchema($branchId: String!, $ruleGlobalId: String!, $schemaGlobalId: String!) {
-		linkRuleToSchema(branchId: $branchId, ruleGlobalId: $ruleGlobalId, schemaGlobalId: $schemaGlobalId)
-	}
-`;
-
-export const UNLINK_RULE_FROM_SCHEMA_MUTATION = gql`
-	mutation UnlinkRuleFromSchema($branchId: String!, $ruleGlobalId: String!, $schemaGlobalId: String!) {
-		unlinkRuleFromSchema(branchId: $branchId, ruleGlobalId: $ruleGlobalId, schemaGlobalId: $schemaGlobalId)
-	}
-`;
-
-export const RUN_VALIDATION_MUTATION = gql`
-	mutation RunValidation($branchId: String!, $schemaGlobalId: String!, $revision: Int) {
-		runValidation(branchId: $branchId, schemaGlobalId: $schemaGlobalId, revision: $revision) {
+export const RUN_VALIDATION_BY_UPLOADED_SCHEMA_MUTATION = gql`
+	mutation RunValidationByUploadedSchema($branchId: String!, $schemaId: String!, $revision: Int) {
+		runValidationByUploadedSchema(branchId: $branchId, schemaId: $schemaId, revision: $revision) {
 			schemaGlobalId schemaName branchId revisionSeq
 			errorCount warningCount infoCount passedCount
 			results {
@@ -676,5 +686,11 @@ export const RUN_VALIDATION_MUTATION = gql`
 				violations { globalId ifcClass message }
 			}
 		}
+	}
+`;
+
+export const DELETE_UPLOADED_SCHEMA_MUTATION = gql`
+	mutation DeleteUploadedSchema($schemaId: String!) {
+		deleteUploadedSchema(schemaId: $schemaId)
 	}
 `;

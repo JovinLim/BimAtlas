@@ -32,6 +32,12 @@ export const FORMULA_SUGGESTIONS: FormulaSuggestion[] = [
     description: "Top header columns can pull an IFC entity attribute for every row.",
   },
   {
+    name: "ENTITY.Validations",
+    template: "ENTITY.Validations.",
+    signature: "=ENTITY.Validations.<RuleId>.passed",
+    description: "Validation results: .passed (true/false), .severity (Error/Warning/Info), .status (fresh/stale). Example: =ENTITY.Validations.abc123.passed",
+  },
+  {
     name: "HEADER_ALIAS",
     template: "[Display Text](=ENTITY.Attribute)",
     signature: "[Display Text](Formula)",
