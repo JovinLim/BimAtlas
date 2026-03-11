@@ -1,4 +1,4 @@
-# feat: Validation Schema Management & Subgraph Validation Engine (FEAT-004)
+# feat: Validation Schema Management & Subgraph Validation Engine (FEAT-005)
 
 ## Summary
 
@@ -30,5 +30,5 @@ cd apps/api && source .venv/bin/activate && ./run_tests.sh
 
 ## Related
 
-- PRD: `.cursor/product/features/feature_004_validation_schema_management/prd.md`
+- PRD: `.cursor/product/features/feature_005_validation_schema_management/prd.md`
 - Plan: `.cursor/plans/validation-schema-management_bfbf.plan.md`

@@ -1,8 +1,8 @@
-"""Validation engine: evaluates IfcValidation rules against a branch/revision.
+"""Validation engine: evaluates validation_rule rows against a branch/revision.
 
-The engine fetches rules linked to a schema via the AGE graph, resolves
-target entities (with optional inheritance expansion and subgraph scoping),
-and applies attribute-level condition checks in Python.
+Uses the ``validation_rule`` table (linked to ``ifc_schema``) as the source
+of truth for rule definitions. Results are persisted as ``IfcValidationResult``
+entities in ``ifc_entity`` for branch/revision-scoped history.
 """
 
 from __future__ import annotations
@@ -14,19 +14,13 @@ from typing import Any
 
 from ...db import (
     create_validation_entity,
-    create_validation_revision,
     fetch_entities_at_revision,
     fetch_ifc_schema_by_id,
-    fetch_validation_entity,
     fetch_validation_rules_by_schema_id,
     get_latest_revision_seq,
-)
-from ...schema import ifc_schema_loader
-from ..graph.age_client import (
-    get_entities_connected_via,
-    get_entities_in_aggregate_scope,
-    get_entities_in_spatial_scope,
-    get_rules_for_schema,
+    get_revision_id_for_seq,
+    has_validation_results_for_schema_revision,
+    refresh_mv_entity_validations,
 )
 
 logger = logging.getLogger("bimatlas.validation")
@@ -51,6 +45,8 @@ class RuleResult:
     severity: str
     passed: bool
     violations: list[Violation] = field(default_factory=list)
+    failed_global_ids: list[str] = field(default_factory=list)
+    passed_global_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -154,55 +150,6 @@ _OPERATORS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
-def _resolve_target_classes(rule_attrs: dict) -> list[str]:
-    """Resolve target IFC classes, expanding subtypes when requested."""
-    target_class = rule_attrs.get("TargetClass", "")
-    include_subtypes = rule_attrs.get("IncludeSubtypes", False)
-
-    if not target_class:
-        return []
-
-    if include_subtypes:
-        try:
-            descendants = ifc_schema_loader.get_descendants(
-                target_class, include_self=True, concrete_only=True,
-            )
-            return descendants if descendants else [target_class]
-        except Exception:
-            return [target_class]
-
-    return [target_class]
-
-
-def _resolve_scoped_entities(
-    rule_attrs: dict,
-    rev: int,
-    branch_id: str,
-) -> list[str] | None:
-    """Apply spatial context scoping via graph traversal. Returns global_ids or None."""
-    spatial_ctx = rule_attrs.get("SpatialContext")
-    if not spatial_ctx or not isinstance(spatial_ctx, dict):
-        return None
-
-    traversal = spatial_ctx.get("traversal", "")
-    scope_gid = spatial_ctx.get("scope_global_id")
-    scope_name = spatial_ctx.get("scope_name")
-
-    if traversal == "IfcRelContainedInSpatialStructure":
-        return get_entities_in_spatial_scope(scope_gid, scope_name, rev, branch_id)
-    elif traversal == "IfcRelAggregates":
-        if scope_gid:
-            return get_entities_in_aggregate_scope(scope_gid, rev, branch_id)
-    elif traversal in (
-        "IfcRelConnectsElements", "IfcRelVoidsElement",
-        "IfcRelFillsElement", "IfcRelDefinesByType",
-    ):
-        if scope_gid:
-            return get_entities_connected_via(scope_gid, traversal, rev, branch_id)
-
-    return None
-
-
 def _check_conditions(
     entity_attrs: dict, conditions: list[dict],
 ) -> str | None:
@@ -229,165 +176,23 @@ def _check_conditions(
     return None
 
 
-def evaluate_rule(
-    rule_global_id: str,
-    rule_attrs: dict,
-    branch_id: str,
-    rev: int,
-) -> RuleResult:
-    """Evaluate a single validation rule against entities on a branch/revision."""
-    rule_name = rule_attrs.get("Name", "Unnamed rule")
-    severity = rule_attrs.get("Severity", "Error")
-    conditions = rule_attrs.get("Conditions", [])
-
-    if not isinstance(conditions, list):
-        conditions = []
-
-    target_classes = _resolve_target_classes(rule_attrs)
-    if not target_classes:
-        return RuleResult(
-            rule_global_id=rule_global_id,
-            rule_name=rule_name,
-            severity=severity,
-            passed=True,
+def _resolve_target_classes(
+    target_ifc_class: str,
+    include_inherited: bool,
+) -> list[str]:
+    """Return [target_class] or [target_class] + descendant classes for entity fetch."""
+    if not include_inherited:
+        return [target_ifc_class]
+    try:
+        from ...schema import ifc_schema_loader
+        descendants = ifc_schema_loader.get_descendants(
+            target_ifc_class,
+            include_self=False,
+            concrete_only=False,
         )
-
-    scoped_gids = _resolve_scoped_entities(rule_attrs, rev, branch_id)
-
-    from ...db import fetch_entities_at_revision
-    all_entities: list[dict] = []
-    for tc in target_classes:
-        rows = fetch_entities_at_revision(rev, branch_id, ifc_class=tc)
-        all_entities.extend(rows)
-
-    if scoped_gids is not None:
-        scoped_set = set(scoped_gids)
-        all_entities = [
-            e for e in all_entities if e.get("ifc_global_id") in scoped_set
-        ]
-
-    # Deduplicate by global_id
-    seen: set[str] = set()
-    unique_entities: list[dict] = []
-    for e in all_entities:
-        gid = e.get("ifc_global_id", "")
-        if gid not in seen:
-            seen.add(gid)
-            unique_entities.append(e)
-
-    violations: list[Violation] = []
-    for entity in unique_entities:
-        attrs = entity.get("attributes", {})
-        if isinstance(attrs, str):
-            import json
-            attrs = json.loads(attrs)
-
-        failure_msg = _check_conditions(attrs, conditions)
-        if failure_msg:
-            violations.append(Violation(
-                global_id=entity.get("ifc_global_id", ""),
-                ifc_class=entity.get("ifc_class", ""),
-                message=failure_msg,
-            ))
-
-    return RuleResult(
-        rule_global_id=rule_global_id,
-        rule_name=rule_name,
-        severity=severity,
-        passed=len(violations) == 0,
-        violations=violations,
-    )
-
-
-def run_validation(
-    schema_global_id: str,
-    branch_id: str,
-    revision_seq: int | None = None,
-    persist_result: bool = True,
-) -> ValidationRunResult:
-    """Execute all rules in a validation schema against a branch."""
-    if revision_seq is None:
-        revision_seq = get_latest_revision_seq(branch_id)
-        if revision_seq is None:
-            raise ValueError("No revisions on branch")
-
-    schema_entity = fetch_validation_entity(branch_id, schema_global_id)
-    if schema_entity is None:
-        raise ValueError(f"Schema {schema_global_id} not found")
-
-    schema_attrs = schema_entity.get("attributes", {})
-    if isinstance(schema_attrs, str):
-        import json
-        schema_attrs = json.loads(schema_attrs)
-
-    schema_name = schema_attrs.get("Name", "Unnamed schema")
-
-    rule_gids = get_rules_for_schema(schema_global_id, revision_seq, branch_id)
-
-    results: list[RuleResult] = []
-    for rule_gid in rule_gids:
-        rule_entity = fetch_validation_entity(branch_id, rule_gid)
-        if rule_entity is None:
-            logger.warning("Rule %s not found in DB, skipping", rule_gid)
-            continue
-
-        rule_attrs = rule_entity.get("attributes", {})
-        if isinstance(rule_attrs, str):
-            import json
-            rule_attrs = json.loads(rule_attrs)
-
-        result = evaluate_rule(rule_gid, rule_attrs, branch_id, revision_seq)
-        results.append(result)
-
-    errors = sum(1 for r in results if not r.passed and r.severity == "Error")
-    warnings = sum(1 for r in results if not r.passed and r.severity == "Warning")
-    info = sum(1 for r in results if not r.passed and r.severity == "Info")
-    passed = sum(1 for r in results if r.passed)
-
-    summary = {"errors": errors, "warnings": warnings, "info": info, "passed": passed}
-
-    run_result = ValidationRunResult(
-        schema_global_id=schema_global_id,
-        schema_name=schema_name,
-        branch_id=branch_id,
-        revision_seq=revision_seq,
-        results=results,
-        summary=summary,
-    )
-
-    if persist_result:
-        try:
-            result_attrs = {
-                "Name": f"Validation run: {schema_name}",
-                "Description": f"Results for schema {schema_global_id}",
-                "SchemaGlobalId": schema_global_id,
-                "SchemaName": schema_name,
-                "Summary": summary,
-                "Results": [
-                    {
-                        "rule_global_id": r.rule_global_id,
-                        "rule_name": r.rule_name,
-                        "severity": r.severity,
-                        "passed": r.passed,
-                        "violation_count": len(r.violations),
-                        "violations": [
-                            {"global_id": v.global_id, "ifc_class": v.ifc_class,
-                             "message": v.message}
-                            for v in r.violations
-                        ],
-                    }
-                    for r in results
-                ],
-            }
-            rev_info = create_validation_revision(branch_id, f"Validation run: {schema_name}")
-            create_validation_entity(
-                branch_id, rev_info["revision_id"],
-                "IfcValidationResult", result_attrs,
-            )
-        except Exception:
-            logger.exception("Failed to persist validation result")
-
-    return run_result
+        return [target_ifc_class] + descendants
+    except Exception:
+        return [target_ifc_class]
 
 
 def run_validation_by_uploaded_schema(
@@ -398,8 +203,9 @@ def run_validation_by_uploaded_schema(
     """Execute validation rules from an uploaded IFC schema against a branch.
 
     Uses validation_rule rows (required_attributes, inheritance) linked to
-    the schema. Returns ValidationRunResult with schema_global_id set to
-    schema_id for API compatibility.
+    the schema. Each rule may set includeSubclasses in its rule_schema:
+    when True, the rule applies to the target IFC class and all its
+    subclasses; when False, only the exact target class is considered.
     """
     import json
 
@@ -407,6 +213,14 @@ def run_validation_by_uploaded_schema(
         revision_seq = get_latest_revision_seq(branch_id)
         if revision_seq is None:
             raise ValueError("No revisions on branch")
+
+    # Enforce: a given validation schema can only be run once per
+    # IFC model revision on a branch.
+    if has_validation_results_for_schema_revision(branch_id, schema_id, revision_seq):
+        raise ValueError(
+            f"Validation schema {schema_id} has already been run for "
+            f"revision {revision_seq} on branch {branch_id}"
+        )
 
     schema_row = fetch_ifc_schema_by_id(schema_id)
     if schema_row is None:
@@ -456,7 +270,77 @@ def run_validation_by_uploaded_schema(
             continue
 
         rule_type = payload.get("ruleType")
-        if rule_type == "required_attributes":
+        conditions = payload.get("Conditions") or []
+        condition_logic = payload.get("ConditionLogic", "AND")
+        include_subclasses = bool(payload.get("includeSubclasses", False))
+        if not isinstance(conditions, list):
+            conditions = []
+
+        if rule_type == "attribute_check" and conditions:
+            target_classes = _resolve_target_classes(
+                target_class, include_subclasses,
+            )
+            entities = fetch_entities_at_revision(
+                revision_seq, branch_id, ifc_classes=target_classes,
+            )
+            violations: list[Violation] = []
+            for entity in entities:
+                attrs = entity.get("attributes", {})
+                if isinstance(attrs, str):
+                    try:
+                        attrs = json.loads(attrs)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        attrs = {}
+                if not isinstance(attrs, dict):
+                    attrs = {}
+                passed = False
+                if condition_logic == "OR":
+                    for cond in conditions:
+                        path = cond.get("path", "")
+                        if not path:
+                            continue
+                        operator = cond.get("operator", "exists")
+                        expected = cond.get("value")
+                        op_fn = _OPERATORS.get(operator)
+                        if not op_fn:
+                            continue
+                        actual = _resolve_nested_value(attrs, path)
+                        cond_ok = (
+                            op_fn(actual) if operator in ("exists", "not_exists")
+                            else op_fn(actual, expected or "")
+                        )
+                        if cond_ok:
+                            passed = True
+                            break
+                else:
+                    passed = _check_conditions(attrs, conditions) is None
+                if not passed:
+                    fail_msg = _check_conditions(attrs, conditions)
+                    violations.append(
+                        Violation(
+                            global_id=entity.get("ifc_global_id", ""),
+                            ifc_class=entity.get("ifc_class", ""),
+                            message=fail_msg or "Condition check failed",
+                        )
+                    )
+            failed = [v.global_id for v in violations]
+            passed_gids = [
+                e.get("ifc_global_id", "")
+                for e in entities
+                if e.get("ifc_global_id") and e.get("ifc_global_id") not in set(failed)
+            ]
+            results.append(
+                RuleResult(
+                    rule_global_id=rule_id,
+                    rule_name=rule_name,
+                    severity=severity,
+                    passed=len(violations) == 0,
+                    violations=violations,
+                    failed_global_ids=failed,
+                    passed_global_ids=passed_gids,
+                )
+            )
+        elif rule_type == "required_attributes":
             required_attrs = payload.get("effectiveRequiredAttributes") or []
             if not isinstance(required_attrs, list):
                 required_attrs = []
@@ -464,10 +348,13 @@ def run_validation_by_uploaded_schema(
                 a.get("name") for a in required_attrs
                 if isinstance(a, dict) and a.get("name")
             ]
-            entities = fetch_entities_at_revision(
-                revision_seq, branch_id, ifc_class=target_class,
+            target_classes = _resolve_target_classes(
+                target_class, include_subclasses,
             )
-            violations: list[Violation] = []
+            entities = fetch_entities_at_revision(
+                revision_seq, branch_id, ifc_classes=target_classes,
+            )
+            violations = []
             for entity in entities:
                 attrs = entity.get("attributes", {})
                 if isinstance(attrs, str):
@@ -487,6 +374,12 @@ def run_validation_by_uploaded_schema(
                                 message=f"Missing required attribute: {attr_name}",
                             )
                         )
+            failed = [v.global_id for v in violations]
+            passed_gids = [
+                e.get("ifc_global_id", "")
+                for e in entities
+                if e.get("ifc_global_id") and e.get("ifc_global_id") not in set(failed)
+            ]
             results.append(
                 RuleResult(
                     rule_global_id=rule_id,
@@ -494,6 +387,8 @@ def run_validation_by_uploaded_schema(
                     severity=severity,
                     passed=len(violations) == 0,
                     violations=violations,
+                    failed_global_ids=failed,
+                    passed_global_ids=passed_gids,
                 )
             )
         else:
@@ -503,6 +398,8 @@ def run_validation_by_uploaded_schema(
                     rule_name=rule_name,
                     severity=severity,
                     passed=True,
+                    failed_global_ids=[],
+                    passed_global_ids=[],
                 )
             )
 
@@ -512,7 +409,7 @@ def run_validation_by_uploaded_schema(
     passed = sum(1 for r in results if r.passed)
     summary = {"errors": errors, "warnings": warnings, "info": info, "passed": passed}
 
-    return ValidationRunResult(
+    run_result = ValidationRunResult(
         schema_global_id=schema_id,
         schema_name=schema_name,
         branch_id=branch_id,
@@ -520,3 +417,74 @@ def run_validation_by_uploaded_schema(
         results=results,
         summary=summary,
     )
+
+    try:
+        rev_id = get_revision_id_for_seq(branch_id, revision_seq)
+        if rev_id is None:
+            logger.warning(
+                "No revision_id found for branch %s revision_seq %s; "
+                "skipping persistence of validation results",
+                branch_id,
+                revision_seq,
+            )
+        else:
+            # Persist one IfcValidationResults entity per rule (write-optimized).
+            for r in results:
+                rule_version_val = 1
+                for row in rule_rows:
+                    if str(row.get("rule_id", "")) == r.rule_global_id:
+                        rule_version_val = int(row.get("version", 1))
+                        break
+                result_attrs = {
+                    "SchemaGlobalId": schema_id,
+                    "SchemaName": schema_name,
+                    "TargetRevisionSeq": revision_seq,
+                    "rule_id": r.rule_global_id,
+                    "rule_version": rule_version_val,
+                    "RuleName": r.rule_name,
+                    "Severity": r.severity,
+                    "results": {
+                        "failed_global_ids": r.failed_global_ids,
+                        "passed_global_ids": r.passed_global_ids,
+                    },
+                }
+                create_validation_entity(
+                    branch_id,
+                    rev_id,
+                    "IfcValidationResults",
+                    result_attrs,
+                )
+
+            # Also persist legacy IfcValidationResult for backward-compat API.
+            legacy_attrs = {
+                "Name": f"Validation run: {schema_name}",
+                "Description": f"Results for schema {schema_id}",
+                "SchemaGlobalId": schema_id,
+                "SchemaName": schema_name,
+                "TargetRevisionSeq": revision_seq,
+                "Summary": summary,
+                "Results": [
+                    {
+                        "rule_global_id": r.rule_global_id,
+                        "rule_name": r.rule_name,
+                        "severity": r.severity,
+                        "passed": r.passed,
+                        "violation_count": len(r.violations),
+                        "violations": [
+                            {"global_id": v.global_id, "ifc_class": v.ifc_class, "message": v.message}
+                            for v in r.violations
+                        ],
+                    }
+                    for r in results
+                ],
+            }
+            create_validation_entity(branch_id, rev_id, "IfcValidationResult", legacy_attrs)
+
+            try:
+                refresh_mv_entity_validations()
+            except Exception:
+                logger.warning("Failed to refresh mv_entity_validations", exc_info=True)
+    except Exception:
+        logger.exception("Failed to persist validation results")
+
+    return run_result

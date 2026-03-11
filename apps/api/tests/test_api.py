@@ -495,6 +495,91 @@ class TestGraphQLEndpoint:
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["data"]["unapplySchemaFromProject"] is True
 
+    def test_graphql_create_uploaded_schema(self, client, db_pool):
+        """Test createUploadedSchema mutation inserts into ifc_schema table."""
+        create_mutation = """
+        mutation ($name: String!) {
+            createUploadedSchema(name: $name) {
+                id
+                versionName
+                ruleCount
+                projectIds
+            }
+        }
+        """
+        response = client.post(
+            "/graphql",
+            json={
+                "query": create_mutation,
+                "variables": {"name": "TestSchema_Create"},
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        if "errors" in data:
+            raise AssertionError(f"GraphQL errors: {data['errors']}")
+        created = data["data"]["createUploadedSchema"]
+        assert created is not None
+        assert created["versionName"] == "TestSchema_Create"
+        assert created["ruleCount"] == 0
+        assert created["projectIds"] == []
+        assert len(created["id"]) == 36  # UUID string length
+
+        # Duplicate name should fail
+        response = client.post(
+            "/graphql",
+            json={
+                "query": create_mutation,
+                "variables": {"name": "TestSchema_Create"},
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        err_data = response.json()
+        assert "errors" in err_data
+
+    def test_graphql_create_uploaded_schema_rule(
+        self, client, db_pool, ifc_schema_seeded
+    ):
+        """Test createUploadedSchemaRule mutation inserts into validation_rule."""
+        # Get a schema id from uploaded schemas
+        query = """
+        query { uploadedSchemas { id versionName } }
+        """
+        resp = client.post("/graphql", json={"query": query})
+        assert resp.status_code == status.HTTP_200_OK
+        schemas = resp.json()["data"]["uploadedSchemas"]
+        assert schemas, "ifc_schema_seeded should provide at least one schema"
+        schema_id = schemas[0]["id"]
+
+        create_mutation = """
+        mutation ($schemaId: String!, $name: String!, $targetIfcClass: String!,
+                  $effectiveRequiredAttributesJson: String) {
+            createUploadedSchemaRule(
+                schemaId: $schemaId
+                name: $name
+                targetIfcClass: $targetIfcClass
+                effectiveRequiredAttributesJson: $effectiveRequiredAttributesJson
+            ) {
+                ruleId name targetIfcClass displaySeverity
+            }
+        }
+        """
+        vars = {
+            "schemaId": schema_id,
+            "name": "Test Required Attrs Rule",
+            "targetIfcClass": "IfcWall",
+            "effectiveRequiredAttributesJson": '[{"name":"Name","type":"IfcLabel","required":true,"definedOn":"IfcWall"}]',
+        }
+        resp = client.post("/graphql", json={"query": create_mutation, "variables": vars})
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        if "errors" in data:
+            raise AssertionError(f"GraphQL errors: {data['errors']}")
+        rule = data["data"]["createUploadedSchemaRule"]
+        assert rule["name"] == "Test Required Attrs Rule"
+        assert rule["targetIfcClass"] == "IfcWall"
+        assert len(rule["ruleId"]) == 36
+
     def test_graphql_branch_query(self, client, test_branch, test_project):
         """Test branch query returns projectId for a given branchId."""
         query = """

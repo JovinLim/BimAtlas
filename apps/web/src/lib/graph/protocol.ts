@@ -8,6 +8,8 @@ export const GRAPH_CHANNEL = "bimatlas-graph";
 export interface GraphContextPayload {
   branchId: string | null;
   projectId: string | null;
+  branchName: string | null;
+  projectName: string | null;
   revision: number | null;
   globalId: string | null;
   subgraphDepth: number;

@@ -9,13 +9,16 @@
     GRAPH_CHANNEL,
     type GraphMessage,
   } from "$lib/graph/protocol";
-  import { loadSettings } from "$lib/state/persistence";
+  import { loadSettings, saveSettings } from "$lib/state/persistence";
+  import DepthWidget from "$lib/ui/DepthWidget.svelte";
 
   const EMPTY_MESSAGE =
-    "Please select an object and adjust the Subgraph Depth option on the side panel";
+    "Please select an object and adjust the Subgraph Depth option above.";
 
   let branchId = $state<string | null>(null);
   let projectId = $state<string | null>(null);
+  let branchName = $state<string | null>(null);
+  let projectName = $state<string | null>(null);
   let revision = $state<number | null>(null);
   let globalId = $state<string | null>(null);
   let subgraphDepth = $state(1);
@@ -73,6 +76,8 @@
     if (msg.type === "context") {
       branchId = msg.branchId;
       projectId = msg.projectId;
+      branchName = msg.branchName ?? null;
+      projectName = msg.projectName ?? null;
       revision = msg.revision;
       globalId = msg.globalId;
       subgraphDepth = msg.subgraphDepth;
@@ -224,6 +229,31 @@
     graphStore.fetchGraph(b, r ?? undefined);
   });
 
+  // Persist graph-related settings (including depth) whenever they change
+  $effect(() => {
+    if (typeof window === "undefined") return;
+    saveSettings({
+      activeProjectId: projectId,
+      activeBranchId: branchId,
+      activeRevision: revision,
+      activeGlobalId: globalId,
+      subgraphDepth,
+      activeView: "graph",
+    });
+  });
+
+  // Keep URL in sync with current depth for sharable links
+  $effect(() => {
+    const url = $page.url;
+    const params = new URLSearchParams(url.searchParams);
+    params.set("subgraphDepth", String(subgraphDepth));
+    window.history.replaceState(
+      null,
+      "",
+      `${url.pathname}?${params.toString()}`,
+    );
+  });
+
   onMount(() => {
     applyContextFromUrl();
     applyContextFallbackFromSettings();
@@ -265,12 +295,20 @@
 
 <div class="graph-page">
   <header class="page-header">
-    <h2>Graph</h2>
-    {#if globalId}
-      <span class="context-pill mono">{globalId}</span>
-    {:else}
-      <span class="context-pill empty">No selection</span>
-    {/if}
+    <div class="page-header-main">
+      <h2>Graph</h2>
+      {#if branchName || projectName || branchId || projectId}
+        <span class="context-pill mono">
+          {projectName ?? projectId ?? "—"} / {branchName ?? branchId ?? "—"}
+          {#if revision != null}(rev {revision}){/if}
+        </span>
+      {:else}
+        <span class="context-pill empty">Waiting for context…</span>
+      {/if}
+    </div>
+    <div class="page-header-controls">
+      <DepthWidget bind:value={subgraphDepth} />
+    </div>
   </header>
 
   <div class="graph-container">
@@ -297,11 +335,17 @@
   .page-header {
     flex-shrink: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .page-header-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
   }
 
   .page-header h2 {
@@ -310,6 +354,10 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--color-brand-500);
+  }
+
+  .page-header-controls {
+    flex-shrink: 0;
   }
 
   .context-pill {

@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export type ElementClickCallback = (globalId: string | null) => void;
+export type ElementCountListener = (count: number) => void;
 
 export class SceneManager {
 	private scene: THREE.Scene;
@@ -22,6 +23,7 @@ export class SceneManager {
 	private raycaster: THREE.Raycaster;
 	private pointer: THREE.Vector2;
 	private onElementClick: ElementClickCallback | null = null;
+	private elementCountListener: ElementCountListener | null = null;
 	private canvas: HTMLCanvasElement;
 	private currentHighlight: string | null = null;
 	private mouseDownPos: { x: number; y: number } | null = null;
@@ -117,6 +119,14 @@ export class SceneManager {
 		this.onElementClick = cb;
 	}
 
+	/** Optional listener that is notified whenever the element count changes. */
+	setElementCountListener(listener: ElementCountListener | null): void {
+		this.elementCountListener = listener;
+		if (listener) {
+			listener(this.meshMap.size);
+		}
+	}
+
 	/** Add a mesh to the scene, keyed by IFC GlobalId. Skips if already present. */
 	addElement(globalId: string, geometry: THREE.BufferGeometry): void {
 		if (this.meshMap.has(globalId)) return;
@@ -125,6 +135,9 @@ export class SceneManager {
 		this.meshMap.set(globalId, mesh);
 		this.idByMesh.set(mesh, globalId);
 		this.scene.add(mesh);
+		if (this.elementCountListener) {
+			this.elementCountListener(this.meshMap.size);
+		}
 	}
 
 	/** Remove a single element from the scene and dispose its geometry. */
@@ -138,6 +151,9 @@ export class SceneManager {
 			if (this.currentHighlight === globalId) {
 				this.currentHighlight = null;
 			}
+			if (this.elementCountListener) {
+				this.elementCountListener(this.meshMap.size);
+			}
 		}
 	}
 
@@ -150,6 +166,9 @@ export class SceneManager {
 		this.meshMap.clear();
 		this.idByMesh.clear();
 		this.currentHighlight = null;
+		if (this.elementCountListener) {
+			this.elementCountListener(0);
+		}
 	}
 
 	/** Highlight a single element by globalId. Pass null to clear highlight. */

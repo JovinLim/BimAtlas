@@ -10,6 +10,8 @@
 
   let branchId = $state<string | null>(null);
   let projectId = $state<string | null>(null);
+  let branchName = $state<string | null>(null);
+  let projectName = $state<string | null>(null);
   let revision = $state<number | null>(null);
   let globalId = $state<string | null>(null);
 
@@ -54,6 +56,8 @@
     if (msg.type === "context") {
       branchId = msg.branchId;
       projectId = msg.projectId;
+      branchName = msg.branchName ?? null;
+      projectName = msg.projectName ?? null;
       revision = msg.revision;
       globalId = msg.globalId;
 
@@ -137,10 +141,13 @@
 <div class="attributes-page">
   <header class="page-header">
     <h2>Attribute Panel</h2>
-    {#if globalId}
-      <span class="context-pill mono">{globalId}</span>
+    {#if branchName || projectName || branchId || projectId}
+      <span class="context-pill mono">
+        {projectName ?? projectId ?? "—"} / {branchName ?? branchId ?? "—"}
+        {#if revision != null}(rev {revision}){/if}
+      </span>
     {:else}
-      <span class="context-pill empty">No element selected</span>
+      <span class="context-pill empty">Waiting for context…</span>
     {/if}
   </header>
 

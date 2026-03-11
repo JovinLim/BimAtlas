@@ -469,11 +469,38 @@
           </ul>
         </div>
       {/if}
+      {#if product.attributes?.Validations && typeof product.attributes.Validations === "object"}
+        <div class="relations-section">
+          <span class="label">Validations</span>
+          <ul class="validation-list">
+            {#each Object.entries(product.attributes.Validations) as [ruleId, v]}
+              {@const rule = v as { ruleName?: string; severity?: string; passed?: boolean; status?: string }}
+              <li class="validation-item">
+                <span
+                  class="validation-badge"
+                  class:passed={rule.passed === true}
+                  class:failed={rule.passed === false}
+                >
+                  {rule.passed === true ? "Pass" : "Fail"}
+                </span>
+                <span class="validation-severity severity-{(rule.severity ?? "error").toLowerCase()}">{rule.severity ?? "Error"}</span>
+                <span class="validation-rule-name">{rule.ruleName ?? ruleId}</span>
+                {#if rule.status === "stale"}
+                  <span class="validation-stale">Needs Rerun</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
       {#if product.attributes}
         <div class="relations-section">
           <span class="label">Attributes</span>
           <ul class="pset-props">
             {#each objectEntries(product.attributes ?? {}) as [key, value]}
+              {#if key === "Validations"}
+                <!-- Validations shown in dedicated section above -->
+              {:else}
               <li>
                 <span class="pset-key">{key}</span>
                 {#if attributeMeta[key] !== undefined}
@@ -515,6 +542,7 @@
                   </div>
                 {/if}
               </li>
+              {/if}
             {/each}
           </ul>
         </div>
@@ -823,8 +851,8 @@
 
   .pset-summary::before {
     content: "▸";
-    font-size: 0.6rem;
-    color: var(--color-text-muted);
+    font-size: var(--chevron-size);
+    color: var(--chevron-color);
     transition: transform 0.2s;
     flex-shrink: 0;
   }
@@ -893,6 +921,71 @@
   .attr-badge.optional {
     background: color-mix(in srgb, var(--color-info) 10%, transparent);
     color: var(--color-info);
+  }
+
+  .validation-list {
+    list-style: none;
+    padding: 0.25rem 0 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .validation-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+  }
+
+  .validation-badge {
+    flex-shrink: 0;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.2rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .validation-badge.passed {
+    background: color-mix(in srgb, #16a34a 15%, transparent);
+    color: #16a34a;
+  }
+
+  .validation-badge.failed {
+    background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+    color: var(--color-danger);
+  }
+
+  .validation-severity {
+    font-size: 0.7rem;
+    text-transform: capitalize;
+  }
+
+  .validation-severity.severity-error {
+    color: var(--color-danger);
+  }
+
+  .validation-severity.severity-warning {
+    color: #eab308;
+  }
+
+  .validation-severity.severity-info {
+    color: var(--color-info);
+  }
+
+  .validation-rule-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--color-text-primary);
+  }
+
+  .validation-stale {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    font-style: italic;
   }
 
   .pset-value {

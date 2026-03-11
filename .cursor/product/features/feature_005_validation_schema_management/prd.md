@@ -1,5 +1,5 @@
 ---
-feature_id: "FEAT-004"
+feature_id: "FEAT-005"
 status: "draft"
 priority: "high"
 ---

@@ -7,7 +7,6 @@
   import ImportModal from "$lib/ui/ImportModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
-  import DepthWidget from "$lib/ui/DepthWidget.svelte";
   import {
     AGENT_CHANNEL,
     type AgentMessage as AgentChannelMessage,
@@ -41,6 +40,7 @@
     ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
+  import { SCHEMA_CHANNEL, type SchemaMessage } from "$lib/schema/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -69,6 +69,7 @@
   const searchState = getSearchState();
 
   let sceneManager: SceneManager | undefined = $state(undefined);
+  let elementCount = $state(0);
   let filterSetColorsEnabled = $state(false);
   let searchPopup: Window | null = null;
   let searchChannel: BroadcastChannel | null = null;
@@ -79,6 +80,8 @@
   let tablePopup: Window | null = null;
   let tableChannel: BroadcastChannel | null = null;
   let schemaPopup: Window | null = null;
+  let schemaChannel: BroadcastChannel | null = null;
+  let validationPopup: Window | null = null;
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -347,11 +350,18 @@
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
     if (!attributesChannel) return;
     attributesChannel.postMessage({
       type: "context",
       branchId,
       projectId,
+      branchName: branch?.name ?? null,
+      projectName: project?.name ?? null,
       revision,
       globalId,
     } satisfies AttributesMessage);
@@ -364,15 +374,36 @@
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
     const subgraphDepth = selection.subgraphDepth;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
     if (!graphChannel) return;
     graphChannel.postMessage({
       type: "context",
       branchId,
       projectId,
+      branchName: branch?.name ?? null,
+      projectName: project?.name ?? null,
       revision,
       globalId,
       subgraphDepth,
     } satisfies GraphMessage);
+  });
+
+  // Keep Schema popup in sync when project/branch/revision changes
+  $effect(() => {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    if (!schemaChannel) return;
+    schemaChannel.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+    } satisfies SchemaMessage);
   });
 
   // BroadcastChannels for cross-window communication
@@ -427,6 +458,13 @@
         sendAgentContext();
       }
     };
+
+    schemaChannel = new BroadcastChannel(SCHEMA_CHANNEL);
+    schemaChannel.onmessage = (e: MessageEvent<SchemaMessage>) => {
+      if (e.data.type === "request-context") {
+        sendSchemaContext();
+      }
+    };
   });
 
   onDestroy(() => {
@@ -435,6 +473,7 @@
     graphChannel?.close();
     tableChannel?.close();
     agentChannel?.close();
+    schemaChannel?.close();
   });
 
   // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
@@ -458,10 +497,27 @@
       } satisfies SearchMessage);
       searchChannel?.postMessage({
         type: "filter-result-count",
-        count: sceneManager?.elementCount ?? searchState.products.length,
+        count: elementCount || searchState.products.length,
         total: searchState.totalProductCount,
       } satisfies SearchMessage);
     }
+
+  // Keep a reactive element count in sync with the SceneManager.
+  $effect(() => {
+    const mgr = sceneManager;
+    if (!mgr) {
+      elementCount = 0;
+      return;
+    }
+    mgr.setElementCountListener((count) => {
+      elementCount = count;
+    });
+    // Ensure we start from the current value.
+    elementCount = mgr.elementCount;
+    return () => {
+      mgr.setElementCountListener(null);
+    };
+  });
   }
 
   function sendAttributesContext() {
@@ -469,10 +525,17 @@
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
     attributesChannel?.postMessage({
       type: "context",
       branchId,
       projectId,
+      branchName: branch?.name ?? null,
+      projectName: project?.name ?? null,
       revision,
       globalId,
     } satisfies AttributesMessage);
@@ -484,10 +547,17 @@
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
     const subgraphDepth = selection.subgraphDepth;
+    const project = projects.find((p) => p.id === projectId) ?? null;
+    const branch =
+      project?.branches.find((b) => b.id === branchId) ??
+      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
+      null;
     graphChannel?.postMessage({
       type: "context",
       branchId,
       projectId,
+      branchName: branch?.name ?? null,
+      projectName: project?.name ?? null,
       revision,
       globalId,
       subgraphDepth,
@@ -560,6 +630,18 @@
       projectName: project?.name ?? null,
       branchName: branch?.name ?? null,
     } satisfies AgentChannelMessage);
+  }
+
+  function sendSchemaContext() {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    schemaChannel?.postMessage({
+      type: "context",
+      branchId,
+      projectId,
+      revision,
+    } satisfies SchemaMessage);
   }
 
   function openAgentPopup() {
@@ -681,8 +763,31 @@
       const query = params.toString();
       const url = query ? `/schema?${query}` : "/schema";
       schemaPopup = window.open(url, "bimatlas-schema", "width=900,height=700");
+      setTimeout(sendSchemaContext, 500);
     } else {
       schemaPopup.focus();
+      sendSchemaContext();
+    }
+  }
+
+  function openValidationPopup() {
+    if (!validationPopup || validationPopup.closed) {
+      const branchId = projectState.activeBranchId;
+      const projectId = projectState.activeProjectId;
+      const revision = revisionState.activeRevision;
+      const params = new URLSearchParams();
+      if (branchId != null) params.set("branchId", String(branchId));
+      if (projectId != null) params.set("projectId", String(projectId));
+      if (revision != null) params.set("revision", String(revision));
+      const query = params.toString();
+      const url = query ? `/validation?${query}` : "/validation";
+      validationPopup = window.open(
+        url,
+        "bimatlas-validation",
+        "width=900,height=700",
+      );
+    } else {
+      validationPopup.focus();
     }
   }
 
@@ -1471,15 +1576,26 @@
             {/each}
           </select>
           <button
-            class="icon-btn"
+            type="button"
+            class="branch-add-btn btn-icon-primary"
             onclick={() => (showCreateBranch = true)}
             title="New branch"
+            aria-label="New branch"
           >
-            +
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path
+                d="M8 3v10M3 8h10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
           </button>
           <button
             type="button"
-            class="icon-btn icon-btn--danger"
+            class="branch-delete-btn"
             title="Delete branch"
             aria-label="Delete branch {activeBranch?.name}"
             disabled={!activeProject || activeProject.branches.length <= 1}
@@ -1490,19 +1606,14 @@
               }
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
               <path
-                d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
+                d="M4 4L12 12M12 4L4 12"
+                fill="none"
                 stroke="currentColor"
-                stroke-width="2"
+                stroke-width="1.8"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-              />
-              <path
-                d="M10 11v6M14 11v6"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
               />
             </svg>
           </button>
@@ -1551,7 +1662,7 @@
                   </button>
                   <button
                     type="button"
-                    class="icon-btn icon-btn--danger no-background"
+                    class="project-delete-btn"
                     title="Delete project"
                     aria-label="Delete project {p.name}"
                     onclick={(e) => {
@@ -1561,19 +1672,14 @@
                       showDeleteProject = true;
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                       <path
-                        d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
+                        d="M4 4L12 12M12 4L4 12"
+                        fill="none"
                         stroke="currentColor"
-                        stroke-width="2"
+                        stroke-width="1.8"
                         stroke-linecap="round"
                         stroke-linejoin="round"
-                      />
-                      <path
-                        d="M10 11v6M14 11v6"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
                       />
                     </svg>
                   </button>
@@ -1615,10 +1721,22 @@
             </div>
           {:else}
             <button
-              class="btn btn-primary create-project-btn"
+              type="button"
+              class="project-add-btn btn-icon-primary"
+              title="New project"
+              aria-label="New project"
               onclick={() => (showCreateProject = true)}
             >
-              + New Project
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path
+                  d="M8 3v10M3 8h10"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
             </button>
           {/if}
         </div>
@@ -1657,7 +1775,7 @@
         <Sidebar>
           <!-- Import IFC -->
           <button
-            class="toolbar-btn import-btn"
+            class="toolbar-btn btn-primary"
             onclick={() => (showImportModal = true)}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -1916,15 +2034,6 @@
             </section>
           {/if}
           <!-- View Options section -->
-          <section
-            class="sidebar-section"
-            aria-labelledby="view-options-heading"
-          >
-            <h2 id="view-options-heading" class="sidebar-section-heading">
-              View Options
-            </h2>
-            <DepthWidget bind:value={selection.subgraphDepth} />
-          </section>
         </Sidebar>
         <div class="search-actions">
           <!-- Search button -->
@@ -2066,6 +2175,33 @@
             </svg>
             Table
           </button>
+          <!-- Validation popup button -->
+          <button
+            class="table-btn"
+            onclick={openValidationPopup}
+            aria-label="Open validation results"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <rect
+                x="4"
+                y="4"
+                width="16"
+                height="16"
+                rx="2"
+                stroke="currentColor"
+                stroke-width="2"
+                fill="none"
+              />
+              <path
+                d="M8 13l3 3 5-6"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            Validation
+          </button>
           <!-- Schema Browser popup button -->
           <button
             class="schema-btn"
@@ -2135,9 +2271,7 @@
           </button>
         </div>
         <!-- Element count -->
-        <span class="element-count"
-          >{sceneManager?.elementCount ?? 0} elements</span
-        >
+        <span class="element-count">{elementCount} elements</span>
       </div>
     {/if}
 
@@ -2174,7 +2308,7 @@
           <header class="modal-header">
             <h2>Delete project</h2>
             <button
-              class="close-btn"
+              class="btn-close"
               onclick={() => {
                 showDeleteProject = false;
                 projectToDelete = null;
@@ -2243,7 +2377,7 @@
           <header class="modal-header">
             <h2>Delete branch</h2>
             <button
-              class="close-btn"
+              class="btn-close"
               onclick={() => {
                 showDeleteBranch = false;
                 branchToDelete = null;
@@ -2306,7 +2440,7 @@
           <header class="modal-header">
             <h2>New Branch</h2>
             <button
-              class="close-btn"
+              class="btn-close"
               onclick={() => (showCreateBranch = false)}
               aria-label="Close"
             >
@@ -2477,6 +2611,54 @@
   .selector-group--branch {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .branch-add-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: none;
+    background: var(--color-action-primary);
+    color: var(--color-bg-surface);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .branch-add-btn:hover {
+    background: var(--color-action-primary);
+    color: var(--color-bg-surface);
+  }
+
+  .branch-delete-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .branch-delete-btn:disabled {
+    cursor: default;
+    color: var(--color-border-subtle);
+    border-color: var(--color-border-subtle);
+  }
+
+  .branch-delete-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+    color: var(--color-danger);
+    border-color: var(--color-danger);
   }
 
   #branch-select.selector {
@@ -2717,15 +2899,6 @@
     color: var(--color-text-secondary);
   }
 
-  .revision-filter-group-chevron {
-    font-size: 0.6rem;
-    transition: transform 0.2s ease;
-  }
-
-  .revision-filter-group-chevron.collapsed {
-    transform: rotate(90deg);
-  }
-
   .revision-filter-group-content.collapsed {
     display: none;
   }
@@ -2755,57 +2928,6 @@
   .revision-author {
     font-size: 0.7rem;
     color: var(--color-text-muted);
-  }
-
-  .icon-btn {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.5rem;
-    color: var(--color-text-muted);
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    font-size: 0.85rem;
-    transition:
-      background 0.15s,
-      color 0.15s;
-    padding: 0;
-  }
-
-  .icon-btn.no-background {
-    background: none;
-    border: none;
-  }
-
-  .icon-btn.no-background:hover:not(:disabled) {
-    background: none;
-  }
-
-  .icon-btn--danger.no-background:hover:not(:disabled) {
-    background: none;
-    color: var(--color-danger);
-  }
-
-  .icon-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
-    color: var(--color-brand-500);
-  }
-
-  .icon-btn--danger {
-    color: var(--color-danger);
-  }
-
-  .icon-btn--danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
-    color: var(--color-danger);
-  }
-
-  .icon-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
   }
 
   /* ---- Content area ---- */
@@ -2986,6 +3108,44 @@
     white-space: nowrap;
   }
 
+  .project-add-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: none;
+    background: var(--color-action-primary);
+    color: var(--color-bg-surface);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .project-add-btn:hover {
+    background: var(--color-action-primary);
+    color: var(--color-bg-surface);
+  }
+
+  .project-delete-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .project-delete-btn:hover {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+  }
+
   .empty-msg {
     color: var(--color-text-muted);
     font-size: 0.85rem;
@@ -3024,82 +3184,6 @@
   }
 
   .create-project-btn {
-    width: 100%;
-  }
-
-  /* ---- Buttons ---- */
-
-  .btn {
-    padding: 0.5rem 1.1rem;
-    font-size: 0.82rem;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    cursor: pointer;
-    font-weight: 500;
-    transition:
-      background 0.15s,
-      opacity 0.15s,
-      border-color 0.15s;
-  }
-
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .btn-secondary {
-    background: var(--color-bg-elevated);
-    border-color: var(--color-border-default);
-    color: var(--color-text-secondary);
-  }
-
-  .btn-secondary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
-    color: var(--color-text-primary);
-  }
-
-  .btn-primary {
-    background: var(--color-action-primary);
-    border: 1px solid var(--color-action-primary);
-    color: var(--color-bg-surface);
-  }
-
-  .btn-primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-action-primary) 80%, black);
-    border-color: color-mix(in srgb, var(--color-action-primary) 80%, black);
-    color: var(--color-bg-surface);
-  }
-
-  .btn-danger {
-    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
-    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
-    color: var(--color-danger);
-  }
-
-  .btn-danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-danger) 18%, transparent);
-    color: var(--color-danger);
-  }
-
-  /* ---- Viewport toolbar overlay ---- */
-
-  .toolbar-btn {
-    background: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
-    border: 1px solid var(--color-border-default);
-    color: var(--color-text-secondary);
-    padding: 0.4rem 0.8rem;
-    border-radius: 12px;
-    cursor: pointer;
-    font-size: 0.78rem;
-    backdrop-filter: blur(8px);
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-
-  .toolbar-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 8%, transparent);
-    color: var(--color-brand-500);
   }
 
   .sidebar-section {
@@ -3123,13 +3207,6 @@
     right: 1rem;
     font-size: 0.72rem;
     color: var(--color-text-muted);
-  }
-
-  .import-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.35rem;
   }
 
   .search-actions {
@@ -3181,7 +3258,7 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    z-index: 100;
+    z-index: 1200;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3212,22 +3289,6 @@
     font-size: 1.05rem;
     font-weight: 600;
     color: var(--color-text-primary);
-  }
-
-  .close-btn {
-    background: none;
-    border: none;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 0.25rem;
-    border-radius: 0.5rem;
-    display: flex;
-    align-items: center;
-    transition: color 0.15s;
-  }
-
-  .close-btn:hover {
-    color: var(--color-text-secondary);
   }
 
   .modal-subtitle {
@@ -3285,18 +3346,4 @@
     max-width: 90%;
   }
 
-  .toast-close {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 0.15rem;
-    display: flex;
-    opacity: 0.6;
-    transition: opacity 0.15s;
-  }
-
-  .toast-close:hover {
-    opacity: 1;
-  }
 </style>

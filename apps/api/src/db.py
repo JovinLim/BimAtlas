@@ -216,6 +216,17 @@ def get_latest_revision_seq(branch_id: str) -> int | None:
         return row[0] if row else None
 
 
+def get_revision_id_for_seq(branch_id: str, revision_seq: int) -> str | None:
+    """Return the revision_id for a given branch_id + revision_seq, or None if not found."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT revision_id FROM revision WHERE branch_id = %s AND revision_seq = %s",
+            (branch_id, revision_seq),
+        )
+        row = cur.fetchone()
+        return str(row["revision_id"]) if row else None
+
+
 def fetch_revisions(branch_id: str) -> list[dict]:
     """Return all revisions for a branch, ordered by revision_seq ascending."""
     with get_cursor(dict_cursor=True) as cur:
@@ -320,10 +331,11 @@ def fetch_entity_at_revision(
 
 
 def fetch_entity_attributes_for_global_ids(
-    rev: int, branch_id: str, global_ids: list[str],
+    rev: int, branch_id: str, global_ids: list[str], include_validations: bool = False,
 ) -> list[dict]:
     """Fetch ifc_global_id and attributes for entities visible at *rev* on *branch_id*.
     Returns list of dicts with keys ifc_global_id, attributes (JSONB as dict).
+    When include_validations=True, merges Validations from mv_entity_validations.
     """
     if not global_ids:
         return []
@@ -339,7 +351,21 @@ def fetch_entity_attributes_for_global_ids(
         attrs = r.get("attributes") or {}
         if isinstance(attrs, str):
             attrs = json.loads(attrs)
+        if not isinstance(attrs, dict):
+            attrs = {}
+        else:
+            attrs = dict(attrs)
         result.append({"ifc_global_id": r["ifc_global_id"], "attributes": attrs})
+    if include_validations and result:
+        try:
+            val_map = fetch_validations_for_entities(branch_id, rev, global_ids)
+            for item in result:
+                val = val_map.get(item["ifc_global_id"])
+                if val:
+                    item["attributes"] = dict(item["attributes"])
+                    item["attributes"]["Validations"] = val
+        except Exception:
+            pass
     return result
 
 
@@ -1475,7 +1501,7 @@ def fetch_validation_rules(schema_name: str) -> dict | None:
         if rule_type == "inheritance":
             entity["parent"] = payload.get("parent")
             entity["abstract"] = bool(payload.get("abstract", False))
-        elif rule_type == "required_attributes":
+        elif rule_type in ("required_attributes", "attribute_check"):
             declared = payload.get("declaredAttributes") or []
             if isinstance(declared, list):
                 entity["attributes"] = declared
@@ -1493,6 +1519,26 @@ def validation_schema_exists(schema_name: str) -> bool:
             (schema_name,),
         )
         return cur.fetchone() is not None
+
+
+def insert_blank_ifc_schema(version_name: str) -> dict:
+    """Insert a new ifc_schema row with only version_name (no validation rules).
+
+    Returns the created row as dict with schema_id and version_name.
+    Raises ValueError if version_name already exists (UNIQUE constraint).
+    """
+    name = version_name.strip()
+    if not name:
+        raise ValueError("Schema name must be non-empty.")
+    if validation_schema_exists(name):
+        raise ValueError(f"Schema '{name}' already exists.")
+    schema_id = str(uuid4())
+    with get_cursor() as cur:
+        cur.execute(
+            "INSERT INTO ifc_schema (schema_id, version_name) VALUES (%s, %s)",
+            (schema_id, name),
+        )
+    return {"schema_id": schema_id, "version_name": name}
 
 
 def fetch_all_ifc_schemas() -> list[dict]:
@@ -1574,7 +1620,7 @@ def fetch_validation_rules_by_schema_id(schema_id: str) -> list[dict]:
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
             """
-            SELECT rule_id, name, description, target_ifc_class, rule_schema, severity
+            SELECT rule_id, name, description, target_ifc_class, rule_schema, severity, version
             FROM validation_rule
             WHERE schema_id = %s AND project_id IS NULL AND is_active = TRUE
             """,
@@ -1583,11 +1629,149 @@ def fetch_validation_rules_by_schema_id(schema_id: str) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
-def update_validation_rule_rule_schema(rule_id: str, new_rule_schema: dict) -> bool:
-    """Update rule_schema for a validation_rule. Returns True if updated."""
+def insert_uploaded_schema_rule(
+    schema_id: str,
+    schema_version_name: str,
+    name: str,
+    description: str | None,
+    target_ifc_class: str,
+    rule_schema: dict,
+    severity: str = "Error",
+) -> dict:
+    """Insert a new validation_rule row for an uploaded IFC schema.
+
+    Returns the created row as dict with rule_id, name, target_ifc_class, etc.
+    """
+    name_clean = (name or "").strip()
+    if not name_clean:
+        raise ValueError("Rule name must be non-empty.")
+    target_clean = (target_ifc_class or "").strip()
+    if not target_clean:
+        raise ValueError("Target IFC class must be non-empty.")
+    if not isinstance(rule_schema, dict):
+        raise ValueError("rule_schema must be a JSON object.")
+    if severity not in ("Error", "Warning", "Info"):
+        severity = "Error"
+    rule_id = str(uuid4())
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO validation_rule (
+                rule_id, version, name, description, schema_id, project_id,
+                target_ifc_class, rule_schema, severity, is_active
+            )
+            VALUES (%s, 1, %s, %s, %s, NULL, %s, %s, %s, TRUE)
+            """,
+            (
+                rule_id,
+                name_clean,
+                (description or "").strip() or None,
+                schema_id,
+                target_clean,
+                json.dumps(rule_schema),
+                severity,
+            ),
+        )
+    return {
+        "rule_id": rule_id,
+        "name": name_clean,
+        "description": (description or "").strip() or None,
+        "schema_id": schema_id,
+        "target_ifc_class": target_clean,
+        "rule_schema": rule_schema,
+        "severity": severity,
+    }
+
+
+def delete_uploaded_schema_rule(rule_id: str) -> bool:
+    """Delete an uploaded schema rule (validation_rule with project_id IS NULL). Returns True if deleted."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM validation_rule
+            WHERE rule_id = %s AND project_id IS NULL
+            """,
+            (rule_id,),
+        )
+        return cur.rowcount > 0
+
+
+def update_uploaded_schema_rule(
+    rule_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    target_ifc_class: str | None = None,
+    severity: str | None = None,
+    rule_schema: dict | None = None,
+) -> bool:
+    """Update an uploaded schema rule via edit-as-insert: deactivate old, insert new version."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT rule_schema FROM validation_rule WHERE rule_id = %s",
+            """
+            SELECT rule_id, logical_rule_id, version, name, description, target_ifc_class,
+                   rule_schema, severity, schema_id
+            FROM validation_rule
+            WHERE rule_id = %s AND project_id IS NULL AND is_active = TRUE
+            """,
+            (rule_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        name_val = name if name is not None else row["name"]
+        desc_val = description if description is not None else row["description"]
+        target_val = target_ifc_class if target_ifc_class is not None else row["target_ifc_class"]
+        sev_val = severity if severity is not None else row["severity"]
+        if sev_val not in ("Error", "Warning", "Info"):
+            sev_val = "Error"
+        schema_val = rule_schema if rule_schema is not None else row["rule_schema"]
+        if isinstance(schema_val, str):
+            schema_val = json.loads(schema_val)
+        logical_id = row["logical_rule_id"] or row["rule_id"]
+        new_version = int(row["version"] or 1) + 1
+        schema_id = str(row["schema_id"])
+
+        # Deactivate old row
+        cur.execute(
+            "UPDATE validation_rule SET is_active = FALSE WHERE rule_id = %s",
+            (rule_id,),
+        )
+        # Insert new version
+        new_rule_id = str(uuid4())
+        cur.execute(
+            """
+            INSERT INTO validation_rule (
+                rule_id, logical_rule_id, version, name, description, schema_id, project_id,
+                target_ifc_class, rule_schema, severity, is_active
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, TRUE)
+            """,
+            (
+                new_rule_id,
+                logical_id,
+                new_version,
+                name_val,
+                (desc_val or "").strip() or None,
+                schema_id,
+                target_val,
+                json.dumps(schema_val),
+                sev_val,
+            ),
+        )
+        return cur.rowcount > 0
+
+
+def update_validation_rule_rule_schema(rule_id: str, new_rule_schema: dict) -> bool:
+    """Update rule_schema for a validation_rule via edit-as-insert (new version)."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            """
+            SELECT rule_id, logical_rule_id, version, name, description, target_ifc_class,
+                   rule_schema, severity, schema_id
+            FROM validation_rule
+            WHERE rule_id = %s AND is_active = TRUE
+            """,
             (rule_id,),
         )
         row = cur.fetchone()
@@ -1596,10 +1780,31 @@ def update_validation_rule_rule_schema(rule_id: str, new_rule_schema: dict) -> b
         existing = row.get("rule_schema")
         if isinstance(existing, str):
             existing = json.loads(existing)
-        merged = {**existing, **new_rule_schema}
+        merged = {**(existing or {}), **new_rule_schema}
+        logical_id = row["logical_rule_id"] or row["rule_id"]
+        new_version = int(row["version"] or 1) + 1
+        cur.execute("UPDATE validation_rule SET is_active = FALSE WHERE rule_id = %s", (rule_id,))
+        new_rule_id = str(uuid4())
         cur.execute(
-            "UPDATE validation_rule SET rule_schema = %s WHERE rule_id = %s",
-            (json.dumps(merged), rule_id),
+            """
+            INSERT INTO validation_rule (
+                rule_id, logical_rule_id, version, name, description, schema_id, project_id,
+                target_ifc_class, rule_schema, severity, is_active
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+            """,
+            (
+                new_rule_id,
+                logical_id,
+                new_version,
+                row["name"],
+                row["description"],
+                row["schema_id"],
+                row["project_id"],
+                row["target_ifc_class"],
+                json.dumps(merged),
+                row["severity"],
+            ),
         )
         return cur.rowcount > 0
 
@@ -1634,8 +1839,9 @@ def insert_validation_rules(schema_name: str, rules: dict) -> None:
                     break
                 seen.add(current)
                 lineage.append(current)
-                parent = (entities.get(current) or {}).get("parent")
-                current = parent if isinstance(parent, str) and parent else None
+                parent_raw = (entities.get(current) or {}).get("parent")
+                parent = parent_raw if isinstance(parent_raw, str) and parent_raw.strip() else None
+                current = parent
             lineage.reverse()  # root -> leaf
             return lineage
 
@@ -1662,7 +1868,8 @@ def insert_validation_rules(schema_name: str, rules: dict) -> None:
 
         for entity_name, raw_meta in entities.items():
             meta = raw_meta if isinstance(raw_meta, dict) else {}
-            parent = meta.get("parent")
+            parent_raw = meta.get("parent")
+            parent = parent_raw if isinstance(parent_raw, str) and parent_raw.strip() else None
             abstract = bool(meta.get("abstract", False))
             declared_attrs = meta.get("attributes") or []
             if not isinstance(declared_attrs, list):
@@ -1672,7 +1879,7 @@ def insert_validation_rules(schema_name: str, rules: dict) -> None:
                 "schema": schema_name,
                 "ruleType": "inheritance",
                 "entity": entity_name,
-                "parent": parent if isinstance(parent, str) and parent else None,
+                "parent": parent,
                 "abstract": abstract,
             }
             cur.execute(
@@ -1692,13 +1899,22 @@ def insert_validation_rules(schema_name: str, rules: dict) -> None:
                 ),
             )
 
-            required_rule = {
+            eff_attrs = effective_required_attrs(entity_name)
+            conditions = [
+                {"path": a.get("name", ""), "operator": "exists", "value": None}
+                for a in eff_attrs
+                if isinstance(a, dict) and a.get("name")
+            ]
+            attribute_check_rule = {
                 "schema": schema_name,
-                "ruleType": "required_attributes",
+                "ruleType": "attribute_check",
                 "entity": entity_name,
+                "TargetClass": entity_name,
+                "ConditionLogic": "AND",
+                "Conditions": conditions,
                 "lineage": lineage_for(entity_name),
                 "declaredAttributes": declared_attrs,
-                "effectiveRequiredAttributes": effective_required_attrs(entity_name),
+                "effectiveRequiredAttributes": eff_attrs,
             }
             cur.execute(
                 """
@@ -1713,7 +1929,7 @@ def insert_validation_rules(schema_name: str, rules: dict) -> None:
                     f"Required-attributes rule for {entity_name} in {schema_name}",
                     schema_id,
                     entity_name,
-                    json.dumps(required_rule),
+                    json.dumps(attribute_check_rule),
                 ),
             )
 
@@ -1763,9 +1979,7 @@ def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
 # Validation entity CRUD (IfcValidation / IfcValidationSchema / IfcValidationResult)
 # ---------------------------------------------------------------------------
 
-_VALIDATION_CLASSES = frozenset(
-    {"IfcValidation", "IfcValidationSchema", "IfcValidationResult"}
-)
+_VALIDATION_CLASSES = frozenset({"IfcValidationResult", "IfcValidationResults"})
 
 _VALIDATION_ENTITY_COLS = (
     "e.entity_id, e.ifc_global_id, e.ifc_class, e.attributes"
@@ -1819,54 +2033,6 @@ def create_validation_entity(
         )
         row = cur.fetchone()
         return dict(row)
-
-
-def update_validation_entity(
-    branch_id: str,
-    global_id: str,
-    revision_id: str,
-    new_attributes: dict,
-) -> dict | None:
-    """SCD Type 2 update: close old row, insert new one. Returns new entity."""
-    ch = _content_hash(new_attributes)
-
-    with get_cursor(dict_cursor=True) as cur:
-        cur.execute(
-            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
-            "WHERE branch_id = %s AND ifc_global_id = %s "
-            "  AND obsoleted_in_revision_id IS NULL "
-            "RETURNING ifc_class",
-            (revision_id, branch_id, global_id),
-        )
-        old = cur.fetchone()
-        if old is None:
-            return None
-
-        cur.execute(
-            "INSERT INTO ifc_entity "
-            "(branch_id, ifc_global_id, ifc_class, attributes, content_hash, "
-            " created_in_revision_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
-            "RETURNING entity_id, ifc_global_id, ifc_class, attributes",
-            (branch_id, global_id, old["ifc_class"],
-             json.dumps(new_attributes), ch, revision_id),
-        )
-        row = cur.fetchone()
-        return dict(row)
-
-
-def delete_validation_entity(
-    branch_id: str, global_id: str, revision_id: str,
-) -> bool:
-    """SCD Type 2 delete: close the current row. Returns True if found."""
-    with get_cursor() as cur:
-        cur.execute(
-            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
-            "WHERE branch_id = %s AND ifc_global_id = %s "
-            "  AND obsoleted_in_revision_id IS NULL",
-            (revision_id, branch_id, global_id),
-        )
-        return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -2143,6 +2309,68 @@ def fetch_validation_entity(
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def fetch_validations_for_entities(
+    branch_id: str, revision_seq: int, global_ids: list[str],
+) -> dict[str, dict]:
+    """Fetch Validations from mv_entity_validations for given entities.
+    Returns {entity_global_id: validations_json}.
+    """
+    if not global_ids:
+        return {}
+    try:
+        with get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                """
+                SELECT entity_global_id, validations
+                FROM mv_entity_validations
+                WHERE branch_id = %s AND revision_seq = %s AND entity_global_id = ANY(%s)
+                """,
+                (branch_id, revision_seq, global_ids),
+            )
+            rows = cur.fetchall()
+        result: dict[str, dict] = {}
+        for r in rows:
+            val = r.get("validations")
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    val = {}
+            result[r["entity_global_id"]] = val if isinstance(val, dict) else {}
+        return result
+    except Exception:
+        return {}
+
+
+def has_validation_results_for_schema_revision(
+    branch_id: str, schema_id: str, revision_seq: int,
+) -> bool:
+    """Return True if any IfcValidationResults exist for this schema+revision."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM ifc_entity
+            WHERE branch_id = %s AND ifc_class = 'IfcValidationResults'
+              AND obsoleted_in_revision_id IS NULL
+              AND attributes->>'SchemaGlobalId' = %s
+              AND (attributes->>'TargetRevisionSeq')::int = %s
+            LIMIT 1
+            """,
+            (branch_id, schema_id, revision_seq),
+        )
+        return cur.fetchone() is not None
+
+
+def refresh_mv_entity_validations() -> None:
+    """Refresh the materialized view for entity-centric validation aggregation.
+
+    Call after writing IfcValidationResults entities. Uses CONCURRENTLY to allow
+    reads during refresh (requires unique index on the MV).
+    """
+    with get_cursor() as cur:
+        cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_entity_validations")
 
 
 # ---------------------------------------------------------------------------

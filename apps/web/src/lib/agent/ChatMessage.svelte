@@ -157,15 +157,6 @@
 		cursor: pointer;
 	}
 
-	.meta-chevron {
-		font-size: 0.6rem;
-		transition: transform 0.15s;
-	}
-
-	.meta-chevron.open {
-		transform: rotate(90deg);
-	}
-
 	.meta-content {
 		padding: 0 0.5rem 0.5rem;
 	}

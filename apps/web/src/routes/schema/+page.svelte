@@ -2,23 +2,21 @@
   import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
   import { client } from "$lib/api/client";
-  import {
-    VALIDATION_SCHEMAS_QUERY,
-    VALIDATION_RULES_QUERY,
+import {
     VALIDATION_RULES_FOR_UPLOADED_SCHEMA_QUERY,
+    CREATE_UPLOADED_SCHEMA_RULE_MUTATION,
     UPDATE_UPLOADED_SCHEMA_RULE_MUTATION,
-    CREATE_VALIDATION_SCHEMA_MUTATION,
-    DELETE_VALIDATION_SCHEMA_MUTATION,
-    CREATE_VALIDATION_RULE_MUTATION,
-    DELETE_VALIDATION_RULE_MUTATION,
-    LINK_RULE_TO_SCHEMA_MUTATION,
-    RUN_VALIDATION_MUTATION,
+    UPDATE_UPLOADED_SCHEMA_RULE_FULL_MUTATION,
+    DELETE_UPLOADED_SCHEMA_RULE_MUTATION,
+    CREATE_UPLOADED_SCHEMA_MUTATION,
     RUN_VALIDATION_BY_UPLOADED_SCHEMA_MUTATION,
     UPLOADED_SCHEMAS_QUERY,
     APPLY_SCHEMA_TO_PROJECT_MUTATION,
     UNAPPLY_SCHEMA_FROM_PROJECT_MUTATION,
     PROJECTS_QUERY,
     BRANCH_QUERY,
+    DELETE_UPLOADED_SCHEMA_MUTATION,
+    VALIDATION_RESULTS_QUERY,
   } from "$lib/api/client";
   import { SCHEMA_CHANNEL, type SchemaMessage } from "$lib/schema/protocol";
   import { loadSettings } from "$lib/state/persistence";
@@ -27,36 +25,6 @@
   let projectId = $state<string | null>(null);
   let revision = $state<number | null>(null);
 
-  type ValidationCondition = {
-    path: string;
-    operator: string;
-    value: string | null;
-  };
-  type SpatialContext = {
-    traversal: string;
-    scopeClass: string | null;
-    scopeName: string | null;
-    scopeGlobalId: string | null;
-  };
-  type ValidationRule = {
-    globalId: string;
-    name: string;
-    description: string | null;
-    ruleType: string | null;
-    targetClass: string | null;
-    severity: string;
-    conditions: ValidationCondition[];
-    spatialContext: SpatialContext | null;
-    includeSubtypes: boolean;
-  };
-  type ValidationSchema = {
-    globalId: string;
-    name: string;
-    description: string | null;
-    version: string | null;
-    isActive: boolean;
-    rules: ValidationRule[];
-  };
   type Violation = { globalId: string; ifcClass: string; message: string };
   type RuleResult = {
     ruleGlobalId: string;
@@ -68,6 +36,7 @@
   type RunResult = {
     schemaGlobalId: string;
     schemaName: string;
+    revisionSeq: number;
     errorCount: number;
     warningCount: number;
     infoCount: number;
@@ -92,6 +61,7 @@
     description: string | null;
     targetIfcClass: string;
     effectiveRequiredAttributes: string | null;
+    ruleSchemaJson?: string | null;
     displaySeverity: string;
     severity: string;
   };
@@ -102,13 +72,14 @@
   let ruleEditingAttr = $state<Record<string, number | null>>({});
   let ruleSaving = $state<Record<string, boolean>>({});
   let ruleJsonError = $state<Record<string, string | null>>({});
+  let ruleIncludeSubclassesSaving = $state<Record<string, boolean>>({});
 
-  let schemas = $state<ValidationSchema[]>([]);
   let uploadedSchemas = $state<UploadedSchema[]>([]);
   let uploadedSchemaSearchQuery = $state("");
   let projects = $state<ProjectInfo[]>([]);
   let uploadedSchemasLoading = $state(false);
   let applyProjectId = $state<string | null>(null);
+  let existingSchemasExpanded = $state(true);
 
   const filteredUploadedSchemas = $derived(
     uploadedSchemaSearchQuery.trim()
@@ -126,10 +97,22 @@
       ? filteredUploadedSchemas.filter((us) => us.projectIds.includes(pid))
       : [];
   });
-  let activeSchema = $state<ValidationSchema | null>(null);
   let activeAppliedSchema = $state<UploadedSchema | null>(null);
   let uploadedSchemaRules = $state<UploadedSchemaRule[]>([]);
   let uploadedSchemaRulesLoading = $state(false);
+  let validationRuns = $state<RunResult[]>([]);
+
+  const disabledSchemaIdsForRevision = $derived.by(() => {
+    const rev = revision;
+    if (rev == null) return new Set<string>();
+    const ids = new Set<string>();
+    for (const run of validationRuns) {
+      if (run.revisionSeq === rev) {
+        ids.add(run.schemaGlobalId);
+      }
+    }
+    return ids;
+  });
 
   const rulesBySeverity = $derived.by(() => {
     const groups: Record<string, UploadedSchemaRule[]> = {
@@ -155,23 +138,77 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  // Rule editor state
-  let showRuleEditor = $state(false);
-  let ruleName = $state("");
-  let ruleTargetClass = $state("");
-  let ruleSeverity = $state("Error");
-  let ruleIncludeSubtypes = $state(false);
-  let ruleConditions = $state<
-    { path: string; operator: string; value: string }[]
-  >([{ path: "", operator: "exists", value: "" }]);
-
-  // Schema creator state
+  // Schema creator state (uploaded schemas)
   let showSchemaCreator = $state(false);
   let newSchemaName = $state("");
   let newSchemaDescription = $state("");
 
+  // Create rule modal state (editingRuleId set when editing existing rule)
+  let editingRuleId = $state<string | null>(null);
+  const CONDITION_OPERATORS = [
+    { value: "equals", label: "equals" },
+    { value: "not_equals", label: "not equals" },
+    { value: "contains", label: "contains" },
+    { value: "exists", label: "exists" },
+    { value: "not_exists", label: "not exists" },
+    { value: "greater_than", label: "greater than" },
+    { value: "less_than", label: "less than" },
+    { value: "matches", label: "matches (regex)" },
+  ] as const;
+  const SPATIAL_TRAVERSALS = [
+    "IfcRelContainedInSpatialStructure",
+    "IfcRelAggregates",
+    "IfcRelConnectsElements",
+    "IfcRelVoidsElement",
+    "IfcRelFillsElement",
+    "IfcRelDefinesByType",
+  ] as const;
+  let showCreateRuleModal = $state(false);
+  let createRuleMode = $state<"card" | "json">("card");
+  let createRuleName = $state("");
+  let createRuleDescription = $state("");
+  type CreateRuleSchema = {
+    ruleType: string;
+    TargetClass: string;
+    ConditionLogic: "AND" | "OR";
+    Conditions: { path: string; operator: string; value: string }[];
+    SpatialContext: { traversal: string; scope_class: string; scope_name: string };
+    severity: string;
+    includeSubclasses?: boolean;
+  };
+  const DEFAULT_CREATE_RULE_SCHEMA: CreateRuleSchema = {
+    ruleType: "attribute_check",
+    TargetClass: "IfcWall",
+    ConditionLogic: "OR",
+    Conditions: [
+      { path: "PropertySets.Pset_WallCommon.FireRating", operator: "greater_than", value: "2" },
+      { path: "PropertySets.Pset_WallCommon.FireRating", operator: "less_than", value: "5" },
+    ],
+    SpatialContext: {
+      traversal: "IfcRelContainedInSpatialStructure",
+      scope_class: "IfcSpace",
+      scope_name: "Room X",
+    },
+    severity: "Error",
+    includeSubclasses: false,
+  };
+  let createRuleSchema = $state<CreateRuleSchema>({ ...DEFAULT_CREATE_RULE_SCHEMA });
+  const createRuleSchemaJson = $derived(JSON.stringify(createRuleSchema, null, 2));
+  let createRuleSaving = $state(false);
+
+  // Upload schemas modal
+  let showUploadSchemasModal = $state(false);
+  let uploadSchemasDragOver = $state(false);
+  let uploadSchemasFiles = $state<File[]>([]);
+  let uploadSchemasUploading = $state(false);
+  let uploadSchemasResults = $state<{ name: string; ok: boolean; error?: string }[]>([]);
+  let showUploadSchemaGuide = $state(false);
+
+  const API_BASE = typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL
+    ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
+    : "/api";
+
   // Validation results
-  let validationResult = $state<RunResult | null>(null);
   let runningValidation = $state(false);
   let runningValidationSchemaId = $state<string | null>(null);
   let runningAllValidations = $state(false);
@@ -216,7 +253,9 @@
     uploadedSchemasLoading = true;
     error = null;
     try {
-      const result = await client.query(UPLOADED_SCHEMAS_QUERY, {}).toPromise();
+      const result = await client
+        .query(UPLOADED_SCHEMAS_QUERY, {}, { requestPolicy: "network-only" })
+        .toPromise();
       if (result.error) {
         error = result.error.message;
         return;
@@ -226,6 +265,22 @@
       error = e.message;
     } finally {
       uploadedSchemasLoading = false;
+    }
+  }
+
+  async function loadValidationRuns() {
+    if (!branchId) return;
+    try {
+      const result = await client
+        .query(VALIDATION_RESULTS_QUERY, { branchId }, { requestPolicy: "network-only" })
+        .toPromise();
+      if (result.error) {
+        // Do not surface as top-level error; this is auxiliary state.
+        return;
+      }
+      validationRuns = (result.data?.validationResults ?? []) as RunResult[];
+    } catch {
+      // Ignore; validation runs are optional for Schema Browser UI.
     }
   }
 
@@ -268,6 +323,12 @@
           schemaId,
         })
         .toPromise();
+      // Optimistic update: add project to schema so Applied Schemas panel updates immediately
+      uploadedSchemas = uploadedSchemas.map((us) =>
+        us.id === schemaId
+          ? { ...us, projectIds: us.projectIds.includes(pid) ? us.projectIds : [...us.projectIds, pid] }
+          : us,
+      );
       await loadUploadedSchemas();
     } catch (e: any) {
       error = e.message;
@@ -285,44 +346,39 @@
         })
         .toPromise();
       if (activeAppliedSchema?.id === schemaId) activeAppliedSchema = null;
+      // Optimistic update: remove project from schema so Applied Schemas panel updates immediately
+      uploadedSchemas = uploadedSchemas.map((us) =>
+        us.id === schemaId
+          ? { ...us, projectIds: us.projectIds.filter((id) => id !== pid) }
+          : us,
+      );
       await loadUploadedSchemas();
     } catch (e: any) {
       error = e.message;
     }
   }
 
-  async function loadSchemas() {
-    if (!branchId) return;
-    loading = true;
-    error = null;
+  async function deleteUploadedSchema(schemaId: string) {
     try {
-      const result = await client
-        .query(VALIDATION_SCHEMAS_QUERY, {
-          branchId,
-          revision,
-        })
-        .toPromise();
-      if (result.error) {
-        error = result.error.message;
-        return;
+      const ok = await client
+        .mutation(DELETE_UPLOADED_SCHEMA_MUTATION, { schemaId })
+        .toPromise()
+        .then((r) => r.data?.deleteUploadedSchema);
+      if (ok) {
+        uploadedSchemas = uploadedSchemas.filter((us) => us.id !== schemaId);
+        if (activeAppliedSchema?.id === schemaId) {
+          activeAppliedSchema = null;
+          uploadedSchemaRules = [];
+          uploadedSchemaValidationResult = null;
+        }
       }
-      schemas = result.data?.validationSchemas ?? [];
     } catch (e: any) {
       error = e.message;
-    } finally {
-      loading = false;
     }
-  }
-
-  async function selectSchema(schema: ValidationSchema) {
-    activeSchema = schema;
-    activeAppliedSchema = null;
-    validationResult = null;
   }
 
   async function selectAppliedSchema(schema: UploadedSchema) {
     activeAppliedSchema = schema;
-    activeSchema = null;
     uploadedSchemaValidationResult = null;
     await loadUploadedSchemaRules(schema.id);
   }
@@ -331,9 +387,7 @@
     uploadedSchemaRulesLoading = true;
     try {
       const result = await client
-        .query(VALIDATION_RULES_FOR_UPLOADED_SCHEMA_QUERY, {
-          schemaId,
-        })
+        .query(VALIDATION_RULES_FOR_UPLOADED_SCHEMA_QUERY, { schemaId }, { requestPolicy: "network-only" })
         .toPromise();
       uploadedSchemaRules = result.data?.validationRulesForUploadedSchema ?? [];
     } catch {
@@ -344,17 +398,15 @@
   }
 
   async function createSchema() {
-    if (!branchId || !newSchemaName.trim()) return;
+    if (!newSchemaName.trim()) return;
     try {
       const result = await client
-        .mutation(CREATE_VALIDATION_SCHEMA_MUTATION, {
-          branchId,
+        .mutation(CREATE_UPLOADED_SCHEMA_MUTATION, {
           name: newSchemaName.trim(),
-          description: newSchemaDescription.trim() || null,
         })
         .toPromise();
-      if (result.data?.createValidationSchema) {
-        schemas = [...schemas, result.data.createValidationSchema];
+      if (result.data?.createUploadedSchema) {
+        await loadUploadedSchemas();
         showSchemaCreator = false;
         newSchemaName = "";
         newSchemaDescription = "";
@@ -364,104 +416,298 @@
     }
   }
 
-  async function deleteSchema(globalId: string) {
-    if (!branchId) return;
+  function parseJsonToCreateRuleSchema(jsonStr: string): CreateRuleSchema | null {
     try {
-      await client
-        .mutation(DELETE_VALIDATION_SCHEMA_MUTATION, { branchId, globalId })
-        .toPromise();
-      schemas = schemas.filter((s) => s.globalId !== globalId);
-      if (activeSchema?.globalId === globalId) activeSchema = null;
-    } catch (e: any) {
-      error = e.message;
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed || typeof parsed !== "object") return null;
+      const conds = Array.isArray(parsed.Conditions)
+        ? parsed.Conditions.map((c: { path?: string; operator?: string; value?: string }) => ({
+            path: String(c?.path ?? ""),
+            operator: String(c?.operator ?? "exists"),
+            value: String(c?.value ?? ""),
+          }))
+        : [{ path: "", operator: "exists", value: "" }];
+      const sc = parsed.SpatialContext && typeof parsed.SpatialContext === "object" ? parsed.SpatialContext : {};
+      const sev = String(parsed.severity ?? "Error");
+      return {
+        ruleType: String(parsed.ruleType ?? "attribute_check"),
+        TargetClass: String(parsed.TargetClass ?? parsed.entity ?? ""),
+        ConditionLogic: (parsed.ConditionLogic === "AND" ? "AND" : "OR") as "AND" | "OR",
+        Conditions: conds,
+        SpatialContext: {
+          traversal: String(sc.traversal ?? ""),
+          scope_class: String(sc.scope_class ?? ""),
+          scope_name: String(sc.scope_name ?? ""),
+        },
+        severity: ["Error", "Warning", "Info"].includes(sev) ? sev : "Error",
+        includeSubclasses: Boolean(parsed.includeSubclasses),
+      };
+    } catch {
+      return null;
     }
   }
 
-  async function createRule() {
-    if (!branchId || !ruleName.trim() || !ruleTargetClass.trim()) return;
-    if (!activeSchema) return;
-    try {
-      const conditions = ruleConditions
-        .filter((c) => c.path.trim())
-        .map((c) => ({
-          path: c.path,
-          operator: c.operator,
-          value: c.value || null,
-        }));
-      const result = await client
-        .mutation(CREATE_VALIDATION_RULE_MUTATION, {
-          branchId,
-          name: ruleName.trim(),
-          targetClass: ruleTargetClass.trim(),
-          severity: ruleSeverity,
-          includeSubtypes: ruleIncludeSubtypes,
-          conditions,
-        })
-        .toPromise();
-      if (result.data?.createValidationRule) {
-        const newRule = result.data.createValidationRule;
-        // Link to active schema
-        await client
-          .mutation(LINK_RULE_TO_SCHEMA_MUTATION, {
-            branchId,
-            ruleGlobalId: newRule.globalId,
-            schemaGlobalId: activeSchema.globalId,
-          })
-          .toPromise();
-        activeSchema = {
-          ...activeSchema,
-          rules: [...activeSchema.rules, newRule],
-        };
-        showRuleEditor = false;
-        ruleName = "";
-        ruleTargetClass = "";
-        ruleConditions = [{ path: "", operator: "exists", value: "" }];
-      }
-    } catch (e: any) {
-      error = e.message;
+  function openCreateRuleModal() {
+    editingRuleId = null;
+    showCreateRuleModal = true;
+    createRuleMode = "card";
+    createRuleName = "";
+    createRuleDescription = "";
+    createRuleSchema = JSON.parse(JSON.stringify(DEFAULT_CREATE_RULE_SCHEMA));
+  }
+
+  function openCreateRuleModalForEdit(rule: UploadedSchemaRule) {
+    editingRuleId = rule.ruleId;
+    showCreateRuleModal = true;
+    createRuleName = rule.name;
+    createRuleDescription = rule.description ?? "";
+    const ruleSeverity = rule.severity === "Required" ? "Error" : rule.severity;
+    if (rule.ruleSchemaJson) {
+      const parsed = parseJsonToCreateRuleSchema(rule.ruleSchemaJson);
+      createRuleSchema = (parsed ?? {
+        ...DEFAULT_CREATE_RULE_SCHEMA,
+        TargetClass: rule.targetIfcClass,
+        Conditions: [{ path: "", operator: "exists", value: "" }],
+      });
+      createRuleSchema = { ...createRuleSchema, severity: ruleSeverity };
+      createRuleMode = "json";
+    } else {
+      createRuleMode = "card";
+      createRuleSchema = {
+        ...DEFAULT_CREATE_RULE_SCHEMA,
+        TargetClass: rule.targetIfcClass,
+        Conditions: [{ path: "", operator: "exists", value: "" }],
+        severity: ruleSeverity,
+      };
     }
   }
 
-  async function deleteRule(ruleGlobalId: string) {
-    if (!branchId) return;
-    try {
-      await client
-        .mutation(DELETE_VALIDATION_RULE_MUTATION, {
-          branchId,
-          globalId: ruleGlobalId,
-        })
-        .toPromise();
-      if (activeSchema) {
-        activeSchema = {
-          ...activeSchema,
-          rules: activeSchema.rules.filter((r) => r.globalId !== ruleGlobalId),
-        };
-      }
-    } catch (e: any) {
-      error = e.message;
+  function closeCreateRuleModal() {
+    showCreateRuleModal = false;
+    editingRuleId = null;
+    createRuleName = "";
+    createRuleDescription = "";
+    createRuleSchema = JSON.parse(JSON.stringify(DEFAULT_CREATE_RULE_SCHEMA));
+  }
+
+  function addCreateRuleCondition() {
+    createRuleSchema = {
+      ...createRuleSchema,
+      Conditions: [...createRuleSchema.Conditions, { path: "", operator: "exists", value: "" }],
+    };
+  }
+
+  function removeCreateRuleCondition(i: number) {
+    createRuleSchema = {
+      ...createRuleSchema,
+      Conditions: createRuleSchema.Conditions.filter((_, idx) => idx !== i),
+    };
+  }
+
+  function openUploadSchemasModal() {
+    showUploadSchemasModal = true;
+    uploadSchemasFiles = [];
+    uploadSchemasResults = [];
+    showUploadSchemaGuide = false;
+  }
+
+  function closeUploadSchemasModal() {
+    showUploadSchemasModal = false;
+    uploadSchemasFiles = [];
+    uploadSchemasResults = [];
+  }
+
+  function handleUploadSchemasDragOver(e: DragEvent) {
+    e.preventDefault();
+    uploadSchemasDragOver = true;
+  }
+
+  function handleUploadSchemasDragLeave(e: DragEvent) {
+    e.preventDefault();
+    uploadSchemasDragOver = false;
+  }
+
+  function handleUploadSchemasDrop(e: DragEvent) {
+    e.preventDefault();
+    uploadSchemasDragOver = false;
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
+      f.name.toLowerCase().endsWith(".json"),
+    );
+    if (files.length > 0) {
+      uploadSchemasFiles = [...uploadSchemasFiles, ...files];
+      submitUploadSchemas();
     }
   }
 
-  async function runValidation() {
-    if (!branchId || !activeSchema) return;
-    runningValidation = true;
-    validationResult = null;
+  function handleUploadSchemasFileInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []).filter((f) =>
+      f.name.toLowerCase().endsWith(".json"),
+    );
+    if (files.length > 0) {
+      uploadSchemasFiles = [...uploadSchemasFiles, ...files];
+      input.value = "";
+      submitUploadSchemas();
+    }
+  }
+
+  function removeUploadSchemaFile(i: number) {
+    uploadSchemasFiles = uploadSchemasFiles.filter((_, idx) => idx !== i);
+  }
+
+  async function submitUploadSchemas() {
+    if (uploadSchemasFiles.length === 0) return;
+    uploadSchemasUploading = true;
+    uploadSchemasResults = [];
+    error = null;
     try {
-      const result = await client
-        .mutation(RUN_VALIDATION_MUTATION, {
-          branchId,
-          schemaGlobalId: activeSchema.globalId,
-          revision,
-        })
-        .toPromise();
-      if (result.data?.runValidation) {
-        validationResult = result.data.runValidation;
+      for (const file of uploadSchemasFiles) {
+        try {
+          const text = await file.text();
+          const json = JSON.parse(text);
+          const schemaName = json?.schema;
+          if (!schemaName || typeof schemaName !== "string") {
+            uploadSchemasResults = [...uploadSchemasResults, { name: file.name, ok: false, error: "Missing top-level 'schema' string" }];
+            continue;
+          }
+          const entities = json?.entities;
+          if (!entities || typeof entities !== "object") {
+            uploadSchemasResults = [...uploadSchemasResults, { name: file.name, ok: false, error: "Missing 'entities' object" }];
+            continue;
+          }
+          const res = await fetch(`${API_BASE}/ifc-schema`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(json),
+          });
+          if (res.ok) {
+            uploadSchemasResults = [...uploadSchemasResults, { name: file.name, ok: true }];
+          } else {
+            const err = await res.json().catch(() => ({}));
+            uploadSchemasResults = [...uploadSchemasResults, {
+              name: file.name,
+              ok: false,
+              error: err.detail ?? res.statusText,
+            }];
+          }
+        } catch (e: any) {
+          uploadSchemasResults = [...uploadSchemasResults, {
+            name: file.name,
+            ok: false,
+            error: e.message ?? "Parse error",
+          }];
+        }
       }
-      if (result.error) error = result.error.message;
+      await loadUploadedSchemas();
+      uploadSchemasFiles = [];
     } catch (e: any) {
       error = e.message;
     } finally {
-      runningValidation = false;
+      uploadSchemasUploading = false;
+    }
+  }
+
+  async function createUploadedSchemaRule() {
+    const schema = activeAppliedSchema;
+    if (!schema) return;
+    if (!createRuleName.trim()) {
+      error = "Rule name is required.";
+      return;
+    }
+    createRuleSaving = true;
+    error = null;
+    try {
+      const targetIfcClass = createRuleSchema.TargetClass.trim();
+      if (!targetIfcClass) {
+        error = "Target IFC class is required.";
+        createRuleSaving = false;
+        return;
+      }
+      const conditions = createRuleSchema.Conditions.filter((c) => c.path.trim()).map((c) => ({
+        path: c.path.trim(),
+        operator: c.operator || "exists",
+        value: c.value?.trim() || null,
+      }));
+      if (conditions.length === 0) {
+        error = "At least one condition with a path is required.";
+        createRuleSaving = false;
+        return;
+      }
+      const ruleSchemaForApi = {
+        ...createRuleSchema,
+        includeSubclasses: Boolean(createRuleSchema.includeSubclasses),
+        Conditions: conditions,
+        SpatialContext:
+          createRuleSchema.SpatialContext.traversal?.trim() ||
+          createRuleSchema.SpatialContext.scope_class?.trim() ||
+          createRuleSchema.SpatialContext.scope_name?.trim()
+            ? {
+                traversal: createRuleSchema.SpatialContext.traversal.trim() || null,
+                scope_class: createRuleSchema.SpatialContext.scope_class.trim() || null,
+                scope_name: createRuleSchema.SpatialContext.scope_name.trim() || null,
+              }
+            : undefined,
+      };
+      const ruleSchemaJson = JSON.stringify(ruleSchemaForApi);
+
+      if (editingRuleId) {
+        const result = await client
+          .mutation(UPDATE_UPLOADED_SCHEMA_RULE_FULL_MUTATION, {
+            ruleId: editingRuleId,
+            name: createRuleName.trim(),
+            description: createRuleDescription.trim() || null,
+            targetIfcClass,
+            severity: createRuleSchema.severity,
+            ruleSchemaJson,
+          })
+          .toPromise();
+        if (result.error) {
+          error = result.error.message;
+        } else if (result.data?.updateUploadedSchemaRule) {
+          closeCreateRuleModal();
+          await loadUploadedSchemaRules(activeAppliedSchema!.id);
+        } else {
+          error = "Failed to update rule.";
+        }
+      } else {
+        const result = await client
+          .mutation(CREATE_UPLOADED_SCHEMA_RULE_MUTATION, {
+            schemaId: schema.id,
+            name: createRuleName.trim(),
+            targetIfcClass,
+            description: createRuleDescription.trim() || null,
+            severity: createRuleSchema.severity,
+            effectiveRequiredAttributesJson: null,
+            ruleSchemaJson: ruleSchemaJson ?? null,
+          })
+          .toPromise();
+
+        if (result.data?.createUploadedSchemaRule) {
+          uploadedSchemaRules = [...uploadedSchemaRules, result.data.createUploadedSchemaRule];
+          closeCreateRuleModal();
+          await loadUploadedSchemas();
+        }
+      }
+    } catch (e: any) {
+      error = e.message;
+    } finally {
+      createRuleSaving = false;
+    }
+  }
+
+  async function deleteUploadedSchemaRule(ruleId: string) {
+    if (!activeAppliedSchema) return;
+    try {
+      const ok = await client
+        .mutation(DELETE_UPLOADED_SCHEMA_RULE_MUTATION, { ruleId })
+        .toPromise()
+        .then((r) => r.data?.deleteUploadedSchemaRule);
+      if (ok) {
+        uploadedSchemaRules = uploadedSchemaRules.filter((r) => r.ruleId !== ruleId);
+        await loadUploadedSchemas();
+      }
+    } catch (e: any) {
+      error = e.message;
     }
   }
 
@@ -481,6 +727,7 @@
       if (result.data?.runValidationByUploadedSchema) {
         uploadedSchemaValidationResult =
           result.data.runValidationByUploadedSchema;
+        await loadValidationRuns();
       }
       if (result.error) error = result.error.message;
     } catch (e: any) {
@@ -497,6 +744,9 @@
     error = null;
     try {
       for (const us of appliedSchemasForProject) {
+        if (revision != null && disabledSchemaIdsForRevision.has(us.id)) {
+          continue;
+        }
         const result = await client
           .mutation(RUN_VALIDATION_BY_UPLOADED_SCHEMA_MUTATION, {
             branchId,
@@ -513,22 +763,12 @@
           break;
         }
       }
+      await loadValidationRuns();
     } catch (e: any) {
       error = e.message;
     } finally {
       runningAllValidations = false;
     }
-  }
-
-  function addCondition() {
-    ruleConditions = [
-      ...ruleConditions,
-      { path: "", operator: "exists", value: "" },
-    ];
-  }
-
-  function removeCondition(index: number) {
-    ruleConditions = ruleConditions.filter((_, i) => i !== index);
   }
 
   function severityClass(severity: string): string {
@@ -575,6 +815,60 @@
     if (ruleDraftJson[rule.ruleId] !== undefined)
       return ruleDraftJson[rule.ruleId];
     return rule.effectiveRequiredAttributes ?? "[]";
+  }
+
+  function getRuleIncludeSubclasses(rule: UploadedSchemaRule): boolean {
+    const raw = rule.ruleSchemaJson;
+    if (!raw?.trim()) return false;
+    try {
+      const schema = JSON.parse(raw);
+      return Boolean(schema?.includeSubclasses);
+    } catch {
+      return false;
+    }
+  }
+
+  async function setRuleIncludeSubclasses(
+    rule: UploadedSchemaRule,
+    value: boolean,
+  ) {
+    ruleIncludeSubclassesSaving = {
+      ...ruleIncludeSubclassesSaving,
+      [rule.ruleId]: true,
+    };
+    try {
+      let schema: Record<string, unknown> = {};
+      if (rule.ruleSchemaJson?.trim()) {
+        try {
+          schema = JSON.parse(rule.ruleSchemaJson);
+          if (!schema || typeof schema !== "object") schema = {};
+        } catch {
+          schema = {};
+        }
+      }
+      const ruleSchemaJson = JSON.stringify({
+        ...schema,
+        includeSubclasses: value,
+      });
+      await client
+        .mutation(UPDATE_UPLOADED_SCHEMA_RULE_FULL_MUTATION, {
+          ruleId: rule.ruleId,
+          ruleSchemaJson,
+        })
+        .toPromise();
+      if (activeAppliedSchema)
+        await loadUploadedSchemaRules(activeAppliedSchema.id);
+    } catch (e: any) {
+      ruleJsonError = {
+        ...ruleJsonError,
+        [rule.ruleId]: e?.message ?? "Failed to update",
+      };
+    } finally {
+      ruleIncludeSubclassesSaving = {
+        ...ruleIncludeSubclassesSaving,
+        [rule.ruleId]: false,
+      };
+    }
   }
 
   function setDraftJson(ruleId: string, value: string) {
@@ -679,9 +973,6 @@
     }
   }
 
-  $effect(() => {
-    if (branchId) loadSchemas();
-  });
 
   onMount(() => {
     applyContextFromUrl();
@@ -699,6 +990,14 @@
 
   $effect(() => {
     if (projectId && !applyProjectId) applyProjectId = projectId;
+  });
+
+  $effect(() => {
+    if (!branchId) {
+      validationRuns = [];
+      return;
+    }
+    loadValidationRuns();
   });
 
   $effect(() => {
@@ -730,8 +1029,31 @@
   <!-- Uploaded IFC Schemas (from POST /ifc-schema) -->
   <section class="uploaded-schemas-section">
     <div class="section-header">
-      <h3>Uploaded IFC Schemas</h3>
+      <button
+        type="button"
+        class="section-toggle"
+        aria-expanded={existingSchemasExpanded}
+        aria-label="Toggle existing schemas"
+        onclick={() => (existingSchemasExpanded = !existingSchemasExpanded)}
+      >
+        <span class="collapse-chevron" class:expanded={existingSchemasExpanded}>▾</span>
+        <h3>Existing Schemas</h3>
+      </button>
       <div class="uploaded-schemas-controls">
+        <button
+          type="button"
+          class="btn-sm btn-primary"
+          onclick={openUploadSchemasModal}
+        >
+          Upload Schemas
+        </button>
+        <button
+          type="button"
+          class="btn-sm btn-primary"
+          onclick={() => (showSchemaCreator = true)}
+        >
+          Create Schema
+        </button>
         <input
           class="uploaded-schema-search-input"
           type="text"
@@ -739,25 +1061,9 @@
           bind:value={uploadedSchemaSearchQuery}
           aria-label="Search uploaded schemas"
         />
-        <div class="project-selector">
-          <label for="apply-project-select">Apply to project:</label>
-          <select
-            id="apply-project-select"
-            class="input-sm"
-            value={applyProjectId ?? ""}
-            onchange={(e) => {
-              applyProjectId =
-                (e.currentTarget as HTMLSelectElement).value || null;
-            }}
-          >
-            <option value="">Select project…</option>
-            {#each projects as p}
-              <option value={p.id}>{p.name}</option>
-            {/each}
-          </select>
-        </div>
       </div>
     </div>
+    {#if existingSchemasExpanded}
     {#if uploadedSchemasLoading}
       <div class="empty-state">Loading uploaded schemas…</div>
     {:else if uploadedSchemas.length === 0}
@@ -790,13 +1096,13 @@
             {#if applyProjectId}
               {#if us.projectIds.includes(applyProjectId)}
                 <button
-                  class="btn-sm"
+                  class="btn-sm uploaded-schema-action"
                   onclick={() => unapplySchemaFromProject(us.id)}
                   >Unapply</button
                 >
               {:else}
                 <button
-                  class="btn-sm btn-primary"
+                  class="btn-sm btn-primary uploaded-schema-action"
                   onclick={() => applySchemaToProject(us.id)}>Apply</button
                 >
               {/if}
@@ -804,6 +1110,7 @@
           </li>
         {/each}
       </ul>
+    {/if}
     {/if}
   </section>
 
@@ -816,7 +1123,12 @@
           <button
             class="btn-sm btn-success"
             onclick={runAllValidationsForAppliedSchemas}
-            disabled={runningAllValidations || !branchId}
+            disabled={runningAllValidations ||
+              !branchId ||
+              revision == null ||
+              appliedSchemasForProject.every((us) =>
+                disabledSchemaIdsForRevision.has(us.id),
+              )}
           >
             {runningAllValidations ? "Running…" : "▶ Run all"}
           </button>
@@ -825,7 +1137,7 @@
 
       {#if !applyProjectId}
         <div class="empty-state">
-          Select a project above to see applied schemas.
+          Open a project on the main page to apply schemas.
         </div>
       {:else if uploadedSchemasLoading}
         <div class="empty-state">Loading…</div>
@@ -844,6 +1156,54 @@
                 <span class="schema-name">{us.versionName}</span>
                 <span class="rule-count">{us.ruleCount} rules</span>
               </button>
+              <div class="schema-actions">
+                <button
+                  class="schema-delete-btn"
+                  onclick={() => {
+                    if (confirm("Delete this schema and all its rules?")) {
+                      deleteUploadedSchema(us.id);
+                    }
+                  }}
+                  aria-label={`Delete schema ${us.versionName}`}
+                  title="Delete schema"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <path
+                      d="M4 4L12 12M12 4L4 12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="schema-run-btn btn-icon-primary"
+                  onclick={() => runValidationByUploadedSchema(us.id)}
+                  disabled={runningValidationSchemaId === us.id ||
+                    runningAllValidations ||
+                    !branchId ||
+                    revision == null ||
+                    disabledSchemaIdsForRevision.has(us.id)}
+                  aria-label={disabledSchemaIdsForRevision.has(us.id) && revision != null
+                    ? `Validation already run for ${us.versionName} on this revision`
+                    : `Run validation for ${us.versionName}`}
+                  title={disabledSchemaIdsForRevision.has(us.id) && revision != null
+                    ? "Validation already run for this revision"
+                    : "Run validation"}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <polygon points="5,2.5 13,8 5,13.5" fill="currentColor" />
+                  </svg>
+                </button>
+              </div>
             </li>
           {/each}
         </ul>
@@ -859,28 +1219,33 @@
             <h3>{sel.versionName}</h3>
             <span class="version-badge">{sel.ruleCount} rules</span>
           </div>
-          <div class="detail-actions">
-            <button
-              class="btn-sm btn-success"
-              onclick={() => runValidationByUploadedSchema(sel.id)}
-              disabled={runningValidationSchemaId === sel.id ||
-                runningAllValidations ||
-                !branchId}
-            >
-              {runningValidationSchemaId === sel.id
-                ? "Running…"
-                : "▶ Run validation"}
-            </button>
-          </div>
         </div>
 
         <!-- Rules list (collapsible by severity) -->
         <div class="rules-section">
-          <h4>Rules ({uploadedSchemaRules.length})</h4>
+          <div class="rules-section-header">
+            <h4>Rules ({uploadedSchemaRules.length})</h4>
+            <button
+              type="button"
+              class="btn-sm btn-primary"
+              onclick={openCreateRuleModal}
+            >
+              Create Rule
+            </button>
+          </div>
           {#if uploadedSchemaRulesLoading}
             <div class="empty-state">Loading rules…</div>
           {:else if uploadedSchemaRules.length === 0}
-            <div class="empty-state">No rules in this schema.</div>
+            <div class="empty-state empty-state-with-action">
+              <p>No rules in this schema.</p>
+              <button
+                type="button"
+                class="btn-sm btn-primary"
+                onclick={openCreateRuleModal}
+              >
+                Create Rule
+              </button>
+            </div>
           {:else}
             <div class="rules-by-severity">
               {#each rulesBySeverity as group (group.severity)}
@@ -906,6 +1271,26 @@
                           >
                           <span class="rule-name">{rule.name}</span>
                           <span class="rule-target">{rule.targetIfcClass}</span>
+                          <div class="rule-header-actions">
+                            <button
+                              type="button"
+                              class="btn-icon rule-action-btn"
+                              onclick={(e) => { e.preventDefault(); e.stopPropagation(); openCreateRuleModalForEdit(rule); }}
+                              aria-label="Edit rule"
+                              title="Edit"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-icon rule-action-btn rule-delete-btn"
+                              onclick={(e) => { e.preventDefault(); e.stopPropagation(); if (confirm("Delete this rule?")) deleteUploadedSchemaRule(rule.ruleId); }}
+                              aria-label="Delete rule"
+                              title="Delete"
+                            >
+                              ✕
+                            </button>
+                          </div>
                         </summary>
                         <div class="rule-details">
                           <div class="rule-detail-row">
@@ -918,6 +1303,28 @@
                               <span>{rule.description}</span>
                             </div>
                           {/if}
+                          <div class="rule-detail-row rule-include-subclasses-row">
+                            <label
+                              class="rule-include-subclasses-label"
+                              title="Apply this rule to the target IFC class and all classes that inherit from it (e.g. IfcBuildingElement → IfcWall, IfcSlab)"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={getRuleIncludeSubclasses(rule)}
+                                disabled={ruleIncludeSubclassesSaving[rule.ruleId]}
+                                onchange={(e) => {
+                                  setRuleIncludeSubclasses(
+                                    rule,
+                                    (e.currentTarget as HTMLInputElement).checked,
+                                  );
+                                }}
+                              />
+                              <span>Include subclasses</span>
+                            </label>
+                            {#if ruleIncludeSubclassesSaving[rule.ruleId]}
+                              <span class="rule-saving-hint">Saving…</span>
+                            {/if}
+                          </div>
                           {#if rule.effectiveRequiredAttributes}
                             <div class="rule-detail-row eff-attrs-block">
                               <div class="eff-attrs-header">
@@ -1125,6 +1532,452 @@
       {/if}
     </main>
   </div>
+
+  <!-- Create Schema modal -->
+  {#if showSchemaCreator}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="create-schema-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-schema-title"
+      aria-label="Create schema"
+      tabindex="-1"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) {
+          showSchemaCreator = false;
+          newSchemaName = "";
+        }
+      }}
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          showSchemaCreator = false;
+          newSchemaName = "";
+        }
+      }}
+    >
+      <div class="create-schema-modal">
+        <header class="create-schema-modal-header">
+          <h2 id="create-schema-title">Create Schema</h2>
+          <button
+            type="button"
+            class="create-schema-close"
+            onclick={() => {
+              showSchemaCreator = false;
+              newSchemaName = "";
+            }}
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M4 4L12 12M12 4L4 12"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+        <div class="create-schema-body">
+          <label for="create-schema-name">
+            Name
+          </label>
+          <input
+            id="create-schema-name"
+            type="text"
+            class="create-schema-input"
+            placeholder="Schema name"
+            bind:value={newSchemaName}
+            onkeydown={(e) => e.key === "Enter" && createSchema()}
+          />
+        </div>
+        <footer class="create-schema-footer">
+          <button
+            type="button"
+            class="btn-sm"
+            onclick={() => {
+              showSchemaCreator = false;
+              newSchemaName = "";
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-sm btn-primary"
+            disabled={!newSchemaName.trim()}
+            onclick={createSchema}
+          >
+            Create
+          </button>
+        </footer>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Create Rule modal -->
+  {#if showCreateRuleModal && activeAppliedSchema}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="create-schema-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-rule-title"
+      aria-label="Create rule"
+      tabindex="-1"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) closeCreateRuleModal();
+      }}
+      onkeydown={(e) => {
+        if (e.key === "Escape") closeCreateRuleModal();
+      }}
+    >
+      <div class="create-rule-modal">
+        <header class="create-schema-modal-header">
+          <h2 id="create-rule-title">{editingRuleId ? "Edit Rule" : "Create Rule"}</h2>
+          <button
+            type="button"
+            class="create-schema-close"
+            onclick={closeCreateRuleModal}
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M4 4L12 12M12 4L4 12"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+        <div class="create-rule-body">
+          <div class="create-rule-mode-toggle">
+            <button
+              type="button"
+              class="btn-sm view-mode-toggle"
+              class:card-active={createRuleMode === "card"}
+              class:json-active={createRuleMode === "json"}
+              onclick={() => (createRuleMode = createRuleMode === "card" ? "json" : "card")}
+            >
+              <span class="toggle-option">Card</span>
+              <span class="toggle-option">JSON</span>
+            </button>
+          </div>
+
+          <label for="create-rule-name">Name</label>
+          <input
+            id="create-rule-name"
+            type="text"
+            class="create-schema-input"
+            placeholder="e.g. Wall Fire Rating Check"
+            bind:value={createRuleName}
+          />
+          <label for="create-rule-desc">Description (optional)</label>
+          <input
+            id="create-rule-desc"
+            type="text"
+            class="create-schema-input"
+            placeholder="e.g. Ensure fire rating is 2hr"
+            bind:value={createRuleDescription}
+          />
+
+          {#if createRuleMode === "card"}
+            <label for="create-rule-target">Target IFC class</label>
+            <input
+              id="create-rule-target"
+              type="text"
+              class="create-schema-input"
+              placeholder="e.g. IfcWall"
+              bind:value={createRuleSchema.TargetClass}
+            />
+            <label class="create-rule-include-subclasses-label" title="Apply this rule to the target IFC class and all classes that inherit from it (e.g. IfcBuildingElement → IfcWall, IfcSlab)">
+              <input type="checkbox" bind:checked={createRuleSchema.includeSubclasses} />
+              <span>Include subclasses</span>
+            </label>
+            <label for="create-rule-severity">Severity</label>
+            <select
+              id="create-rule-severity"
+              class="create-schema-input"
+              bind:value={createRuleSchema.severity}
+            >
+              <option value="Error">Error</option>
+              <option value="Warning">Warning</option>
+              <option value="Info">Info</option>
+            </select>
+
+            <div class="create-rule-conditions-block">
+              <div class="create-rule-conditions-header">
+                <strong>Conditions</strong>
+                <label for="create-rule-condition-logic" class="create-rule-logic-label">
+                  Combine with
+                  <select
+                    id="create-rule-condition-logic"
+                    class="create-rule-logic-select"
+                    bind:value={createRuleSchema.ConditionLogic}
+                  >
+                    <option value="AND">AND (all must pass)</option>
+                    <option value="OR">OR (any can pass)</option>
+                  </select>
+                </label>
+              </div>
+              <p class="create-rule-hint">
+                Path: nested key (e.g. PropertySets.Pset_WallCommon.FireRating). Use exists for required attributes. Example: FireRating &gt; 2 OR FireRating &lt; 5.
+              </p>
+              {#each createRuleSchema.Conditions as cond, i}
+                  <div class="create-rule-condition-row">
+                    <input
+                      type="text"
+                      placeholder="Path (e.g. PropertySets.Pset_WallCommon.FireRating)"
+                      class="create-rule-path-input"
+                      bind:value={cond.path}
+                    />
+                    <select class="create-rule-operator-select" bind:value={cond.operator}>
+                      {#each CONDITION_OPERATORS as op}
+                        <option value={op.value}>{op.label}</option>
+                      {/each}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Value (optional for exists/not_exists)"
+                      class="create-rule-value-input"
+                      bind:value={cond.value}
+                    />
+                    <button
+                      type="button"
+                      class="btn-sm"
+                      onclick={() => removeCreateRuleCondition(i)}
+                      aria-label="Remove condition"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                {/each}
+              <button type="button" class="btn-sm" onclick={addCreateRuleCondition}>
+                + Add condition
+              </button>
+            </div>
+            <details class="create-rule-spatial-details">
+                <summary>Spatial context (optional)</summary>
+                <div class="create-rule-spatial-fields">
+                  <label for="create-rule-traversal">Traversal</label>
+                  <select
+                    id="create-rule-traversal"
+                    class="create-schema-input"
+                    bind:value={createRuleSchema.SpatialContext.traversal}
+                  >
+                    <option value="">— None —</option>
+                    {#each SPATIAL_TRAVERSALS as t}
+                      <option value={t}>{t}</option>
+                    {/each}
+                  </select>
+                  <label for="create-rule-scope-class">Scope class</label>
+                  <input
+                    id="create-rule-scope-class"
+                    type="text"
+                    placeholder="e.g. IfcSpace"
+                    class="create-schema-input"
+                    bind:value={createRuleSchema.SpatialContext.scope_class}
+                  />
+                  <label for="create-rule-scope-name">Scope name</label>
+                  <input
+                    id="create-rule-scope-name"
+                    type="text"
+                    placeholder="e.g. Room X"
+                    class="create-schema-input"
+                    bind:value={createRuleSchema.SpatialContext.scope_name}
+                  />
+                </div>
+              </details>
+          {:else}
+            <label for="create-rule-target-json">Target IFC class (fallback if not in JSON)</label>
+            <input
+              id="create-rule-target-json"
+              type="text"
+              class="create-schema-input"
+              placeholder="e.g. IfcWall"
+              bind:value={createRuleSchema.TargetClass}
+            />
+            <label for="create-rule-json">Rule schema (JSON)</label>
+            <textarea
+              id="create-rule-json"
+              class="rule-schema-json-input create-rule-json-textarea"
+              rows="12"
+              value={createRuleSchemaJson}
+              oninput={(e) => {
+                const parsed = parseJsonToCreateRuleSchema((e.currentTarget as HTMLTextAreaElement).value);
+                if (parsed) createRuleSchema = parsed;
+              }}
+              spellcheck="false"
+            ></textarea>
+            <p class="create-rule-json-hint">
+              ruleType, TargetClass, ConditionLogic (AND/OR), Conditions (path, operator, value), severity (Error/Warning/Info), optional SpatialContext (traversal, scope_class, scope_name).
+            </p>
+          {/if}
+        </div>
+        <footer class="create-schema-footer">
+          <button type="button" class="btn-sm" onclick={closeCreateRuleModal}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-sm btn-primary"
+            disabled={!createRuleName.trim() || createRuleSaving}
+            onclick={createUploadedSchemaRule}
+          >
+            {createRuleSaving ? (editingRuleId ? "Saving…" : "Creating…") : (editingRuleId ? "Save" : "Create")}
+          </button>
+        </footer>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Upload Schemas modal -->
+  {#if showUploadSchemasModal}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="create-schema-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="upload-schemas-title"
+      aria-label="Upload schemas"
+      tabindex="-1"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) closeUploadSchemasModal();
+      }}
+      onkeydown={(e) => {
+        if (e.key === "Escape") closeUploadSchemasModal();
+      }}
+    >
+      <div class="upload-schemas-modal">
+        <header class="create-schema-modal-header">
+          <h2 id="upload-schemas-title">Upload Schemas</h2>
+          <div class="upload-schemas-header-actions">
+            <button
+              type="button"
+              class="btn-icon upload-schemas-info-btn"
+              onclick={() => (showUploadSchemaGuide = !showUploadSchemaGuide)}
+              aria-label="Schema format guide"
+              title="Schema format guide"
+            >
+              ℹ
+            </button>
+            <button
+              type="button"
+              class="create-schema-close"
+              onclick={closeUploadSchemasModal}
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 4L12 12M12 4L4 12"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="upload-schemas-body">
+        {#if showUploadSchemaGuide}
+          <div class="upload-schemas-guide">
+            <h4>Schema JSON structure</h4>
+            <p>Each schema JSON must include:</p>
+            <ul>
+              <li><strong>schema</strong> — schema identifier (e.g. "IFC4X3_ADD2")</li>
+              <li><strong>entities</strong> — object mapping entity names to definitions with <code>parent</code> (optional, blank/null for root entities), <code>attributes</code> (array of objects with name, type, required), <code>abstract</code></li>
+            </ul>
+            <pre class="upload-schemas-example">{`{
+  "schema": "IFC4X3_ADD2",
+  "entities": {
+    "IfcRoot": {
+      "abstract": false,
+      "parent": null,
+      "attributes": [
+        { "name": "Name", "type": "IfcLabel", "required": false }
+      ]
+    },
+    "IfcWall": {
+      "abstract": false,
+      "parent": "IfcBuildingElement",
+      "attributes": [
+        { "name": "Name", "type": "IfcLabel", "required": false }
+      ]
+    }
+  }
+}`}</pre>
+          </div>
+        {/if}
+        <div
+          class="upload-schemas-drop-zone"
+          class:drag-over={uploadSchemasDragOver}
+          class:has-files={uploadSchemasFiles.length > 0}
+          role="button"
+          tabindex="0"
+          ondragover={handleUploadSchemasDragOver}
+          ondragleave={handleUploadSchemasDragLeave}
+          ondrop={handleUploadSchemasDrop}
+          onclick={() => document.getElementById("upload-schemas-file-input")?.click()}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              document.getElementById("upload-schemas-file-input")?.click();
+            }
+          }}
+        >
+          <input
+            id="upload-schemas-file-input"
+            type="file"
+            accept=".json"
+            multiple
+            class="sr-only"
+            onchange={handleUploadSchemasFileInput}
+          />
+          {#if uploadSchemasFiles.length > 0}
+            <ul class="upload-schemas-file-list">
+              {#each uploadSchemasFiles as file, i}
+                <li>
+                  <span class="upload-schemas-file-name">{file.name}</span>
+                  <button
+                    type="button"
+                    class="btn-sm"
+                    onclick={(e) => { e.stopPropagation(); removeUploadSchemaFile(i); }}
+                    aria-label="Remove"
+                  >
+                    ✕
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="upload-schemas-drop-label">Drag & drop JSON schema files here</p>
+            <p class="upload-schemas-drop-hint">or click to browse (multiple files allowed)</p>
+          {/if}
+        </div>
+        {#if uploadSchemasResults.length > 0}
+          <div class="upload-schemas-results">
+            {#each uploadSchemasResults as r}
+              <div class="upload-schemas-result" class:ok={r.ok} class:fail={!r.ok}>
+                <span>{r.name}</span>
+                {#if r.ok}
+                  <span class="upload-schemas-result-ok">✓</span>
+                {:else}
+                  <span class="upload-schemas-result-err">✗ {r.error ?? "Failed"}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+        </div>
+        <footer class="create-schema-footer">
+          <button type="button" class="btn-sm btn-primary" onclick={closeUploadSchemasModal}>
+            Close
+          </button>
+        </footer>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1198,6 +2051,36 @@
     gap: 0.5rem;
   }
 
+  .uploaded-schemas-section .section-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    padding: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    color: var(--color-action-primary);
+  }
+
+  .uploaded-schemas-section .section-toggle:focus-visible {
+    outline: 2px solid var(--color-border-strong);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  .collapse-chevron {
+    display: inline-block;
+    margin-right: 0.35rem;
+    transition: transform 0.2s ease;
+  }
+
+  .collapse-chevron:not(.expanded) {
+    transform: rotate(-90deg);
+  }
+
+  .uploaded-schemas-section .section-toggle h3,
   .uploaded-schemas-section h3 {
     margin: 0;
     font-size: 0.85rem;
@@ -1235,60 +2118,56 @@
       color-mix(in srgb, var(--color-border-strong) 25%, transparent);
   }
 
-  .project-selector {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .project-selector label {
-    font-size: 0.78rem;
-    color: var(--color-text-secondary);
-  }
-
   .uploaded-schema-list {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
   }
 
   .uploaded-schema-item {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 0.75rem;
-    padding: 0.4rem 0.75rem;
+    padding: 0.75rem 1rem;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: 0.75rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   }
 
   .uploaded-schema-info {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 0.35rem;
+    flex: 1;
   }
 
   .uploaded-schema-name {
     font-weight: 500;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     color: var(--color-text-primary);
   }
 
   .uploaded-schema-rules {
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: var(--color-text-muted);
   }
 
   .applied-badge {
     font-size: 0.7rem;
-    padding: 0.1rem 0.4rem;
+    padding: 0.15rem 0.45rem;
     border-radius: 0.25rem;
     background: color-mix(in srgb, var(--color-success) 15%, transparent);
     color: var(--color-text-primary);
+    align-self: flex-start;
+  }
+
+  .uploaded-schema-action {
+    margin-top: auto;
+    width: 100%;
   }
 
   /* Main content: aside + main */
@@ -1322,6 +2201,30 @@
     color: var(--color-text-secondary);
   }
 
+  .rule-include-subclasses-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rule-include-subclasses-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .rule-include-subclasses-label input {
+    margin: 0;
+  }
+
+  .rule-saving-hint {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+
   .creator-form {
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--color-border-subtle);
@@ -1339,11 +2242,21 @@
   .schema-items li {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .schema-items li.active {
     background: color-mix(in srgb, var(--color-action-primary) 8%, transparent);
+  }
+
+  .schema-items li:hover {
+    background: color-mix(in srgb, var(--color-action-primary) 5%, var(--color-bg-elevated));
+  }
+
+  .schema-items li.active:hover {
+    background: color-mix(in srgb, var(--color-action-primary) 14%, transparent);
   }
 
   .schema-item {
@@ -1360,7 +2273,7 @@
   }
 
   .schema-item:hover {
-    background: var(--color-bg-elevated);
+    background: none;
   }
 
   .schema-item:focus-visible {
@@ -1422,65 +2335,47 @@
     flex-shrink: 0;
   }
 
-  /* Rule editor card: 12px radius per style guide */
-  .rule-editor {
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 0.75rem;
-    padding: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  .rule-editor h4 {
-    margin: 0 0 0.75rem 0;
-    font-size: 0.9rem;
-    color: var(--color-action-primary);
-  }
-
-  .rule-editor h5 {
-    margin: 0.75rem 0 0.5rem 0;
-    font-size: 0.82rem;
-    color: var(--color-text-secondary);
-  }
-
-  .form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-  }
-
-  .form-grid label {
+  .schema-actions {
     display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    font-size: 0.78rem;
-    color: var(--color-text-secondary);
-  }
-
-  .checkbox-label {
-    flex-direction: row !important;
     align-items: center;
-    gap: 0.5rem !important;
+    gap: 0.25rem;
+    padding-right: 0.5rem;
   }
 
-  .condition-row {
-    display: flex;
-    gap: 0.4rem;
-    margin-bottom: 0.4rem;
+  .schema-delete-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-surface);
+    color: var(--color-text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
   }
 
-  .condition-row .input-sm {
-    flex: 1;
+  .schema-delete-btn:hover {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
   }
 
-  .form-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-  }
+
 
   .rules-section {
     margin-top: 1rem;
+  }
+
+  .rules-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .rules-section-header h4 {
+    margin: 0;
   }
 
   .rules-section h4 {
@@ -1734,6 +2629,11 @@
     min-height: 6rem;
   }
 
+  .create-rule-json-textarea {
+    min-height: 72vh;
+    height: 72vh;
+  }
+
   .rule-schema-json-input:focus {
     outline: none;
     border-color: var(--color-border-strong);
@@ -1748,6 +2648,26 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .rule-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: auto;
+  }
+
+  .rule-action-btn {
+    padding: 0.2rem;
+    opacity: 0.7;
+  }
+
+  .rule-action-btn:hover {
+    opacity: 1;
+  }
+
+  .rule-delete-btn:hover {
+    color: var(--color-danger);
   }
 
   .severity-badge {
@@ -1785,21 +2705,7 @@
     font-family: monospace;
   }
 
-  .rule-conditions {
-    margin-top: 0.3rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-  }
 
-  .rule-conditions code {
-    font-size: 0.72rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: 0.2rem;
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
-  }
 
   .spatial-ctx {
     margin-top: 0.25rem;
@@ -1933,101 +2839,438 @@
     color: var(--color-text-muted);
   }
 
-  /* Shared controls: design tokens, focus states */
-  .input-sm {
-    padding: 0.35rem 0.5rem;
+  /* Create Schema modal overlay */
+  .create-schema-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--color-text-primary) 35%, transparent);
+    z-index: 1000;
+  }
+
+  .create-schema-modal {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.75rem;
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+    min-width: 20rem;
+    max-width: 90vw;
+  }
+
+  .create-schema-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .create-schema-modal-header h2 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--color-text-primary);
+  }
+
+  .create-schema-close {
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+  }
+
+  .create-schema-close:hover {
+    color: var(--color-text-primary);
+  }
+
+  .create-schema-body {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .create-schema-body label {
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+  }
+
+  .create-schema-input {
+    padding: 0.5rem 0.75rem;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-default);
     border-radius: 0.5rem;
     color: var(--color-text-primary);
-    font-size: 0.8rem;
-    outline: none;
+    font-size: 0.9rem;
   }
 
-  .input-sm::placeholder {
+  .create-schema-input::placeholder {
     color: var(--color-text-muted);
   }
 
-  .input-sm:focus {
+  .create-schema-input:focus {
+    outline: none;
     border-color: var(--color-border-strong);
   }
 
-  .input-sm:focus-visible {
+  .create-schema-input:focus-visible {
     box-shadow: 0 0 0 2px
       color-mix(in srgb, var(--color-border-strong) 25%, transparent);
   }
 
-  .btn-sm {
-    padding: 0.2rem;
-    border-radius: 0.5rem;
+  .create-schema-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  /* Create Rule modal */
+  .create-rule-modal {
+    width: 80%;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.75rem;
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+    min-width: 24rem;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .create-rule-body {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow-y: auto;
+  }
+
+  .create-rule-body label {
     font-size: 0.78rem;
-    border: 1px solid var(--color-border-default);
-    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+  }
+
+  .create-rule-include-subclasses-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.78rem;
     color: var(--color-text-secondary);
     cursor: pointer;
   }
 
-  .btn-sm:hover {
-    background: color-mix(
-      in srgb,
-      var(--color-text-primary) 6%,
-      var(--color-bg-elevated)
-    );
+  .create-rule-include-subclasses-label input {
+    margin: 0;
+  }
+
+  .create-rule-mode-toggle {
+    margin-bottom: 0.25rem;
+  }
+
+  .create-rule-conditions-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .create-rule-logic-label {
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .create-rule-logic-select {
+    padding: 0.25rem 0.4rem;
+    font-size: 0.78rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.4rem;
+    background: var(--color-bg-surface);
     color: var(--color-text-primary);
   }
 
-  .btn-sm:focus-visible {
-    outline: 2px solid var(--color-border-strong);
-    outline-offset: 2px;
-  }
-
-  .btn-sm:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .btn-primary {
-    background: var(--color-action-primary);
-    color: var(--color-bg-surface);
-    border-color: var(--color-action-primary);
-  }
-
-  .btn-primary:hover {
-    background: var(--color-brand-500);
-    border-color: var(--color-brand-500);
-  }
-
-  .btn-success {
-    background: var(--color-success);
-    color: var(--color-bg-surface);
-    border-color: var(--color-success);
-  }
-
-  .btn-success:hover {
-    background: var(--color-brand-500);
-    border-color: var(--color-brand-500);
-  }
-
-  .btn-icon {
-    background: none;
-    border: none;
+  .create-rule-hint {
+    font-size: 0.72rem;
     color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 0.2rem 0.4rem;
-    font-size: 0.75rem;
-    border-radius: 0.25rem;
+    margin: 0.2rem 0 0.5rem;
   }
 
-  .btn-icon:hover {
+  .create-rule-conditions-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .create-rule-conditions-block strong {
+    font-size: 0.82rem;
     color: var(--color-text-secondary);
   }
 
-  .btn-icon:focus-visible {
-    outline: 2px solid var(--color-border-strong);
-    outline-offset: 2px;
+  .create-rule-condition-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 0.4rem;
+    align-items: center;
   }
 
-  .btn-danger:hover {
+  .create-rule-path-input {
+    min-width: 0;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.5rem;
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+  }
+
+  .create-rule-operator-select {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.5rem;
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+    min-width: 8rem;
+  }
+
+  .create-rule-value-input {
+    min-width: 6rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.5rem;
+    background: var(--color-bg-surface);
+    color: var(--color-text-primary);
+  }
+
+  .create-rule-spatial-details {
+    margin-top: 0.75rem;
+    padding: 0.5rem;
+    background: var(--color-bg-elevated);
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .create-rule-spatial-details summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+  }
+
+  .create-rule-spatial-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+
+  .create-rule-spatial-fields label {
+    font-size: 0.75rem;
+  }
+
+  .create-rule-attrs-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .create-rule-json-hint {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .empty-state-with-action {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .empty-state-with-action .btn-sm {
+    margin-top: 0.75rem;
+  }
+
+  /* Upload Schemas modal */
+  .upload-schemas-modal {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.75rem;
+    box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+    min-width: 28rem;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .upload-schemas-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .upload-schemas-header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .upload-schemas-header-actions button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    min-height: 2rem;
+    padding: 0;
+  }
+
+  .upload-schemas-info-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    font-size: 1.1rem;
+  }
+
+  .upload-schemas-info-btn:hover {
+    color: var(--color-text-primary);
+  }
+
+  .upload-schemas-guide {
+    padding: 0 1rem 1rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+    font-size: 0.82rem;
+  }
+
+  .upload-schemas-guide h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.9rem;
+  }
+
+  .upload-schemas-guide ul {
+    margin: 0.25rem 0;
+    padding-left: 1.25rem;
+  }
+
+  .upload-schemas-guide code {
+    font-size: 0.8em;
+    background: var(--color-bg-elevated);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.25rem;
+  }
+
+  .upload-schemas-example {
+    margin: 0.5rem 0 0;
+    padding: 0.75rem;
+    background: var(--color-bg-elevated);
+    border-radius: 0.5rem;
+    font-size: 0.72rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+
+  .upload-schemas-drop-zone {
+    margin: 1rem;
+    padding: 1.5rem;
+    border: 2px dashed var(--color-border-default);
+    border-radius: 0.75rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .upload-schemas-drop-zone:hover,
+  .upload-schemas-drop-zone.drag-over {
+    border-color: var(--color-border-strong);
+    background: color-mix(in srgb, var(--color-action-primary) 8%, transparent);
+  }
+
+  .upload-schemas-drop-zone.has-files {
+    border-style: solid;
+  }
+
+  .upload-schemas-drop-label {
+    margin: 0 0 0.25rem;
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+
+  .upload-schemas-drop-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+
+  .upload-schemas-file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    text-align: left;
+  }
+
+  .upload-schemas-file-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .upload-schemas-file-name {
+    font-size: 0.85rem;
+    color: var(--color-text-primary);
+  }
+
+  .upload-schemas-results {
+    padding: 0 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .upload-schemas-result {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0;
+  }
+
+  .upload-schemas-result.ok {
+    color: var(--color-text-secondary);
+  }
+
+  .upload-schemas-result.fail {
     color: var(--color-danger);
+  }
+
+  .upload-schemas-result-ok {
+    color: var(--color-success);
+  }
+
+  .upload-schemas-result-err {
+    color: var(--color-danger);
+    font-size: 0.75rem;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
   }
 </style>

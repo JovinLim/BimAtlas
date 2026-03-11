@@ -328,40 +328,4 @@
 		margin-top: 1.25rem;
 	}
 
-	.btn {
-		padding: 0.5rem 1.1rem;
-		font-size: 0.82rem;
-		border: none;
-		border-radius: 0.4rem;
-		cursor: pointer;
-		font-weight: 500;
-		transition:
-			background 0.15s,
-			opacity 0.15s;
-	}
-
-	.btn:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-
-	.btn-secondary {
-		background: var(--color-bg-elevated);
-		color: var(--color-text-muted);
-	}
-
-	.btn-secondary:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-text-primary) 8%, var(--color-bg-elevated));
-		color: var(--color-text-secondary);
-	}
-
-	.btn-primary {
-		background: color-mix(in srgb, var(--color-brand-500) 15%, transparent);
-		color: var(--color-brand-500);
-	}
-
-	.btn-primary:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-brand-500) 25%, transparent);
-		color: var(--color-brand-400);
-	}
 </style>
