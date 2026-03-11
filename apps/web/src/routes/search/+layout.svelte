@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-  <title>BimAtlas Search</title>
+  <title>Search • BimAtlas</title>
 </svelte:head>
 
 {@render children()}

@@ -2340,7 +2340,12 @@ def fetch_validations_for_entities(
                     val = {}
             result[r["entity_global_id"]] = val if isinstance(val, dict) else {}
         return result
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "fetch_validations_for_entities failed: %s (branch=%s rev=%s n=%d)",
+            e, branch_id, revision_seq, len(global_ids),
+        )
         return {}
 
 

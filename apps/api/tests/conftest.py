@@ -300,6 +300,7 @@ WITH validation_rows AS (
     COALESCE((e.attributes->>'rule_version')::int, 1) AS rule_version,
     vr.name AS rule_name,
     vr.severity::text AS severity,
+    e.attributes->>'SchemaName' AS schema_name,
     jsonb_array_elements_text(COALESCE(e.attributes->'results'->'failed_global_ids', '[]'::jsonb)) AS entity_global_id,
     false AS passed,
     CASE WHEN COALESCE((e.attributes->>'rule_version')::int, 1) = vr.version THEN 'fresh' ELSE 'stale' END AS status
@@ -314,6 +315,7 @@ WITH validation_rows AS (
     COALESCE((e.attributes->>'rule_version')::int, 1) AS rule_version,
     vr.name AS rule_name,
     vr.severity::text AS severity,
+    e.attributes->>'SchemaName' AS schema_name,
     jsonb_array_elements_text(COALESCE(e.attributes->'results'->'passed_global_ids', '[]'::jsonb)) AS entity_global_id,
     true AS passed,
     CASE WHEN COALESCE((e.attributes->>'rule_version')::int, 1) = vr.version THEN 'fresh' ELSE 'stale' END AS status
@@ -322,7 +324,7 @@ WITH validation_rows AS (
   WHERE e.ifc_class = 'IfcValidationResults' AND e.obsoleted_in_revision_id IS NULL
 )
 SELECT branch_id, revision_seq, entity_global_id,
-  jsonb_object_agg(rule_id, jsonb_build_object('ruleName', rule_name, 'severity', severity, 'passed', passed, 'status', status)) AS validations
+  jsonb_object_agg(rule_id, jsonb_build_object('ruleName', rule_name, 'severity', severity, 'passed', passed, 'status', status, 'schemaName', schema_name)) AS validations
 FROM validation_rows
 GROUP BY branch_id, revision_seq, entity_global_id;
 

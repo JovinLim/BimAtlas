@@ -604,6 +604,152 @@ class TestGraphQLEndpoint:
         assert branch["projectId"] == str(test_project["project_id"])
         assert branch["id"] == str(test_branch)
 
+    def test_graphql_ifcproduct_includes_validations_after_run(
+        self,
+        client,
+        test_ifc_file,
+        api_branch,
+        ifc_schema_seeded,
+    ):
+        """Ensure ifcProduct returns attributes.Validations after validation run.
+
+        Verifies the full pipeline: upload IFC -> create schema+rule -> apply ->
+        run validation -> ifcProduct includes Validations from mv_entity_validations.
+        """
+        # 1. Upload IFC to get entities and revision
+        with open(test_ifc_file, "rb") as f:
+            upload_resp = client.post(
+                "/upload-ifc",
+                files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
+            )
+        assert upload_resp.status_code == status.HTTP_200_OK
+        upload_data = upload_resp.json()
+        branch_id = upload_data["branch_id"]
+        rev_seq = upload_data["revision_seq"]
+        assert rev_seq is not None
+
+        # 2. Get a globalId from ifcProducts
+        products_query = """
+        query ($branchId: String!, $revision: Int) {
+            ifcProducts(branchId: $branchId, revision: $revision) {
+                globalId ifcClass
+            }
+        }
+        """
+        prod_resp = client.post(
+            "/graphql",
+            json={
+                "query": products_query,
+                "variables": {"branchId": branch_id, "revision": rev_seq},
+            },
+        )
+        assert prod_resp.status_code == status.HTTP_200_OK
+        products = prod_resp.json()["data"]["ifcProducts"]
+        assert products, "Upload should create products"
+        # Prefer IfcWall for attribute_check rule
+        wall = next((p for p in products if p["ifcClass"] == "IfcWall"), products[0])
+        global_id = wall["globalId"]
+
+        # 3. Create uploaded schema, rule, apply to project
+        branch_row = db.fetch_branch(branch_id)
+        assert branch_row is not None
+        project_id = str(branch_row["project_id"])
+
+        schema_resp = client.post(
+            "/graphql",
+            json={"query": "query { uploadedSchemas { id versionName } }"},
+        )
+        assert schema_resp.status_code == status.HTTP_200_OK
+        schemas = schema_resp.json()["data"]["uploadedSchemas"]
+        assert schemas, "ifc_schema_seeded should provide schemas"
+        schema_id = schemas[0]["id"]
+
+        create_rule = """
+        mutation ($schemaId: String!, $name: String!, $targetIfcClass: String!,
+                  $effectiveRequiredAttributesJson: String) {
+            createUploadedSchemaRule(
+                schemaId: $schemaId name: $name targetIfcClass: $targetIfcClass
+                effectiveRequiredAttributesJson: $effectiveRequiredAttributesJson
+            ) { ruleId }
+        }
+        """
+        rule_resp = client.post(
+            "/graphql",
+            json={
+                "query": create_rule,
+                "variables": {
+                    "schemaId": schema_id,
+                    "name": "Test Rule",
+                    "targetIfcClass": "IfcWall",
+                    "effectiveRequiredAttributesJson": '[{"name":"Name","type":"IfcLabel","required":true}]',
+                },
+            },
+        )
+        assert rule_resp.status_code == status.HTTP_200_OK
+        if "errors" in rule_resp.json():
+            raise AssertionError(f"Rule creation failed: {rule_resp.json()['errors']}")
+
+        apply_resp = client.post(
+            "/graphql",
+            json={
+                "query": "mutation ($p: String!, $s: String!) { applySchemaToProject(projectId: $p, schemaId: $s) }",
+                "variables": {"p": project_id, "s": schema_id},
+            },
+        )
+        assert apply_resp.status_code == status.HTTP_200_OK
+
+        # 4. Run validation
+        run_mutation = """
+        mutation ($branchId: String!, $schemaId: String!, $revision: Int) {
+            runValidationByUploadedSchema(branchId: $branchId, schemaId: $schemaId, revision: $revision) {
+                schemaGlobalId revisionSeq results { ruleGlobalId passed }
+            }
+        }
+        """
+        run_resp = client.post(
+            "/graphql",
+            json={
+                "query": run_mutation,
+                "variables": {"branchId": branch_id, "schemaId": schema_id, "revision": rev_seq},
+            },
+        )
+        assert run_resp.status_code == status.HTTP_200_OK
+        run_data = run_resp.json()
+        if "errors" in run_data:
+            raise AssertionError(f"Validation run failed: {run_data['errors']}")
+        assert run_data["data"]["runValidationByUploadedSchema"]["revisionSeq"] == rev_seq
+
+        # 5. Query ifcProduct and assert attributes.Validations exists
+        product_query = """
+        query ($branchId: String!, $globalId: String!, $revision: Int) {
+            ifcProduct(branchId: $branchId, globalId: $globalId, revision: $revision) {
+                globalId attributes
+            }
+        }
+        """
+        prod_detail = client.post(
+            "/graphql",
+            json={
+                "query": product_query,
+                "variables": {"branchId": branch_id, "globalId": global_id, "revision": rev_seq},
+            },
+        )
+        assert prod_detail.status_code == status.HTTP_200_OK
+        detail_data = prod_detail.json()
+        if "errors" in detail_data:
+            raise AssertionError(f"ifcProduct query failed: {detail_data['errors']}")
+        product = detail_data["data"]["ifcProduct"]
+        assert product is not None, "ifcProduct should return the entity"
+        attrs = product.get("attributes") or {}
+        assert isinstance(attrs, dict)
+        assert "Validations" in attrs, (
+            "attributes.Validations should be injected from mv_entity_validations after validation run"
+        )
+        validations = attrs["Validations"]
+        assert isinstance(validations, dict)
+        assert len(validations) > 0, "Validations should contain at least one rule result"
+
     def test_graphql_no_create_revision_mutation(self, client):
         """Regression: ensure no mutation exists to create a revision manually.
 

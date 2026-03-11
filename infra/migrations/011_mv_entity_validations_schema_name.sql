@@ -1,6 +1,7 @@
--- Migration 010: Materialized view for entity-centric validation aggregation
--- Pivots IfcValidationResults rows into Entity.Attributes.Validations.** for frontend.
--- Joins validation_rule for version freshness; status='stale' when rule_version != active version.
+-- Migration 011: Add schemaName to mv_entity_validations output for attribute panel display.
+-- Drops and recreates the MV to include SchemaName from IfcValidationResults.
+
+DROP MATERIALIZED VIEW IF EXISTS mv_entity_validations;
 
 CREATE MATERIALIZED VIEW mv_entity_validations AS
 WITH validation_rows AS (

@@ -293,6 +293,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>Graph • BimAtlas</title>
+</svelte:head>
+
 <div class="graph-page">
   <header class="page-header">
     <div class="page-header-main">

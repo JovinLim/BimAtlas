@@ -180,10 +180,7 @@ import {
     ruleType: "attribute_check",
     TargetClass: "IfcWall",
     ConditionLogic: "OR",
-    Conditions: [
-      { path: "PropertySets.Pset_WallCommon.FireRating", operator: "greater_than", value: "2" },
-      { path: "PropertySets.Pset_WallCommon.FireRating", operator: "less_than", value: "5" },
-    ],
+    Conditions: [],
     SpatialContext: {
       traversal: "IfcRelContainedInSpatialStructure",
       scope_class: "IfcSpace",
@@ -381,6 +378,13 @@ import {
     activeAppliedSchema = schema;
     uploadedSchemaValidationResult = null;
     await loadUploadedSchemaRules(schema.id);
+  }
+
+  function editSchemaFromUploadedList(us: UploadedSchema) {
+    if (applyProjectId == null && us.projectIds.length > 0) {
+      applyProjectId = us.projectIds[0];
+    }
+    selectAppliedSchema(us);
   }
 
   async function loadUploadedSchemaRules(schemaId: string) {
@@ -1093,20 +1097,29 @@ import {
                 >
               {/if}
             </div>
-            {#if applyProjectId}
-              {#if us.projectIds.includes(applyProjectId)}
-                <button
-                  class="btn-sm uploaded-schema-action"
-                  onclick={() => unapplySchemaFromProject(us.id)}
-                  >Unapply</button
-                >
-              {:else}
-                <button
-                  class="btn-sm btn-primary uploaded-schema-action"
-                  onclick={() => applySchemaToProject(us.id)}>Apply</button
-                >
+            <div class="uploaded-schema-actions">
+              <button
+                class="btn-sm uploaded-schema-action"
+                onclick={() => editSchemaFromUploadedList(us)}
+                title="Open in editor"
+              >
+                Edit
+              </button>
+              {#if applyProjectId}
+                {#if us.projectIds.includes(applyProjectId)}
+                  <button
+                    class="btn-sm uploaded-schema-action"
+                    onclick={() => unapplySchemaFromProject(us.id)}
+                    >Unapply</button
+                  >
+                {:else}
+                  <button
+                    class="btn-sm btn-primary uploaded-schema-action"
+                    onclick={() => applySchemaToProject(us.id)}>Apply</button
+                  >
+                {/if}
               {/if}
-            {/if}
+            </div>
           </li>
         {/each}
       </ul>
@@ -2165,9 +2178,15 @@ import {
     align-self: flex-start;
   }
 
-  .uploaded-schema-action {
+  .uploaded-schema-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
     margin-top: auto;
-    width: 100%;
+  }
+
+  .uploaded-schema-action {
+    flex: 0 1 auto;
   }
 
   /* Main content: aside + main */

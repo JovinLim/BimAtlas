@@ -42,6 +42,7 @@
 
   let typeRelation = $state<ProductData["relations"][number] | null>(null);
   let attributeMeta = $state<Record<string, boolean | undefined>>({});
+  let validationsExpanded = $state(false);
 
   async function copyValue(text: string): Promise<void> {
     try {
@@ -469,30 +470,6 @@
           </ul>
         </div>
       {/if}
-      {#if product.attributes?.Validations && typeof product.attributes.Validations === "object"}
-        <div class="relations-section">
-          <span class="label">Validations</span>
-          <ul class="validation-list">
-            {#each Object.entries(product.attributes.Validations) as [ruleId, v]}
-              {@const rule = v as { ruleName?: string; severity?: string; passed?: boolean; status?: string }}
-              <li class="validation-item">
-                <span
-                  class="validation-badge"
-                  class:passed={rule.passed === true}
-                  class:failed={rule.passed === false}
-                >
-                  {rule.passed === true ? "Pass" : "Fail"}
-                </span>
-                <span class="validation-severity severity-{(rule.severity ?? "error").toLowerCase()}">{rule.severity ?? "Error"}</span>
-                <span class="validation-rule-name">{rule.ruleName ?? ruleId}</span>
-                {#if rule.status === "stale"}
-                  <span class="validation-stale">Needs Rerun</span>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        </div>
-      {/if}
       {#if product.attributes}
         <div class="relations-section">
           <span class="label">Attributes</span>
@@ -629,6 +606,43 @@
               </details>
             {/each}
           </div>
+        </div>
+      {/if}
+      {#if product}
+        <div class="relations-section validations-collapsible">
+          <button
+            type="button"
+            class="collapsible-toggle"
+            onclick={() => (validationsExpanded = !validationsExpanded)}
+            aria-expanded={validationsExpanded}
+          >
+            <span class="collapsible-chevron">{validationsExpanded ? "▾" : "▸"}</span>
+            <span class="label">Validations ({Object.keys(product.attributes?.Validations ?? {}).length})</span>
+          </button>
+          {#if validationsExpanded}
+          <ul class="validation-list">
+            {#each Object.entries(product.attributes?.Validations ?? {}) as [ruleId, v]}
+              {@const rule = v as { ruleName?: string; severity?: string; passed?: boolean; status?: string; schemaName?: string }}
+              <li class="validation-item">
+                <span
+                  class="validation-badge"
+                  class:passed={rule.passed === true}
+                  class:failed={rule.passed === false}
+                >
+                  {rule.passed === true ? "Pass" : "Fail"}
+                </span>
+                <span class="validation-severity severity-{(rule.severity ?? "error").toLowerCase()}">{rule.severity ?? "Error"}</span>
+                <span class="validation-rule-name">{rule.ruleName ?? ruleId}</span>
+                {#if rule.schemaName}
+                  <span class="validation-schema">({rule.schemaName})</span>
+                {/if}
+                {#if rule.status === "stale"}
+                  <span class="validation-stale">Needs Rerun</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          {/if}
         </div>
       {/if}
     {:else}
@@ -923,6 +937,29 @@
     color: var(--color-info);
   }
 
+  .validations-collapsible .collapsible-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0;
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .validations-collapsible .collapsible-toggle:hover {
+    color: var(--color-brand-500);
+  }
+
+  .validations-collapsible .collapsible-chevron {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+
   .validation-list {
     list-style: none;
     padding: 0.25rem 0 0;
@@ -980,6 +1017,10 @@
     flex: 1;
     min-width: 0;
     color: var(--color-text-primary);
+  }
+  .validation-schema {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
   }
 
   .validation-stale {

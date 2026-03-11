@@ -7,7 +7,7 @@
     children?: Snippet;
   } = $props();
 
-  let open = $state(true);
+  let open = $state(false);
   const MIN_WIDTH = 150;
   const MAX_WIDTH = 450;
   let sidebarWidth = $state(300);

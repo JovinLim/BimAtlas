@@ -243,8 +243,11 @@ def _row_to_product(row: dict, rev: int, branch_id: str) -> IfcProduct:
         if validations:
             attrs = dict(attrs)
             attrs["Validations"] = validations
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to inject Validations for %s: %s", row.get("ifc_global_id"), e,
+        )
 
     mesh: IfcMeshRepresentation | None = None
     representations: list[IfcShapeRepresentation] = []

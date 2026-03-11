@@ -138,6 +138,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>Attributes • BimAtlas</title>
+</svelte:head>
+
 <div class="attributes-page">
   <header class="page-header">
     <h2>Attribute Panel</h2>

@@ -196,3 +196,72 @@ class TestValidationOperators:
         # If IFC schema is loaded, IfcWall may have no concrete descendants; at least self.
         assert "IfcWall" in classes
         assert isinstance(classes, list)
+
+
+# ---------------------------------------------------------------------------
+# mv_entity_validations and fetch_validations_for_entities
+# ---------------------------------------------------------------------------
+
+
+class TestFetchValidationsForEntities:
+    """Test that fetch_validations_for_entities reads from mv_entity_validations."""
+
+    def test_fetch_validations_returns_data_from_mv(
+        self, db_pool, test_branch
+    ):
+        """When MV has rows, fetch_validations_for_entities returns them."""
+        import uuid
+
+        rev = db.create_validation_revision(test_branch, "test")
+        rev_id = rev["revision_id"]
+        rev_seq = rev["revision_seq"]
+
+        # Create ifc_schema and validation_rule (required for MV join)
+        with db.get_cursor(dict_cursor=True) as cur:
+            cur.execute(
+                "INSERT INTO ifc_schema (schema_id, version_name) VALUES (%s, %s) RETURNING schema_id",
+                (str(uuid.uuid4()), "TestSchema_MV"),
+            )
+            schema_row = cur.fetchone()
+            schema_id = str(schema_row["schema_id"])
+            rule_id = str(uuid.uuid4())
+            cur.execute(
+                """
+                INSERT INTO validation_rule (
+                    rule_id, version, name, schema_id, project_id, target_ifc_class,
+                    rule_schema, severity, is_active
+                ) VALUES (%s, 1, 'Test Rule', %s, NULL, 'IfcWall', %s, 'Error', TRUE)
+                """,
+                (rule_id, schema_id, json.dumps({"ruleType": "attribute_check", "Conditions": []})),
+            )
+
+        # Create IfcValidationResults entity (source for MV)
+        entity_global_id = "3D2MqX8P1F9xK$nZ0R5wQ"
+        result_attrs = {
+            "SchemaGlobalId": schema_id,
+            "SchemaName": "TestSchema_MV",
+            "TargetRevisionSeq": rev_seq,
+            "rule_id": rule_id,
+            "rule_version": 1,
+            "results": {
+                "failed_global_ids": [],
+                "passed_global_ids": [entity_global_id],
+            },
+        }
+        db.create_validation_entity(
+            test_branch, rev_id, "IfcValidationResults", result_attrs,
+        )
+
+        db.refresh_mv_entity_validations()
+
+        val_map = db.fetch_validations_for_entities(
+            test_branch, rev_seq, [entity_global_id],
+        )
+        assert entity_global_id in val_map
+        validations = val_map[entity_global_id]
+        assert isinstance(validations, dict)
+        assert rule_id in validations
+        rule_result = validations[rule_id]
+        assert rule_result.get("passed") is True
+        assert rule_result.get("ruleName") == "Test Rule"
+        assert rule_result.get("schemaName") == "TestSchema_MV"

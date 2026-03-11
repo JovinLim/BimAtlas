@@ -2,8 +2,9 @@
   import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
   import { loadSettings } from "$lib/state/persistence";
-  import { client, VALIDATION_RESULTS_QUERY } from "$lib/api/client";
+  import { client, VALIDATION_RESULTS_QUERY, PROJECTS_QUERY } from "$lib/api/client";
   import { SCHEMA_CHANNEL, type SchemaMessage } from "$lib/schema/protocol";
+  import { ATTRIBUTES_CHANNEL, type AttributesMessage } from "$lib/attributes/protocol";
 
   type Violation = {
     globalId: string;
@@ -33,6 +34,8 @@
 
   let branchId = $state<string | null>(null);
   let projectId = $state<string | null>(null);
+  let projectName = $state<string | null>(null);
+  let branchName = $state<string | null>(null);
   let revision = $state<number | null>(null);
 
   let loading = $state(false);
@@ -40,10 +43,20 @@
   let runResults = $state<RunResult[]>([]);
   /** Expanded rule rows: "runIndex:ruleGlobalId" */
   let expandedRules = $state<Set<string>>(new Set());
+  /** Expanded run cards (show rules table): run index */
+  let expandedRunCards = $state<Set<number>>(new Set());
 
   let channel: BroadcastChannel | null = null;
+  let attributesChannel: BroadcastChannel | null = null;
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
+
+  function selectInViewer(globalId: string) {
+    attributesChannel?.postMessage({
+      type: "selection-changed",
+      globalId,
+    } satisfies AttributesMessage);
+  }
 
   const hasAnyResults = $derived(runResults.length > 0);
 
@@ -87,11 +100,34 @@
       revision = settings.activeRevision;
   }
 
+  async function resolveNamesFromProjects() {
+    if (!projectId || !branchId) return;
+    if (projectName && branchName) return;
+    try {
+      const result = await client.query(PROJECTS_QUERY, {}).toPromise();
+      const project = result.data?.projects?.find(
+        (p: { id: string; name: string; branches: { id: string; name: string }[] }) =>
+          p.id === projectId,
+      );
+      if (project) {
+        projectName = project.name ?? projectName;
+        const branch = project.branches?.find(
+          (b: { id: string; name: string }) => b.id === branchId,
+        );
+        if (branch) branchName = branch.name ?? branchName;
+      }
+    } catch {
+      // Non-blocking fallback; keep IDs if name lookup fails.
+    }
+  }
+
   function handleIncomingMessage(e: MessageEvent<SchemaMessage>) {
     const msg = e.data;
     if (msg.type === "context") {
       branchId = msg.branchId;
       projectId = msg.projectId;
+      projectName = msg.projectName ?? null;
+      branchName = msg.branchName ?? null;
       revision = msg.revision;
 
       // Keep URL in sync so refresh preserves the latest context.
@@ -188,12 +224,24 @@
     return expandedRules.has(ruleRowKey(runIndex, rule));
   }
 
+  function toggleRunCardExpanded(runIndex: number) {
+    const next = new Set(expandedRunCards);
+    if (next.has(runIndex)) next.delete(runIndex);
+    else next.add(runIndex);
+    expandedRunCards = next;
+  }
+
+  function isRunCardExpanded(runIndex: number): boolean {
+    return expandedRunCards.has(runIndex);
+  }
+
   onMount(() => {
     applyContextFromUrl();
     applyContextFallbackFromSettings();
 
     channel = new BroadcastChannel(SCHEMA_CHANNEL);
     channel.onmessage = handleIncomingMessage;
+    attributesChannel = new BroadcastChannel(ATTRIBUTES_CHANNEL);
 
     // Initial request for context from the main window.
     requestContext();
@@ -225,11 +273,13 @@
     // If we already had context from URL/settings, load immediately.
     if (branchId) {
       void loadResults();
+      void resolveNamesFromProjects();
     }
   });
 
   onDestroy(() => {
     channel?.close();
+    attributesChannel?.close();
     if (contextRetryTimeout != null) clearTimeout(contextRetryTimeout);
     if (contextRetryInterval != null) clearInterval(contextRetryInterval);
   });
@@ -250,7 +300,7 @@
     {#if branchId}
       <div class="context-pills">
         <span class="context-pill mono">
-          Branch: {branchId}
+          {projectName ?? projectId ?? "—"}, {branchName ?? branchId ?? "—"}
         </span>
         <span class="context-pill">
           {formatRevisionLabel()}
@@ -374,7 +424,18 @@
                 </div>
               {/if}
 
-              <div class="rules-table-wrap">
+              <div class="rules-collapsible">
+                <button
+                  type="button"
+                  class="rules-toggle"
+                  onclick={() => toggleRunCardExpanded(i)}
+                  aria-expanded={isRunCardExpanded(i)}
+                >
+                  <span class="rules-toggle-chevron">{isRunCardExpanded(i) ? "▾" : "▸"}</span>
+                  <span>{isRunCardExpanded(i) ? "Collapse Results" : "Expand Results"}</span>
+                </button>
+                {#if isRunCardExpanded(i)}
+                <div class="rules-table-wrap">
                 <table class="rules-table">
                   <thead>
                     <tr>
@@ -426,11 +487,18 @@
                               <ul class="violations-list">
                                 {#each rule.violations ?? [] as v}
                                   <li class="violation-item">
-                                    <code class="violation-id mono">{v.globalId}</code>
-                                    <span class="violation-class">{v.ifcClass}</span>
-                                    {#if v.message}
-                                      <span class="violation-msg">— {v.message}</span>
-                                    {/if}
+                                    <button
+                                      type="button"
+                                      class="violation-select-btn"
+                                      onclick={() => selectInViewer(v.globalId)}
+                                      title="Select in viewer"
+                                    >
+                                      <code class="violation-id mono">{v.globalId}</code>
+                                      <span class="violation-class">{v.ifcClass}</span>
+                                      {#if v.message}
+                                        <span class="violation-msg">— {v.message}</span>
+                                      {/if}
+                                    </button>
                                   </li>
                                 {/each}
                               </ul>
@@ -441,6 +509,8 @@
                     {/each}
                   </tbody>
                 </table>
+              </div>
+              {/if}
               </div>
             </article>
           {/each}
@@ -699,8 +769,35 @@
     gap: 0.5rem;
   }
 
-  .rules-table-wrap {
+  .rules-collapsible {
     margin-top: 0.5rem;
+  }
+
+  .rules-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .rules-toggle:hover {
+    color: var(--color-brand-500);
+  }
+
+  .rules-toggle-chevron {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+
+  .rules-table-wrap {
+    margin-top: 0.35rem;
     overflow-x: auto;
     border-radius: 0.35rem;
     border: 1px solid var(--color-border-subtle);
@@ -824,11 +921,35 @@
 
   .violation-item {
     font-size: 0.78rem;
-    padding: 0.2rem 0;
+    padding: 0;
+  }
+
+  .violation-select-btn {
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
     flex-wrap: wrap;
+    width: 100%;
+    padding: 0.2rem 0;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+  }
+
+  .violation-select-btn:hover {
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    border-radius: 0.2rem;
+  }
+
+  .violation-select-btn .violation-id {
+    color: var(--color-brand-500);
+  }
+
+  .violation-select-btn:hover .violation-id {
+    text-decoration: underline;
   }
 
   .violation-id {

@@ -100,7 +100,7 @@
 </script>
 
 <svelte:head>
-	<title>BimAtlas — Agent</title>
+	<title>Agent • BimAtlas</title>
 </svelte:head>
 
 <main class="agent-page">
