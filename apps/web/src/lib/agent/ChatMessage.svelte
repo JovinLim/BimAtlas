@@ -106,7 +106,7 @@
 	.error .msg-bubble {
 		background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 		border: 1px solid color-mix(in srgb, var(--color-danger) 20%, transparent);
-		color: var(--color-danger-soft, #ee8888);
+		color: var(--color-danger);
 		border-bottom-left-radius: 0.15rem;
 	}
 

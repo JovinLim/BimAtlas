@@ -387,9 +387,17 @@ def _to_iso(dt) -> str:
 
 def _row_to_filter_set(row: dict) -> FilterSet:
     """Convert a db row dict into a :class:`FilterSet` GraphQL type."""
+    from ..schema.filter_tree import flatten_tree_to_filters, is_legacy_filters, canonicalize_filters
+
     filters_data = row.get("filters") or []
     if isinstance(filters_data, str):
         filters_data = json.loads(filters_data)
+    if is_legacy_filters(filters_data):
+        flat = filters_data
+        tree = canonicalize_filters(filters_data, row.get("logic"))
+    else:
+        tree = filters_data if isinstance(filters_data, dict) else {"kind": "group", "op": "ALL", "children": []}
+        flat = flatten_tree_to_filters(tree)
     return FilterSet(
         id=row["filter_set_id"],
         branch_id=row["branch_id"],
@@ -404,9 +412,15 @@ def _row_to_filter_set(row: dict) -> FilterSet:
                 relation=f.get("relation"),
                 operator=f.get("operator") or f.get("op"),
                 value_type=f.get("valueType") or f.get("value_type"),
+                relation_target_class=f.get("relationTargetClass") or f.get("relation_target_class"),
+                relation_target_attribute=f.get("relationTargetAttribute") or f.get("relation_target_attribute"),
+                relation_target_operator=f.get("relationTargetOperator") or f.get("relation_target_operator"),
+                relation_target_value=f.get("relationTargetValue") or f.get("relation_target_value"),
+                relation_target_value_type=f.get("relationTargetValueType") or f.get("relation_target_value_type"),
             )
-            for f in filters_data
+            for f in flat
         ],
+        filters_tree=tree,
         color=row.get("color") or "#4A90D9",
         created_at=_to_iso(row["created_at"]),
         updated_at=_to_iso(row["updated_at"]),
@@ -1020,22 +1034,35 @@ class Mutation:
         branch_id: str,
         name: str,
         logic: str,
-        filters: list[FilterInput],
+        filters: Optional[list[FilterInput]] = None,
+        filters_tree: Optional[strawberry.scalars.JSON] = None,
         color: Optional[str] = None,
     ) -> FilterSet:
-        """Create a new filter set on a branch."""
-        filters_json = [
-            {
-                "mode": f.mode,
-                "ifcClass": f.ifc_class,
-                "attribute": f.attribute,
-                "value": f.value,
-                "relation": f.relation,
-                "operator": f.operator,
-                "valueType": f.value_type,
-            }
-            for f in filters
-        ]
+        """Create a new filter set on a branch.
+
+        Use filters_tree (canonical tree) or filters (legacy flat list).
+        """
+        if filters_tree is not None:
+            tree = filters_tree if isinstance(filters_tree, dict) else {}
+            filters_json = tree
+        else:
+            filters_json = [
+                {
+                    "mode": f.mode,
+                    "ifcClass": f.ifc_class,
+                    "attribute": f.attribute,
+                    "value": f.value,
+                    "relation": f.relation,
+                    "operator": f.operator,
+                    "valueType": f.value_type,
+                    "relationTargetClass": f.relation_target_class,
+                    "relationTargetAttribute": f.relation_target_attribute,
+                    "relationTargetOperator": f.relation_target_operator,
+                    "relationTargetValue": f.relation_target_value,
+                    "relationTargetValueType": f.relation_target_value_type,
+                }
+                for f in (filters or [])
+            ]
         row = db_create_filter_set(branch_id, name, logic, filters_json, color=color)
         return _row_to_filter_set(row)
 
@@ -1046,11 +1073,18 @@ class Mutation:
         name: Optional[str] = None,
         logic: Optional[str] = None,
         filters: Optional[list[FilterInput]] = None,
+        filters_tree: Optional[strawberry.scalars.JSON] = None,
         color: Optional[str] = None,
     ) -> Optional[FilterSet]:
-        """Update an existing filter set."""
-        filters_json = (
-            [
+        """Update an existing filter set.
+
+        Use filters_tree (canonical tree) or filters (legacy flat list).
+        """
+        filters_json: list[dict] | dict | None = None
+        if filters_tree is not None:
+            filters_json = filters_tree if isinstance(filters_tree, dict) else {}
+        elif filters is not None:
+            filters_json = [
                 {
                     "mode": f.mode,
                     "ifcClass": f.ifc_class,
@@ -1059,12 +1093,14 @@ class Mutation:
                     "relation": f.relation,
                     "operator": f.operator,
                     "valueType": f.value_type,
+                    "relationTargetClass": f.relation_target_class,
+                    "relationTargetAttribute": f.relation_target_attribute,
+                    "relationTargetOperator": f.relation_target_operator,
+                    "relationTargetValue": f.relation_target_value,
+                    "relationTargetValueType": f.relation_target_value_type,
                 }
                 for f in filters
             ]
-            if filters is not None
-            else None
-        )
         row = db_update_filter_set(
             id, name=name, logic=logic, filters_json=filters_json, color=color,
         )

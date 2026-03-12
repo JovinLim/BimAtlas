@@ -213,6 +213,12 @@ class FilterSetFilter:
     relation: Optional[str] = None
     operator: Optional[str] = None  # e.g. is, contains, inherits_from, gt
     value_type: Optional[str] = None  # "string" | "numeric" for attribute mode
+    # Relation mode: filter the related entity
+    relation_target_class: Optional[str] = None
+    relation_target_attribute: Optional[str] = None
+    relation_target_operator: Optional[str] = None
+    relation_target_value: Optional[str] = None
+    relation_target_value_type: Optional[str] = None
 
 
 @strawberry.type
@@ -222,8 +228,9 @@ class FilterSet:
     id: str
     branch_id: str
     name: str
-    logic: str  # "AND" | "OR"
-    filters: list[FilterSetFilter]
+    logic: str  # "AND" | "OR" (deprecated: use filters_tree.op)
+    filters: list[FilterSetFilter]  # Flattened for backward compat
+    filters_tree: Optional[JSON] = None  # Canonical nested Match ALL/ANY tree
     color: str  # hex color, e.g. "#4A90D9"
     created_at: str  # ISO 8601
     updated_at: str  # ISO 8601
@@ -257,6 +264,12 @@ class FilterInput:
     relation: Optional[str] = None
     operator: Optional[str] = None  # e.g. is, contains, inherits_from, gt
     value_type: Optional[str] = None  # "string" | "numeric" for attribute mode
+    # Relation mode: filter the related entity (e.g. class IFCBuildingStorey, Name="Ground Floor")
+    relation_target_class: Optional[str] = None
+    relation_target_attribute: Optional[str] = None
+    relation_target_operator: Optional[str] = None
+    relation_target_value: Optional[str] = None
+    relation_target_value_type: Optional[str] = None
 
 
 # -- Sheet template types (FEAT-003 table page bottom-sheet persistence) --

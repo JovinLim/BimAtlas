@@ -37,6 +37,13 @@ PRODUCTS_BY_RELATION = (
     "RETURN DISTINCT n.ifc_global_id AS gid"
 )
 
+# Products that have relation to any of the target GIDs (returns the "other" endpoint).
+PRODUCTS_RELATED_TO_TARGETS = (
+    "MATCH (n)-[r:{rel_type}]-(m) "
+    "WHERE {r_filter} AND {n_filter} AND {m_filter} AND m.ifc_global_id IN {target_gids} "
+    "RETURN DISTINCT n.ifc_global_id AS gid"
+)
+
 # ---------------------------------------------------------------------------
 # Spatial decomposition tree
 # ---------------------------------------------------------------------------

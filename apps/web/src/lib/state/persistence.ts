@@ -2,7 +2,14 @@
  * localStorage persistence for app settings and search filters.
  */
 
-import type { SearchFilter } from '$lib/search/protocol';
+import type { FilterGroup, SearchFilter } from '$lib/search/protocol';
+
+export interface FilterSetEditorDraft {
+	root: FilterGroup;
+	name: string;
+	logic: 'AND' | 'OR';
+	color: string;
+}
 
 export interface AppSettings {
 	activeProjectId: string | null;
@@ -99,6 +106,64 @@ export function saveSearchFilters(filters: SearchFilter[]): void {
 	try {
 		localStorage.setItem(SEARCH_FILTERS_KEY, JSON.stringify(filters));
 	} catch (err) {
-		console.warn('Failed to save search filters to localStorage:', err);
+		console.warn('Failed to save search filters from localStorage:', err);
+	}
+}
+
+// ---- Filter set editor draft ----
+
+const FILTER_SET_EDITOR_DRAFT_KEY = 'bimatlas-filter-set-editor-draft';
+
+function getEditorDraftKey(branchId: string | null): string {
+	return `${FILTER_SET_EDITOR_DRAFT_KEY}-${branchId ?? 'no-branch'}`;
+}
+
+/**
+ * Load filter set editor draft from localStorage.
+ * Returns null if none saved or on parse error.
+ */
+export function loadFilterSetEditorDraft(branchId: string | null): FilterSetEditorDraft | null {
+	if (typeof window === 'undefined') return null;
+	try {
+		const stored = localStorage.getItem(getEditorDraftKey(branchId));
+		if (!stored) return null;
+		const parsed = JSON.parse(stored) as unknown;
+		if (typeof parsed !== 'object' || parsed === null) return null;
+		const p = parsed as Record<string, unknown>;
+		const root = p.root;
+		if (typeof root !== 'object' || root === null || (root as Record<string, unknown>).kind !== 'group') return null;
+		return {
+			root: root as FilterGroup,
+			name: typeof p.name === 'string' ? p.name : '',
+			logic: p.logic === 'OR' ? 'OR' : 'AND',
+			color: typeof p.color === 'string' ? p.color : '#334155',
+		};
+	} catch (err) {
+		console.warn('Failed to load filter set editor draft from localStorage:', err);
+		return null;
+	}
+}
+
+/**
+ * Save filter set editor draft to localStorage.
+ */
+export function saveFilterSetEditorDraft(branchId: string | null, draft: FilterSetEditorDraft): void {
+	if (typeof window === 'undefined') return;
+	try {
+		localStorage.setItem(getEditorDraftKey(branchId), JSON.stringify(draft));
+	} catch (err) {
+		console.warn('Failed to save filter set editor draft to localStorage:', err);
+	}
+}
+
+/**
+ * Clear filter set editor draft from localStorage.
+ */
+export function clearFilterSetEditorDraft(branchId: string | null): void {
+	if (typeof window === 'undefined') return;
+	try {
+		localStorage.removeItem(getEditorDraftKey(branchId));
+	} catch (err) {
+		console.warn('Failed to clear filter set editor draft from localStorage:', err);
 	}
 }

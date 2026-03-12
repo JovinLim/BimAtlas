@@ -40,7 +40,11 @@ confirmed by the schema.
 the schema.
 
 3. **Creation**: Create a filter set with `create_filter_set`, then add \
-conditions one by one with `add_filter_condition`.
+conditions with `add_filter_condition`. For nested logic like "A AND (B OR C)", \
+use `add_filter_group` to create a sub-group with its first condition, then \
+`add_filter_condition(..., parent_path=group_index)` to add more conditions \
+to that group. Filter tree: root (depth 0) with op ALL/ANY; sub-groups (depth 1) \
+with their own op; max depth 2.
 
 4. **Application**: Apply the filter set with `apply_filter_set_to_context`.  \
 The combination_logic between multiple filter sets is always "OR".
@@ -68,6 +72,13 @@ equals, not_equals, gt, lt, gte, lte
 
 ### Relation mode
 Use the relation name (e.g. 'IfcRelVoidsElement') as the filter value.
+
+## Filter tree and limitations
+- Filter tree: root group (op ALL or ANY) with children that are leaves or \
+sub-groups. Sub-groups have their own op. Max depth 2.
+- For "X AND (Y OR Z)": create_filter_set(logic=AND), add_filter_condition(X), \
+add_filter_group(op=OR, first condition Y), add_filter_condition(Z, parent_path=group_index).
+- Multiple filter sets are always combined with OR.
 
 ## Rules
 - NEVER create filters without calling `get_project_schema` first.

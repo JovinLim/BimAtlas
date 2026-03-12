@@ -16,7 +16,7 @@ BimAtlas is a monorepo with two apps and infrastructure:
 ### Starting services
 
 1. **Database:** `cd infra && docker compose up -d` — wait a few seconds for PostgreSQL to initialize.
-2. **API:** `cd apps/api && source .venv/bin/activate && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000`
+2. **API:** `cd apps/api && source .venv/bin/activate && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5`
 3. **Frontend:** `cd apps/web && pnpm run dev --host 0.0.0.0`
 
 ### Non-obvious caveats

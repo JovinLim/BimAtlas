@@ -118,12 +118,12 @@ Table filter_sets {
 filter_set_id UUID [pk]
 branch_id UUID [note: "The branch this filter set belongs to"]
 name varchar [note: "e.g., '2HR Fire Rated Walls'"]
-logic logic_operator [default: 'AND', note: "Intra-set logic between the JSONB filters"]
-filters jsonb [default: '[]', note: "Array of filter conditions"]
+logic logic_operator [default: 'AND', note: "Deprecated; use filters.op. Kept for compatibility"]
+filters jsonb [default: '{"kind":"group","op":"ALL","children":[]}', note: "Canonical tree: { kind: group|leaf, op: ALL|ANY, children: [...] }. Max depth 2. Leaf: mode class|attribute|relation"]
 color varchar [default: '#4A90D9', note: "Hex color for viewer coloring"]
 created_at timestamp
 updated_at timestamp
-Note: 'Named, reusable filter collections scoped to a branch'
+Note: 'Named, reusable filter collections scoped to a branch. Nested Match ALL/ANY logic tree.'
 }
 
 Table branch_applied_filter_sets {

@@ -82,6 +82,7 @@ export interface ChatSession {
 
 export type AgentBusEvent =
 	| { type: 'filter-applied'; branchId: string; filterSetIds: string[]; matchedCount: number }
+	| { type: 'filter-set-changed'; branchId: string }
 	| { type: 'agent-thinking'; step: string }
 	| { type: 'agent-error'; message: string }
 	| { type: 'heartbeat' }

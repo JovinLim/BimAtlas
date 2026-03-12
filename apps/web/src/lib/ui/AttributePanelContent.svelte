@@ -503,13 +503,31 @@
                   </button>
                 {:else}
                   <div class="attr-value-row">
-                    <span class="pset-value">{String(value)}</span>
+                    {#if key === "ContainedIn" && product?.containedIn}
+                      <button
+                        type="button"
+                        class="link-btn"
+                        onclick={() =>
+                          handleSelectGlobalId(product!.containedIn!.globalId)
+                        }
+                      >
+                        {product.containedIn.name ?? product.containedIn.ifcClass}
+                      </button>
+                    {:else}
+                      <span class="pset-value">{String(value)}</span>
+                    {/if}
                     <button
                       type="button"
                       class="copy-btn"
                       title="Copy value"
                       aria-label="Copy value"
-                      onclick={() => copyValue(String(value))}
+                      onclick={() =>
+                        copyValue(
+                          key === "ContainedIn" && product?.containedIn
+                            ? product.containedIn!.name ?? product.containedIn!.ifcClass
+                            : String(value),
+                        )
+                      }
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" />

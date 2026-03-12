@@ -419,6 +419,23 @@ class TestFullIngestion:
         finally:
             put_conn(conn)
 
+    def test_ingest_ifc_reports_progress(self, db_pool, age_graph, test_ifc_file, test_branch):
+        """Progress callback should receive ordered ingestion milestones."""
+        events: list[dict] = []
+
+        result = ingest_ifc(
+            str(test_ifc_file),
+            branch_id=test_branch,
+            label="Progress import",
+            progress_callback=events.append,
+        )
+
+        assert result.total_products > 0
+        assert events, "expected progress events during ingestion"
+        assert events[0]["progress"] == 5
+        assert events[-1]["progress"] == 100
+        assert events[-1]["stage"] == "complete"
+
 
 class TestEdgeCases:
     """Test edge cases and error conditions."""

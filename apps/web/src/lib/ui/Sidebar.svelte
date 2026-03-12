@@ -124,18 +124,18 @@
 
   .resize-handle:hover,
   .sidebar-container.resizing .resize-handle {
-    background: color-mix(in srgb, white 15%, var(--color-brand-500));
+    background: color-mix(in srgb, var(--color-bg-surface) 15%, var(--color-brand-500));
   }
 
   .sidebar {
     inset: 0;
     height: 100%;
     background: var(--color-brand-500);
-    border-right: 1px solid color-mix(in srgb, white 12%, var(--color-brand-500));
+    border-right: 1px solid color-mix(in srgb, var(--color-bg-surface) 12%, var(--color-brand-500));
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    color: rgba(255, 255, 255, 0.9);
+    color: color-mix(in srgb, var(--color-bg-surface) 90%, transparent);
   }
 
   .toggle-btn {
@@ -148,13 +148,13 @@
     align-items: center;
     justify-content: center;
     background: var(--color-brand-500);
-    border: 1px solid color-mix(in srgb, white 20%, var(--color-brand-500));
+    border: 1px solid color-mix(in srgb, var(--color-bg-surface) 20%, var(--color-brand-500));
     border-radius: 0 0.25rem 0.25rem 0;
-    color: rgba(255, 255, 255, 0.8);
+    color: color-mix(in srgb, var(--color-bg-surface) 80%, transparent);
     cursor: pointer;
     padding: 0;
     z-index: 2;
-    box-shadow: 2px 0 4px rgba(0, 0, 0, 0.2);
+    box-shadow: 2px 0 4px color-mix(in srgb, var(--color-text-primary) 20%, transparent);
     transition:
       background 0.15s,
       color 0.15s;
@@ -162,7 +162,7 @@
 
   .toggle-btn:hover {
     background: var(--color-brand-400);
-    color: white;
+    color: var(--color-bg-surface);
   }
 
   .sidebar-content {
@@ -174,84 +174,84 @@
     overflow-x: hidden;
   }
 
-  /* Sidebar content overrides for dark background */
+  /* Sidebar content overrides for dark brand background */
   .sidebar :global(.sidebar-section-heading) {
-    color: rgba(255, 255, 255, 0.7);
+    color: color-mix(in srgb, var(--color-bg-surface) 70%, transparent);
   }
 
   .sidebar :global(.toolbar-btn) {
-    background: color-mix(in srgb, white 12%, var(--color-brand-500));
-    border-color: color-mix(in srgb, white 20%, var(--color-brand-500));
-    color: rgba(255, 255, 255, 0.95);
+    background: color-mix(in srgb, var(--color-bg-surface) 12%, var(--color-brand-500));
+    border-color: color-mix(in srgb, var(--color-bg-surface) 20%, var(--color-brand-500));
+    color: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
   }
 
   .sidebar :global(.toolbar-btn:hover) {
-    background: color-mix(in srgb, white 20%, var(--color-brand-500));
-    color: white;
+    background: color-mix(in srgb, var(--color-bg-surface) 20%, var(--color-brand-500));
+    color: var(--color-bg-surface);
   }
 
   .sidebar :global(.revision-filter-group-header),
   .sidebar :global(.revision-filter-checkbox),
   .sidebar :global(.filter-row-label) {
-    color: rgba(255, 255, 255, 0.8);
+    color: color-mix(in srgb, var(--color-bg-surface) 80%, transparent);
   }
 
   .sidebar :global(.revision-filter-group-header:hover) {
-    color: rgba(255, 255, 255, 0.95);
+    color: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
   }
 
   .sidebar :global(.revision-filter-input),
   .sidebar :global(.revision-date-input) {
-    background: color-mix(in srgb, white 8%, var(--color-brand-500));
-    border-color: color-mix(in srgb, white 18%, var(--color-brand-500));
-    color: rgba(255, 255, 255, 0.95);
+    background: color-mix(in srgb, var(--color-bg-surface) 8%, var(--color-brand-500));
+    border-color: color-mix(in srgb, var(--color-bg-surface) 18%, var(--color-brand-500));
+    color: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
   }
 
   .sidebar :global(.revision-filter-input::placeholder),
   .sidebar :global(.revision-date-input::placeholder) {
-    color: rgba(255, 255, 255, 0.5);
+    color: color-mix(in srgb, var(--color-bg-surface) 50%, transparent);
   }
 
   .sidebar :global(.revision-filter-input:focus),
   .sidebar :global(.revision-date-input:focus) {
-    border-color: color-mix(in srgb, white 35%, var(--color-brand-500));
+    border-color: color-mix(in srgb, var(--color-bg-surface) 35%, var(--color-brand-500));
   }
 
   .sidebar :global(.revision-loading),
   .sidebar :global(.revision-empty),
   .sidebar :global(.revision-results-heading) {
-    color: rgba(255, 255, 255, 0.6);
+    color: color-mix(in srgb, var(--color-bg-surface) 60%, transparent);
   }
 
   .sidebar :global(.revision-item) {
-    background: color-mix(in srgb, white 8%, var(--color-brand-500));
-    color: rgba(255, 255, 255, 0.9);
+    background: color-mix(in srgb, var(--color-bg-surface) 8%, var(--color-brand-500));
+    color: color-mix(in srgb, var(--color-bg-surface) 90%, transparent);
   }
 
   .sidebar :global(.revision-item:hover) {
-    background: color-mix(in srgb, white 15%, var(--color-brand-500));
+    background: color-mix(in srgb, var(--color-bg-surface) 15%, var(--color-brand-500));
   }
 
   .sidebar :global(.revision-item--current) {
     background: color-mix(in srgb, var(--color-action-primary) 25%, var(--color-brand-500));
     border-color: color-mix(in srgb, var(--color-action-primary) 50%, var(--color-brand-500));
-    color: white;
+    color: var(--color-bg-surface);
   }
 
   .sidebar :global(.revision-current-label),
   .sidebar :global(.revision-item--current .revision-seq) {
-    color: rgba(255, 255, 255, 0.9);
+    color: color-mix(in srgb, var(--color-bg-surface) 90%, transparent);
   }
 
   .sidebar :global(.revision-seq),
   .sidebar :global(.revision-filename),
   .sidebar :global(.revision-label),
   .sidebar :global(.revision-author) {
-    color: rgba(255, 255, 255, 0.85);
+    color: color-mix(in srgb, var(--color-bg-surface) 85%, transparent);
   }
 
   .sidebar :global(.revision-current-not-in-filter) {
-    color: rgba(255, 255, 255, 0.6);
+    color: color-mix(in srgb, var(--color-bg-surface) 60%, transparent);
   }
 
   .sidebar :global(.revision-filter-checkbox input) {
@@ -259,24 +259,24 @@
   }
 
   .sidebar :global(.depth-widget .label) {
-    color: rgba(255, 255, 255, 0.7);
+    color: color-mix(in srgb, var(--color-bg-surface) 70%, transparent);
   }
 
   .sidebar :global(.depth-widget .stepper) {
-    background: color-mix(in srgb, white 10%, var(--color-brand-500));
-    border-color: color-mix(in srgb, white 20%, var(--color-brand-500));
+    background: color-mix(in srgb, var(--color-bg-surface) 10%, var(--color-brand-500));
+    border-color: color-mix(in srgb, var(--color-bg-surface) 20%, var(--color-brand-500));
   }
 
   .sidebar :global(.depth-widget .step-btn) {
-    color: rgba(255, 255, 255, 0.9);
+    color: color-mix(in srgb, var(--color-bg-surface) 90%, transparent);
   }
 
   .sidebar :global(.depth-widget .step-btn:hover:not(:disabled)) {
-    background: color-mix(in srgb, white 18%, var(--color-brand-500));
-    color: white;
+    background: color-mix(in srgb, var(--color-bg-surface) 18%, var(--color-brand-500));
+    color: var(--color-bg-surface);
   }
 
   .sidebar :global(.depth-widget .value-input) {
-    color: rgba(255, 255, 255, 0.95);
+    color: color-mix(in srgb, var(--color-bg-surface) 95%, transparent);
   }
 </style>
