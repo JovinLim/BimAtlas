@@ -48,6 +48,7 @@ OR
 Table ifc_schema {
 schema_id UUID [pk]
 version_name varchar [note: "e.g., 'IFC4', 'IFC4.3'"]
+active boolean [default: true, note: "Soft delete; false = schema hidden from listing/validation"]
 }
 
 Table validation_rule {

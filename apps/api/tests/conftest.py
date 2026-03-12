@@ -113,7 +113,8 @@ CREATE TYPE resolution_status AS ENUM ('Unresolved', 'Source_Wins', 'Target_Wins
 
 CREATE TABLE IF NOT EXISTS ifc_schema (
     schema_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_name VARCHAR NOT NULL UNIQUE
+    version_name VARCHAR NOT NULL UNIQUE,
+    active       BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS project (

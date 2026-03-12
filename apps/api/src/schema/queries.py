@@ -63,6 +63,7 @@ from ..db import (
     fetch_validation_rules_by_schema_id,
     insert_uploaded_schema_rule,
     delete_uploaded_schema_rule as db_delete_uploaded_schema_rule,
+    soft_delete_uploaded_schema as db_soft_delete_uploaded_schema,
     update_uploaded_schema_rule as db_update_uploaded_schema_rule,
     update_sheet_template as db_update_sheet_template,
     update_validation_rule_rule_schema as db_update_validation_rule_rule_schema,
@@ -1167,6 +1168,11 @@ class Mutation:
     ) -> bool:
         """Link an uploaded IFC schema to a project. Idempotent."""
         return db_apply_schema_to_project(project_id, schema_id)
+
+    @strawberry.mutation
+    async def delete_uploaded_schema(self, schema_id: str) -> bool:
+        """Soft-delete an uploaded IFC schema (sets active = false)."""
+        return db_soft_delete_uploaded_schema(schema_id)
 
     @strawberry.mutation
     async def create_uploaded_schema(self, name: str) -> UploadedSchema:

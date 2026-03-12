@@ -12,7 +12,7 @@ let productsList = $state<ProductMeta[]>([]);
 let totalProductCount = $state(0);
 let activeFilters = $state<SearchFilter[]>([]);
 let appliedFilterSets = $state<FilterSet[]>([]);
-let combinationLogic = $state<'AND' | 'OR'>('AND');
+let combinationLogic = $state<'AND' | 'OR'>('OR');
 
 export function getSearchState() {
 	return {

@@ -205,6 +205,15 @@ import {
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
     : "/api";
 
+  const validationUrl = $derived.by(() => {
+    const params = new URLSearchParams();
+    if (branchId) params.set("branchId", branchId);
+    if (projectId) params.set("projectId", projectId);
+    if (revision != null) params.set("revision", String(revision));
+    const qs = params.toString();
+    return `/validation${qs ? `?${qs}` : ""}`;
+  });
+
   // Validation results
   let runningValidation = $state(false);
   let runningValidationSchemaId = $state<string | null>(null);
@@ -1004,15 +1013,6 @@ import {
     loadValidationRuns();
   });
 
-  $effect(() => {
-    if (activeAppliedSchema && applyProjectId) {
-      const stillApplied = appliedSchemasForProject.some(
-        (us) => us.id === activeAppliedSchema?.id,
-      );
-      if (!stillApplied) activeAppliedSchema = null;
-    }
-  });
-
   onDestroy(() => {
     channel?.close();
   });
@@ -1032,6 +1032,9 @@ import {
 
   <!-- Uploaded IFC Schemas (from POST /ifc-schema) -->
   <section class="uploaded-schemas-section">
+    <div class="go-to-validation-row">
+      <a href={validationUrl} class="btn-sm btn-primary">Go to Validation</a>
+    </div>
     <div class="section-header">
       <button
         type="button"
@@ -1072,8 +1075,7 @@ import {
       <div class="empty-state">Loading uploaded schemas…</div>
     {:else if uploadedSchemas.length === 0}
       <div class="empty-state">
-        No uploaded schemas. Use POST /ifc-schema to upload IFC schema
-        definitions.
+        No uploaded schemas. Use Upload Schemas or Create Schema to add one.
       </div>
     {:else if filteredUploadedSchemas.length === 0}
       <div class="empty-state">
@@ -1104,6 +1106,18 @@ import {
                 title="Open in editor"
               >
                 Edit
+              </button>
+              <button
+                class="btn-sm uploaded-schema-action uploaded-schema-delete"
+                onclick={() => {
+                  if (confirm(`Delete schema "${us.versionName}" and all its rules?`)) {
+                    deleteUploadedSchema(us.id);
+                  }
+                }}
+                title="Delete schema"
+                aria-label={`Delete schema ${us.versionName}`}
+              >
+                Delete
               </button>
               {#if applyProjectId}
                 {#if us.projectIds.includes(applyProjectId)}
@@ -1483,59 +1497,6 @@ import {
             </div>
           {/if}
         </div>
-
-        <!-- Validation results -->
-        {#if uploadedSchemaValidationResult && uploadedSchemaValidationResult.schemaGlobalId === sel.id}
-          <div class="results-section">
-            <h4>Validation Results</h4>
-            <div class="results-summary">
-              <span class="result-badge error"
-                >{uploadedSchemaValidationResult.errorCount} errors</span
-              >
-              <span class="result-badge warning"
-                >{uploadedSchemaValidationResult.warningCount} warnings</span
-              >
-              <span class="result-badge info"
-                >{uploadedSchemaValidationResult.infoCount} info</span
-              >
-              <span class="result-badge passed"
-                >{uploadedSchemaValidationResult.passedCount} passed</span
-              >
-            </div>
-            {#each uploadedSchemaValidationResult.results as rr (rr.ruleGlobalId)}
-              <div class="result-card" class:failed={!rr.passed}>
-                <div class="result-header">
-                  <span class="severity-badge {severityClass(rr.severity)}"
-                    >{rr.severity}</span
-                  >
-                  <span>{rr.ruleName}</span>
-                  <span class="result-status"
-                    >{rr.passed ? "✓ PASS" : "✗ FAIL"}</span
-                  >
-                </div>
-                {#if rr.violations.length > 0}
-                  <details>
-                    <summary
-                      >{rr.violations.length} violation{rr.violations.length ===
-                      1
-                        ? ""
-                        : "s"}</summary
-                    >
-                    <ul class="violations-list">
-                      {#each rr.violations as v}
-                        <li>
-                          <code>{v.globalId}</code>
-                          <span class="viol-class">{v.ifcClass}</span>
-                          <span class="viol-msg">{v.message}</span>
-                        </li>
-                      {/each}
-                    </ul>
-                  </details>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
       {:else}
         <div class="empty-state-center">
           <p>
@@ -2008,24 +1969,6 @@ import {
     overflow: hidden;
   }
 
-  .page-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .page-header h2 {
-    margin: 0;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-action-primary);
-  }
-
   .error-bar {
     padding: 0.5rem 1rem;
     background: color-mix(in srgb, var(--color-danger) 12%, transparent);
@@ -2053,6 +1996,14 @@ import {
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--color-border-subtle);
     background: var(--color-bg-elevated);
+  }
+
+  .go-to-validation-row {
+    margin-bottom: 0.5rem;
+  }
+
+  .go-to-validation-row a {
+    text-decoration: none;
   }
 
   .uploaded-schemas-section .section-header {
@@ -2187,6 +2138,11 @@ import {
 
   .uploaded-schema-action {
     flex: 0 1 auto;
+  }
+
+  .uploaded-schema-delete:hover {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
   }
 
   /* Main content: aside + main */
@@ -2733,77 +2689,6 @@ import {
     font-style: italic;
   }
 
-  /* Validation results */
-  .results-section {
-    margin-top: 1.5rem;
-    border-top: 1px solid var(--color-border-subtle);
-    padding-top: 1rem;
-  }
-
-  .results-section h4 {
-    margin: 0 0 0.5rem 0;
-    color: var(--color-text-primary);
-  }
-
-  .results-summary {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .result-badge {
-    padding: 0.2rem 0.6rem;
-    border-radius: 0.25rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-  }
-
-  .result-badge.error {
-    background: color-mix(in srgb, var(--color-danger) 15%, transparent);
-    color: var(--color-danger);
-  }
-
-  .result-badge.warning {
-    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
-    color: var(--color-warning);
-  }
-
-  .result-badge.info {
-    background: color-mix(in srgb, var(--color-info) 15%, transparent);
-    color: var(--color-info);
-  }
-
-  .result-badge.passed {
-    background: color-mix(in srgb, var(--color-success) 15%, transparent);
-    color: var(--color-text-primary);
-  }
-
-  .result-card {
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 0.75rem;
-    padding: 0.5rem 0.8rem;
-    margin-bottom: 0.4rem;
-  }
-
-  .result-card.failed {
-    border-color: var(--color-danger);
-  }
-
-  .result-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--color-text-primary);
-  }
-
-  .result-status {
-    margin-left: auto;
-    font-size: 0.78rem;
-    font-weight: 600;
-  }
-
   details {
     margin-top: 0.3rem;
   }
@@ -2812,35 +2697,6 @@ import {
     cursor: pointer;
     font-size: 0.78rem;
     color: var(--color-text-secondary);
-  }
-
-  .violations-list {
-    list-style: none;
-    padding: 0;
-    margin: 0.3rem 0 0 0;
-    font-size: 0.75rem;
-  }
-
-  .violations-list li {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.2rem 0;
-    border-bottom: 1px solid var(--color-border-subtle);
-    color: var(--color-text-secondary);
-  }
-
-  .violations-list code {
-    color: var(--color-action-primary);
-    font-size: 0.7rem;
-  }
-
-  .viol-class {
-    color: var(--color-text-muted);
-  }
-
-  .viol-msg {
-    color: var(--color-text-primary);
-    flex: 1;
   }
 
   .empty-state {

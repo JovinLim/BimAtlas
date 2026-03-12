@@ -103,9 +103,25 @@
 	<title>Agent • BimAtlas</title>
 </svelte:head>
 
-<main class="agent-page">
-	<ChatPanel {branchId} {projectId} {revision} {projectName} {branchName} onRequestContext={requestContext} />
-</main>
+<div class="agent-page">
+	<header class="page-header">
+		<div class="page-header-title-row">
+			<h2>Agent</h2>
+		</div>
+		{#if branchName || projectName || branchId || projectId}
+			<span class="context-pill mono">
+				{projectName ?? projectId ?? "—"} / {branchName ?? branchId ?? "—"}
+				{#if revision != null}(rev {revision}){/if}
+			</span>
+		{:else}
+			<span class="context-pill empty">Waiting for context…</span>
+		{/if}
+	</header>
+
+	<div class="agent-content">
+		<ChatPanel {branchId} {projectId} {revision} {projectName} {branchName} onRequestContext={requestContext} />
+	</div>
+</div>
 
 <style>
 	:global(body) {
@@ -123,5 +139,36 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		background: var(--color-bg-canvas);
+	}
+
+	.agent-content {
+		flex: 1 1 0;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.context-pill {
+		padding: 0.15rem 0.6rem;
+		border-radius: 999px;
+		font-size: 0.72rem;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border-default);
+		color: var(--color-text-secondary);
+		max-width: 60%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.context-pill.empty {
+		opacity: 0.7;
+		font-style: italic;
+	}
+
+	.mono {
+		font-family: "SF Mono", "Fira Code", monospace;
 	}
 </style>

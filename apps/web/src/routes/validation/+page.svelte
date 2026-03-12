@@ -3,8 +3,11 @@
   import { page } from "$app/stores";
   import { loadSettings } from "$lib/state/persistence";
   import { client, VALIDATION_RESULTS_QUERY, PROJECTS_QUERY } from "$lib/api/client";
-  import { SCHEMA_CHANNEL, type SchemaMessage } from "$lib/schema/protocol";
   import { ATTRIBUTES_CHANNEL, type AttributesMessage } from "$lib/attributes/protocol";
+  import {
+    VALIDATION_CHANNEL,
+    type ValidationMessage,
+  } from "$lib/validation/protocol";
 
   type Violation = {
     globalId: string;
@@ -50,8 +53,13 @@
   let attributesChannel: BroadcastChannel | null = null;
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
+  let lastContextKey: string | null = null;
+  let lastLoadedResultsKey: string | null = null;
+  let lastSelectionSent: string | null = null;
 
   function selectInViewer(globalId: string) {
+    if (lastSelectionSent === globalId) return;
+    lastSelectionSent = globalId;
     attributesChannel?.postMessage({
       type: "selection-changed",
       globalId,
@@ -121,43 +129,74 @@
     }
   }
 
-  function handleIncomingMessage(e: MessageEvent<SchemaMessage>) {
-    const msg = e.data;
-    if (msg.type === "context") {
-      branchId = msg.branchId;
-      projectId = msg.projectId;
-      projectName = msg.projectName ?? null;
-      branchName = msg.branchName ?? null;
-      revision = msg.revision;
+  function syncUrlWithContext() {
+    const params = new URLSearchParams($page.url.searchParams);
+    if (branchId != null) params.set("branchId", String(branchId));
+    else params.delete("branchId");
+    if (projectId != null) params.set("projectId", String(projectId));
+    else params.delete("projectId");
+    if (revision != null) params.set("revision", String(revision));
+    else params.delete("revision");
+    const nextQuery = params.toString();
+    const currentQuery = $page.url.searchParams.toString();
+    if (nextQuery === currentQuery) return;
+    window.history.replaceState(null, "", `${$page.url.pathname}?${nextQuery}`);
+  }
 
-      // Keep URL in sync so refresh preserves the latest context.
-      const params = new URLSearchParams($page.url.searchParams);
-      if (branchId != null) params.set("branchId", String(branchId));
-      else params.delete("branchId");
-      if (projectId != null) params.set("projectId", String(projectId));
-      else params.delete("projectId");
-      if (revision != null) params.set("revision", String(revision));
-      else params.delete("revision");
-      window.history.replaceState(
-        null,
-        "",
-        `${$page.url.pathname}?${params.toString()}`,
-      );
+  function contextKey(msg: Extract<ValidationMessage, { type: "context" }>): string {
+    return JSON.stringify({
+      branchId: msg.branchId,
+      projectId: msg.projectId,
+      projectName: msg.projectName ?? null,
+      branchName: msg.branchName ?? null,
+      revision: msg.revision,
+    });
+  }
 
-      if (contextRetryInterval != null) {
-        clearInterval(contextRetryInterval);
-        contextRetryInterval = null;
-      }
+  function handleContextMessage(msg: Extract<ValidationMessage, { type: "context" }>) {
+    const nextContextKey = contextKey(msg);
+    if (nextContextKey === lastContextKey) return;
+    lastContextKey = nextContextKey;
 
-      // Reload results for the newly active revision.
-      if (branchId) {
-        void loadResults();
-      }
+    branchId = msg.branchId;
+    projectId = msg.projectId;
+    projectName = msg.projectName ?? null;
+    branchName = msg.branchName ?? null;
+    revision = msg.revision;
+    syncUrlWithContext();
+
+    if (contextRetryInterval != null) {
+      clearInterval(contextRetryInterval);
+      contextRetryInterval = null;
+    }
+
+    // Reload only when branch/revision changed.
+    const resultsKey = `${branchId ?? "none"}:${revision ?? "latest"}`;
+    if (branchId && resultsKey !== lastLoadedResultsKey) {
+      lastLoadedResultsKey = resultsKey;
+      void loadResults();
     }
   }
 
+  type ValidationMessageHandlers = {
+    [K in ValidationMessage["type"]]?: (message: Extract<ValidationMessage, { type: K }>) => void;
+  };
+
+  const validationMessageHandlers: ValidationMessageHandlers = {
+    context: handleContextMessage,
+  };
+
+  function handleIncomingMessage(e: MessageEvent<ValidationMessage>) {
+    const msg = e.data;
+    if (!msg || typeof msg.type !== "string") return;
+    const handler = validationMessageHandlers[msg.type as ValidationMessage["type"]] as
+      | ((message: ValidationMessage) => void)
+      | undefined;
+    handler?.(msg);
+  }
+
   function requestContext() {
-    channel?.postMessage({ type: "request-context" } satisfies SchemaMessage);
+    channel?.postMessage({ type: "request-context" } satisfies ValidationMessage);
   }
 
   async function loadResults() {
@@ -239,7 +278,7 @@
     applyContextFromUrl();
     applyContextFallbackFromSettings();
 
-    channel = new BroadcastChannel(SCHEMA_CHANNEL);
+    channel = new BroadcastChannel(VALIDATION_CHANNEL);
     channel.onmessage = handleIncomingMessage;
     attributesChannel = new BroadcastChannel(ATTRIBUTES_CHANNEL);
 
@@ -272,6 +311,14 @@
 
     // If we already had context from URL/settings, load immediately.
     if (branchId) {
+      lastContextKey = JSON.stringify({
+        branchId,
+        projectId,
+        projectName: projectName ?? null,
+        branchName: branchName ?? null,
+        revision,
+      });
+      lastLoadedResultsKey = `${branchId}:${revision ?? "latest"}`;
       void loadResults();
       void resolveNamesFromProjects();
     }
@@ -290,7 +337,7 @@
 </svelte:head>
 
 <div class="validation-page">
-  <header class="page-header">
+  <header class="page-header page-header--stacked">
     <div class="header-main">
       <h2>Validation</h2>
       <p class="header-subtitle">
@@ -532,24 +579,6 @@
       -apple-system,
       sans-serif;
     overflow: hidden;
-  }
-
-  .page-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .header-main h2 {
-    margin: 0;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-brand-500);
   }
 
   .header-subtitle {

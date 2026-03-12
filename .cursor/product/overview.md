@@ -33,7 +33,7 @@ features:
   - feature_id: feature_005_validation_schema_management
     name: Validation Schema Management & Subgraph Validation Engine
     description: |
-      Integrated IFC validation framework where validation rules (IfcValidation) and grouping schemas (IfcValidationSchema) are first-class graph citizens stored in ifc_entity. Supports attribute checks, inheritance-aware validation, and subgraph/relationship-scoped validation via Apache AGE Cypher traversals. Schema Browser UI at /schema for browsing schemas, creating/editing rules, linking rules to schemas, and running validation. GraphQL CRUD and runValidation mutation. MCP tools run_validation and list_validation_schemas for agentic workflows.
+      Integrated IFC validation framework where validation rules (IfcValidation) and grouping schemas (IfcValidationSchema) are first-class graph citizens stored in ifc_entity. Supports attribute checks, inheritance-aware validation, and subgraph/relationship-scoped validation via Apache AGE Cypher traversals. Schema Browser UI at /schema for browsing schemas, creating/editing rules, and linking rules to schemas. Validation run results at /validation. GraphQL CRUD and runValidation mutation. MCP tools run_validation and list_validation_schemas for agentic workflows.
     status: implemented
     priority: high
 ---
@@ -63,7 +63,7 @@ AI & Orchestration Ready: BimAtlas natively supports AI integration through two 
 Tech Stack
 Backend: Python, FastAPI, GraphQL (Strawberry). REST endpoints for agent chat, configs, chats; SSE for /stream/ifc-products and /stream/agent-events.
 
-Frontend: SvelteKit (Svelte 5), Three.js, 3d-force-graph. Routes: / (main), /search, /graph, /table, /attributes, /agent, /schema. Filter logic tree: FilterTreeEditor (nested Match ALL/ANY, max depth 2), AppliedFilterSet, FilterGuide, AppliedDisplayOrderPanel.
+Frontend: SvelteKit (Svelte 5), Three.js, 3d-force-graph. Routes: / (main), /search, /graph, /table, /attributes, /agent, /schema, /validation. Filter logic tree: FilterTreeEditor (nested Match ALL/ANY, max depth 2), AppliedFilterSet, FilterGuide, AppliedDisplayOrderPanel. Popup routes (attributes, graph, table, schema, validation) sync with main viewer via BroadcastChannel when selection or context changes.
 
 Agent Layer: LlamaIndex for agent orchestration; provider-agnostic LLM support (OpenAI, Anthropic, Google, Ollama, Custom). Agent configs and chat history persisted in PostgreSQL.
 

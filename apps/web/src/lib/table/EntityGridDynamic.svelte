@@ -35,7 +35,6 @@
     onHeaderFormulaBlur?: () => void;
     activeCellRef: string | null;
     selectedRowGlobalId: string | null;
-    findHighlightGlobalId: string | null;
     getCellDisplayValue: (ref: string, fallback: string) => string;
     onCellFocus: (cell: SpreadsheetCellState) => void;
     onCellInput: (cell: SpreadsheetCellState, value: string) => void;
@@ -76,7 +75,6 @@
     onHeaderFormulaBlur,
     activeCellRef,
     selectedRowGlobalId,
-    findHighlightGlobalId,
     getCellDisplayValue,
     onCellFocus,
     onCellInput,
@@ -400,7 +398,6 @@
           <tr
             class="entity-row"
             class:selected={selectedRowGlobalId != null && product.globalId === selectedRowGlobalId}
-            class:find-highlight={findHighlightGlobalId != null && product.globalId === findHighlightGlobalId}
             data-global-id={product.globalId}
             data-locked={locked}
           >
@@ -696,11 +693,6 @@
   .entity-row.selected th.row-index { background: rgba(102, 171, 255, 0.12); }
   .entity-row.selected:hover td,
   .entity-row.selected:hover th.row-index { background: rgba(102, 171, 255, 0.16); }
-  .entity-row.find-highlight td,
-  .entity-row.find-highlight th.row-index { background: rgba(255, 136, 102, 0.18); }
-  .entity-row.find-highlight:hover td,
-  .entity-row.find-highlight:hover th.row-index { background: rgba(255, 136, 102, 0.24); }
-
   .cell-input { box-sizing: border-box; width: 100%; height: 100%; border: none; background: transparent; color: var(--color-text-primary); font-size: 0.78rem; padding: 0 0.5rem; font-family: inherit; }
   .cell-input:focus { outline: none; background: color-mix(in srgb, var(--color-brand-500) 6%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-500) 35%, transparent); }
   .cell-input.active-cell { box-shadow: inset 0 0 0 1px rgba(102, 171, 255, 0.65); background: rgba(102, 171, 255, 0.09); }

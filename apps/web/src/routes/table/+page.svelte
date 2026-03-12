@@ -4,7 +4,6 @@
   import {
     TABLE_CHANNEL,
     TABLE_PROTOCOL_VERSION,
-    ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
   import type { ProductMeta } from "$lib/search/protocol";
@@ -765,17 +764,6 @@
     return () => window.removeEventListener("keydown", onEscape);
   });
 
-  $effect(() => {
-    const id = findHighlightGlobalId;
-    if (!id || !segmentTopRef) return;
-    tick().then(() => {
-      const row = segmentTopRef?.querySelector(
-        `tr.entity-row[data-global-id="${id}"]`,
-      );
-      row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-  });
-
   const formulaPrefix = $derived.by(() => {
     const t = formulaInput.trim();
     if (!t.startsWith("=")) return "";
@@ -794,13 +782,17 @@
       formulaSuggestionsList.length > 0 &&
       ((activeCell != null && activeCell.editable) || activeHeaderColumnId != null),
   );
+  /** When sync enabled: globalId from viewer selection (highlights row). */
+  let viewerSelectedGlobalId = $state<string | null>(null);
+  /** Toggle: sync table selection with 3D viewer (two-way). */
+  let syncWithViewer = $state(false);
   /** GlobalId of the row to show as selected (from table focus or, when sync enabled, from viewer). */
   const selectedRowGlobalId = $derived.by(() => {
     if (activeCell && activeCell.surface === "entity") {
       const product = getTopProductByRow(activeCell.row);
       return product?.globalId ?? null;
     }
-    if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) return viewerSelectedGlobalId;
+    if (syncWithViewer) return viewerSelectedGlobalId;
     return null;
   });
   let selectionRange = $state<{ startRef: string; endRef: string } | null>(null);
@@ -812,6 +804,9 @@
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
   let hasChannelContext = $state(false);
+  let lastReceivedContextDataKey: string | null = null;
+  let lastSentSelectionToViewer: string | null = null;
+  let segmentTopRef = $state<HTMLElement | null>(null);
   function getNavCols(): string[] {
     return topColumns.map((column) => column.col);
   }
@@ -853,15 +848,20 @@
     }
   }
 
-  /** When the main viewer selects an entity, we highlight that row (only when sync enabled). */
-  let viewerSelectedGlobalId = $state<string | null>(null);
-  /** Pending "Find selected element" request: after next context we'll highlight/scroll or toast. */
-  let findPending = $state(false);
-  /** Row to highlight in orange and scroll into view (from "Find selected element"). */
-  let findHighlightGlobalId = $state<string | null>(null);
   let toastMessage = $state<string | null>(null);
+
+  $effect(() => {
+    if (!syncWithViewer) return;
+    const id = viewerSelectedGlobalId;
+    if (!id || !segmentTopRef) return;
+    tick().then(() => {
+      const row = segmentTopRef?.querySelector(
+        `tr.entity-row[data-global-id="${id}"]`,
+      );
+      row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  });
   let toastTimeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
-  let segmentTopRef = $state<HTMLElement | null>(null);
   let tableSplitRef = $state<HTMLElement | null>(null);
 
   const TABLE_TOP_HEIGHT_KEY = "bimatlas-table-top-height";
@@ -925,6 +925,34 @@
     }, 3000);
   }
 
+  function syncUrlWithContext() {
+    const params = new URLSearchParams($page.url.searchParams);
+    if (branchId != null) params.set("branchId", String(branchId));
+    else params.delete("branchId");
+    if (projectId != null) params.set("projectId", String(projectId));
+    else params.delete("projectId");
+    if (revision != null) params.set("revision", String(revision));
+    else params.delete("revision");
+    const nextQuery = params.toString();
+    const currentQuery = $page.url.searchParams.toString();
+    if (nextQuery === currentQuery) return;
+    window.history.replaceState(null, "", `${$page.url.pathname}?${nextQuery}`);
+  }
+
+  function contextDataKey(
+    msg: Extract<TableMessage, { type: "context" }>,
+  ): string {
+    return JSON.stringify({
+      branchId: msg.branchId,
+      projectId: msg.projectId,
+      branchName: msg.branchName ?? null,
+      projectName: msg.projectName ?? null,
+      revision: msg.revision,
+      version: msg.version,
+      products: (msg.products ?? []).map((p) => p.globalId),
+    });
+  }
+
   function exportCsv() {
     const headers = topColumns.map((c) => c.label);
     const entityRows: string[][] = [];
@@ -959,13 +987,14 @@
     showToast("CSV exported");
   }
 
-  function handleIncomingMessage(e: MessageEvent<TableMessage>) {
-    const msg = e.data;
-    if (msg.type === "context" && msg.version === TABLE_PROTOCOL_VERSION) {
-      if (useFixture) return;
-      const wasFindPending = findPending;
-      findPending = false;
-      hasChannelContext = true;
+  function handleContextMessage(msg: Extract<TableMessage, { type: "context" }>) {
+    if (msg.version !== TABLE_PROTOCOL_VERSION || useFixture) return;
+
+    hasChannelContext = true;
+
+    const nextContextDataKey = contextDataKey(msg);
+    const contextChanged = nextContextDataKey !== lastReceivedContextDataKey;
+    if (contextChanged) {
       branchId = msg.branchId;
       projectId = msg.projectId;
       branchName = msg.branchName ?? null;
@@ -974,49 +1003,53 @@
       products = msg.products ?? [];
       lockedIds = new Set(products.map((p) => p.globalId));
       fetchEntityAttributesIfNeeded(topColumns);
-
-      const params = new URLSearchParams($page.url.searchParams);
-      if (branchId != null) params.set("branchId", String(branchId));
-      else params.delete("branchId");
-      if (projectId != null) params.set("projectId", String(projectId));
-      else params.delete("projectId");
-      if (revision != null) params.set("revision", String(revision));
-      else params.delete("revision");
-      window.history.replaceState(
-        null,
-        "",
-        `${$page.url.pathname}?${params.toString()}`,
-      );
-
-      if (contextRetryInterval != null) {
-        clearInterval(contextRetryInterval);
-        contextRetryInterval = null;
-      }
-
-      if (wasFindPending) {
-        const globalId = msg.activeGlobalId ?? null;
-        if (globalId == null || globalId === "") {
-          showToast("No element selected in viewer");
-          findHighlightGlobalId = null;
-        } else {
-          findHighlightGlobalId = globalId;
-        }
-      }
-    } else if (
-      ENABLE_TABLE_VIEWER_SELECTION_SYNC &&
-      msg.type === "selection-sync"
-    ) {
-      viewerSelectedGlobalId = msg.globalId;
+      syncUrlWithContext();
+      lastReceivedContextDataKey = nextContextDataKey;
     }
+
+    if (contextRetryInterval != null) {
+      clearInterval(contextRetryInterval);
+      contextRetryInterval = null;
+    }
+
+  }
+
+  type TableMessageHandlers = {
+    [K in TableMessage["type"]]?: (message: Extract<TableMessage, { type: K }>) => void;
+  };
+
+  const tableMessageHandlers: TableMessageHandlers = {
+    context: handleContextMessage,
+    "selection-sync": (message) => {
+      if (!syncWithViewer) return;
+      viewerSelectedGlobalId = message.globalId;
+      if (message.globalId == null) {
+        activeCell = null;
+        activeHeaderColumnId = null;
+        selectionRange = null;
+        formulaComposeSourceRef = null;
+        formulaInput = "";
+      }
+    },
+  };
+
+  function handleIncomingMessage(e: MessageEvent<TableMessage>) {
+    const msg = e.data;
+    if (!msg || typeof msg.type !== "string") return;
+    const handler = tableMessageHandlers[msg.type as TableMessage["type"]] as
+      | ((message: TableMessage) => void)
+      | undefined;
+    handler?.(msg);
   }
 
   function requestContext() {
     channel?.postMessage({ type: "request-context" } satisfies TableMessage);
   }
 
-  function findSelectedElement() {
-    findPending = true;
-    requestContext();
+  function setSyncWithViewer(enabled: boolean) {
+    syncWithViewer = enabled;
+    if (!enabled) viewerSelectedGlobalId = null;
+    channel?.postMessage({ type: "sync-mode", enabled } satisfies TableMessage);
   }
 
   async function resolveNamesFromProjects() {
@@ -1573,7 +1606,9 @@
   }
 
   function syncSelectionToViewer(globalId: string | null) {
-    if (!ENABLE_TABLE_VIEWER_SELECTION_SYNC) return;
+    if (!syncWithViewer) return;
+    if (lastSentSelectionToViewer === globalId) return;
+    lastSentSelectionToViewer = globalId;
     channel?.postMessage({ type: "selection-changed", globalId } satisfies TableMessage);
   }
 
@@ -1773,7 +1808,7 @@
       formulaComposeSourceRef = null;
       formulaInput = "";
       isDraggingSelection = false;
-      if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) syncSelectionToViewer(null);
+      if (syncWithViewer) syncSelectionToViewer(null);
       return;
     }
 
@@ -1967,6 +2002,9 @@
   });
 
   onDestroy(() => {
+    if (syncWithViewer) {
+      channel?.postMessage({ type: "sync-mode", enabled: false } satisfies TableMessage);
+    }
     channel?.close();
     if (contextRetryTimeout != null) clearTimeout(contextRetryTimeout);
     if (contextRetryInterval != null) clearInterval(contextRetryInterval);
@@ -1980,9 +2018,15 @@
   });
 </script>
 
+<svelte:head>
+  <title>Table • BimAtlas</title>
+</svelte:head>
+
 <div class="table-page">
-  <header class="table-header">
-    <h2>Table</h2>
+  <header class="page-header">
+    <div class="page-header-title-row">
+      <h2>Table</h2>
+    </div>
     {#if useFixture}
       <span class="context-pill fixture">Fixture data</span>
     {:else if branchName || projectName || branchId || projectId}
@@ -2127,16 +2171,21 @@
         <p class="segment-label">Total entities: {products.length}</p>
         <button
           type="button"
-          class="formula-guide-btn"
-          onclick={findSelectedElement}
+          class="btn btn-primary formula-guide-btn"
+          class:active={syncWithViewer}
+          onclick={() => setSyncWithViewer(!syncWithViewer)}
           disabled={!hasChannelContext}
-          aria-label="Find selected element in viewer"
+          title={hasChannelContext
+            ? (syncWithViewer ? "Sync on: table and viewer selection stay in sync" : "Sync off: click to enable two-way selection sync")
+            : "Open the table from the main BimAtlas view to use this feature"}
+          aria-label={syncWithViewer ? "Sync with viewer (on)" : "Sync with viewer (off)"}
+          aria-pressed={syncWithViewer}
         >
-          Find selected element
+          Sync with viewer
         </button>
         <button
           type="button"
-          class="formula-guide-btn"
+          class="btn btn-primary formula-guide-btn"
           onclick={toggleLockAll}
           disabled={products.length === 0 && activeSheet.entries.length === 0}
           aria-label={allEntitiesLocked ? "Unlock all rows" : "Lock all rows"}
@@ -2145,7 +2194,7 @@
         </button>
         <button
           type="button"
-          class="formula-guide-btn"
+          class="btn btn-primary formula-guide-btn"
           onclick={addCustomColumn}
           aria-label="Add custom column"
         >
@@ -2153,7 +2202,7 @@
         </button>
         <button
           type="button"
-          class="formula-guide-btn"
+          class="btn btn-primary formula-guide-btn"
           onclick={() => (showFormulaGuideOverlay = true)}
           aria-label="Open formula guide"
         >
@@ -2161,7 +2210,7 @@
         </button>
         <button
           type="button"
-          class="formula-guide-btn"
+          class="btn btn-primary formula-guide-btn"
           data-testid="export-csv-btn"
           onclick={exportCsv}
           disabled={products.length === 0 && activeSheet.entries.length === 0}
@@ -2198,7 +2247,6 @@
         onHeaderFormulaBlur={() => (headerFormulaFocusedColumnId = null)}
         activeCellRef={activeCell?.ref ?? null}
         selectedRowGlobalId={selectedRowGlobalId}
-        findHighlightGlobalId={findHighlightGlobalId}
         getCellDisplayValue={getCellDisplayValue}
         onCellFocus={onCellFocus}
         onCellInput={onCellInput}
@@ -2500,24 +2548,6 @@
     overflow: hidden;
   }
 
-  .table-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .table-header h2 {
-    margin: 0;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-brand-500);
-  }
-
   .context-pill {
     padding: 0.15rem 0.6rem;
     border-radius: 999px;
@@ -2716,19 +2746,21 @@
 
   .formula-guide-btn {
     margin-left: auto;
-    padding: 0.3rem 0.6rem;
-    font-size: 0.75rem;
-    border: 1px solid var(--color-border-default);
-    border-radius: 0.35rem;
-    background: var(--color-bg-elevated);
-    color: var(--color-text-primary);
-    cursor: pointer;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+    border-radius: 0.5rem;
   }
 
-  .formula-guide-btn:hover {
-    background: color-mix(in srgb, var(--color-brand-500) 18%, transparent);
-    border-color: color-mix(in srgb, var(--color-brand-500) 45%, transparent);
-    color: var(--color-brand-400);
+  .formula-guide-btn.active {
+    background: var(--color-brand-500);
+    border-color: var(--color-brand-500);
+    color: var(--color-bg-surface);
+  }
+
+  .formula-guide-btn.active:hover:not(:disabled) {
+    background: var(--color-brand-500);
+    border-color: var(--color-brand-500);
+    opacity: 0.9;
   }
 
   .formula-guide-backdrop {

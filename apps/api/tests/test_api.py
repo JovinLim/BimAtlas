@@ -554,6 +554,54 @@ class TestGraphQLEndpoint:
         err_data = response.json()
         assert "errors" in err_data
 
+    def test_graphql_delete_uploaded_schema(self, client, db_pool):
+        """Test deleteUploadedSchema soft-deletes (sets active=false)."""
+        # Create a schema
+        create_mutation = """
+        mutation ($name: String!) {
+            createUploadedSchema(name: $name) {
+                id
+                versionName
+            }
+        }
+        """
+        resp = client.post(
+            "/graphql",
+            json={"query": create_mutation, "variables": {"name": "TestSchema_Delete"}},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert "errors" not in data
+        schema_id = data["data"]["createUploadedSchema"]["id"]
+
+        # Verify it appears in uploadedSchemas
+        query = 'query { uploadedSchemas { id versionName } }'
+        resp = client.post("/graphql", json={"query": query})
+        assert resp.status_code == status.HTTP_200_OK
+        schemas = resp.json()["data"]["uploadedSchemas"]
+        assert any(s["id"] == schema_id for s in schemas)
+
+        # Delete (soft delete)
+        delete_mutation = """
+        mutation ($schemaId: String!) {
+            deleteUploadedSchema(schemaId: $schemaId)
+        }
+        """
+        resp = client.post(
+            "/graphql",
+            json={"query": delete_mutation, "variables": {"schemaId": schema_id}},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert "errors" not in data
+        assert data["data"]["deleteUploadedSchema"] is True
+
+        # Verify it no longer appears in uploadedSchemas
+        resp = client.post("/graphql", json={"query": query})
+        assert resp.status_code == status.HTTP_200_OK
+        schemas = resp.json()["data"]["uploadedSchemas"]
+        assert not any(s["id"] == schema_id for s in schemas)
+
     def test_graphql_create_uploaded_schema_rule(
         self, client, db_pool, ifc_schema_seeded
     ):

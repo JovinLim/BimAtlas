@@ -13,7 +13,6 @@
     countLeaves,
     expressionToFlatFilters,
     flatFiltersToExpression,
-    getLogicLabel,
     type FilterGroup,
     type FilterLeaf,
     type FilterSet,
@@ -132,12 +131,16 @@
     return node && node.kind === "group" ? node : null;
   }
 
+  function cloneEditorRoot(): FilterGroup {
+    return JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+  }
+
   function addFilterAt(parentPath: string) {
     openMenuPath = null;
     const parent = getGroupAt(editorRoot, parentPath);
     if (!parent) return;
     const newLeaf: FilterLeaf = { kind: "leaf", mode: "class" };
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     const p = getGroupAt(next, parentPath);
     if (p) p.children.push(newLeaf);
     editorRoot = next;
@@ -148,7 +151,7 @@
     const parent = getGroupAt(editorRoot, parentPath);
     if (!parent) return;
     const newGroup: FilterGroup = { kind: "group", op: "ALL", children: [] };
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     const p = getGroupAt(next, parentPath);
     if (p) p.children.push(newGroup);
     editorRoot = next;
@@ -156,7 +159,7 @@
 
   function updateLeafAt(path: string, patch: Partial<SearchFilter>) {
     const parts = path.split(".");
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     let node: FilterGroup = next;
     for (let i = 0; i < parts.length - 1; i++) {
       const idx = parseInt(parts[i], 10);
@@ -175,7 +178,7 @@
 
   function removeLeafAt(path: string) {
     const parts = path.split(".");
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     let node: FilterGroup = next;
     for (let i = 0; i < parts.length - 1; i++) {
       const idx = parseInt(parts[i], 10);
@@ -191,7 +194,7 @@
   function updateSubgroupAt(path: string, op: "ALL" | "ANY") {
     const group = getGroupAt(editorRoot, path);
     if (!group) return;
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     const target = getGroupAt(next, path);
     if (target) target.op = op;
     editorRoot = next;
@@ -205,7 +208,7 @@
         return;
       const child = editorRoot.children[idx];
       if (child?.kind !== "group") return;
-      const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+      const next = cloneEditorRoot();
       next.children = next.children.filter((_, i) => i !== idx);
       editorRoot = next;
       return;
@@ -217,15 +220,11 @@
     if (lastIdx < 0 || lastIdx >= parent.children.length) return;
     const toRemove = parent.children[lastIdx];
     if (toRemove?.kind !== "group") return;
-    const next = JSON.parse(JSON.stringify(editorRoot)) as FilterGroup;
+    const next = cloneEditorRoot();
     const p = getGroupAt(next, parentPath);
     if (!p) return;
     p.children = p.children.filter((_, i) => i !== lastIdx);
     editorRoot = next;
-  }
-
-  function addFilter() {
-    addFilterAt("");
   }
 
   function filtersToPlain(list: SearchFilter[]): SearchFilter[] {
@@ -265,7 +264,7 @@
   let searchScope = $state<SearchScope>("project");
   let browserFilterSets = $state<FilterSet[]>([]);
   let selectedSetIds = $state<Set<string>>(new Set());
-  let combinationLogic = $state<"AND" | "OR">("OR");
+  const APPLIED_FILTER_SETS_COMBINATION_LOGIC: "OR" = "OR";
   let appliedFilterSets = $state<FilterSet[]>([]);
   let collapsedAppliedIds = $state<Set<string>>(new Set());
 
@@ -370,9 +369,6 @@
       if (data) {
         const sets = data.filterSets ?? [];
         appliedFilterSets = sets;
-        combinationLogic = (data.combinationLogic === "AND" ? "AND" : "OR") as
-          | "AND"
-          | "OR";
       } else {
         appliedFilterSets = [];
       }
@@ -387,7 +383,7 @@
     const message = {
       type: "apply-filter-sets",
       filterSets,
-      combinationLogic,
+      combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
     } satisfies SearchMessage;
     const clone = JSON.parse(JSON.stringify(message));
     if (channel) {
@@ -400,7 +396,11 @@
     try {
       localStorage.setItem(
         APPLY_FILTER_SETS_STORAGE_KEY,
-        JSON.stringify({ filterSets, combinationLogic, timestamp: Date.now() }),
+        JSON.stringify({
+          filterSets,
+          combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
+          timestamp: Date.now(),
+        }),
       );
     } catch {
       // Ignore quota/private mode
@@ -427,62 +427,6 @@
     if (next.has(id)) next.delete(id);
     else next.add(id);
     selectedSetIds = next;
-  }
-
-  function toFilterInputs(list: SearchFilter[]) {
-    return list.map((f) => ({
-      mode: f.mode,
-      ifcClass: f.ifcClass ?? null,
-      attribute: f.attribute ?? null,
-      value: f.value ?? null,
-      relation: f.relation ?? null,
-      operator: f.operator ?? null,
-      valueType: f.valueType ?? null,
-      relationTargetClass: f.relationTargetClass ?? null,
-      relationTargetAttribute: f.relationTargetAttribute ?? null,
-      relationTargetOperator: f.relationTargetOperator ?? null,
-      relationTargetValue: f.relationTargetValue ?? null,
-      relationTargetValueType: f.relationTargetValueType ?? null,
-    }));
-  }
-
-  async function updateFilterSet(
-    id: string,
-    name: string,
-    logic: "AND" | "OR",
-    nextFilters: SearchFilter[],
-    color?: string,
-  ) {
-    const vars: Record<string, unknown> = {
-      id,
-      name,
-      logic,
-      filters: toFilterInputs(nextFilters),
-    };
-    if (color !== undefined) vars.color = color;
-    await client.mutation(UPDATE_FILTER_SET_MUTATION, vars).toPromise();
-    appliedFilterSets = appliedFilterSets.map((fs) =>
-      fs.id === id
-        ? {
-            ...fs,
-            name,
-            logic,
-            filters: nextFilters,
-            ...(color !== undefined ? { color } : {}),
-          }
-        : fs,
-    );
-    if (branchId) {
-      await client
-        .mutation(APPLY_FILTER_SETS_MUTATION, {
-          branchId,
-          filterSetIds: appliedFilterSets.map((fs) => fs.id),
-          combinationLogic,
-        })
-        .toPromise();
-    }
-    await syncAppliedFilterSetsToMain(true);
-    await loadFilterSets(true);
   }
 
   async function updateFilterSetWithTree(
@@ -518,7 +462,7 @@
         .mutation(APPLY_FILTER_SETS_MUTATION, {
           branchId,
           filterSetIds: appliedFilterSets.map((fs) => fs.id),
-          combinationLogic,
+          combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
         })
         .toPromise();
     }
@@ -590,26 +534,6 @@
     }
   }
 
-  async function persistFilterSet(fs: FilterSet, nextFilters: SearchFilter[]) {
-    const name = fs.name;
-    await updateFilterSet(fs.id, name, fs.logic, nextFilters);
-  }
-
-  function loadFilterSetIntoEditor(fs: FilterSet) {
-    editorName = fs.name;
-    if (
-      fs.filtersTree &&
-      typeof fs.filtersTree === "object" &&
-      fs.filtersTree.kind === "group"
-    ) {
-      editorRoot = fs.filtersTree as FilterGroup;
-    } else {
-      const expr = flatFiltersToExpression(fs.filters, fs.logic);
-      editorRoot = expr.root;
-    }
-    editorLogic = editorRoot.op === "ANY" ? "OR" : "AND";
-  }
-
   function clearEditor() {
     editorName = "";
     editorLogic = "AND";
@@ -641,7 +565,7 @@
         .mutation(APPLY_FILTER_SETS_MUTATION, {
           branchId,
           filterSetIds: ids,
-          combinationLogic,
+          combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
         })
         .toPromise();
       resetFilterSetBrowserSection();
@@ -659,7 +583,7 @@
         .mutation(APPLY_FILTER_SETS_MUTATION, {
           branchId,
           filterSetIds: ids,
-          combinationLogic,
+          combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
         })
         .toPromise();
       await syncAppliedFilterSetsToMain(true);
@@ -677,7 +601,7 @@
         .mutation(APPLY_FILTER_SETS_MUTATION, {
           branchId,
           filterSetIds: remainingIds,
-          combinationLogic,
+          combinationLogic: APPLIED_FILTER_SETS_COMBINATION_LOGIC,
         })
         .toPromise();
       appliedFilterSets = remaining;
@@ -918,15 +842,18 @@
             {#if scopeDropdownOpen}
               <ul class="scope-dropdown">
                 {#each SCOPE_OPTIONS as opt}
-                  <li
-                    class="scope-option"
-                    class:selected={searchScope === opt.value}
-                    onclick={() => {
-                      searchScope = opt.value;
-                      scopeDropdownOpen = false;
-                    }}
-                  >
-                    {opt.label}
+                  <li>
+                    <button
+                      type="button"
+                      class="scope-option"
+                      class:selected={searchScope === opt.value}
+                      onclick={() => {
+                        searchScope = opt.value;
+                        scopeDropdownOpen = false;
+                      }}
+                    >
+                      {opt.label}
+                    </button>
                   </li>
                 {/each}
               </ul>
@@ -1029,6 +956,7 @@
           <button
             type="button"
             class="btn-close"
+            aria-label="Close filter set editor"
             onclick={() => {
               filterSetEditorOpen = false;
               clearEditor();
@@ -1114,9 +1042,7 @@
       <div class="section-header" style="padding-bottom: 0.25rem;">
         <h3>Applied to view</h3>
         {#if appliedFilterSets.length > 1}
-          <span class="applied-logic"
-            >Combined with {getLogicLabel(combinationLogic)}</span
-          >
+          <span class="applied-logic">Matches any selected filter set</span>
         {/if}
       </div>
 
@@ -1177,27 +1103,10 @@
       sans-serif;
   }
 
-  .page-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-    background: var(--color-bg-surface);
-  }
-
   .page-header-title-row {
     display: flex;
     align-items: baseline;
     gap: 0.75rem;
-  }
-
-  .page-header h2 {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--color-text-primary);
-    letter-spacing: -0.01em;
   }
 
   .result-count {
@@ -1244,6 +1153,12 @@
     font-size: 0.95rem;
     font-weight: 600;
     color: var(--color-text-primary);
+  }
+
+  .applied-logic {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    font-weight: 500;
   }
 
   /* ---- Filter Browser Specifics ---- */
@@ -1342,57 +1257,6 @@
     gap: 0.6rem;
     padding-top: 0.6rem;
     border-top: 1px solid var(--color-border-subtle);
-  }
-
-  .menu-wrap {
-    position: relative;
-  }
-
-  .btn-menu {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    padding: 0.35rem 0.5rem;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .btn-menu:hover {
-    background: var(--color-bg-surface);
-    color: var(--color-text-secondary);
-  }
-
-  .menu-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 0.25rem;
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    z-index: 50;
-    min-width: 140px;
-  }
-
-  .menu-item {
-    display: block;
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    font-size: 0.8rem;
-    color: var(--color-text-secondary);
-    background: none;
-    border: none;
-    cursor: pointer;
-  }
-
-  .menu-item:hover {
-    background: var(--color-bg-elevated);
-    color: var(--color-text-primary);
   }
 
   .editor-actions {
@@ -1514,9 +1378,15 @@
   }
 
   .scope-option {
+    display: block;
+    width: 100%;
     padding: 0.5rem 0.75rem;
     font-size: 0.8rem;
     border-radius: 6px;
+    border: none;
+    text-align: left;
+    background: transparent;
+    color: var(--color-text-secondary);
     cursor: pointer;
     transition: all 0.15s ease;
   }
