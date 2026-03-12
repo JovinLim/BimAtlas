@@ -3,7 +3,7 @@ features:
   - feature_id: feature_001_dynamic_filter_sets
     name: Dynamic Filter Sets & Attribute Search
     description: |
-      Named, configurable filter sets stored as JSONB. Users create filter sets (e.g. IfcClass = 'IfcWall' AND FireRating = '2HR'), save them to a branch, and toggle them on/off to compose complex database views. Strictly relational JSONB attribute filtering—no graph traversal. GraphQL mutations (create/update/delete filter sets), apply/unapply via branch_applied_filter_sets, and Search page filter set editor with color-coded entity highlighting.
+      Named, configurable filter sets stored as JSONB. Users create filter sets (e.g. IfcClass = 'IfcWall' AND FireRating = '2HR'), save them to a branch, and toggle them on/off to compose complex database views. **Filter logic tree:** Nested Match ALL / Match ANY trees (max depth 2) stored in filters JSONB; canonical group/leaf schema with legacy flat-array compatibility. Strictly relational JSONB attribute filtering—no graph traversal. GraphQL mutations (create/update/delete filter sets), apply/unapply via branch_applied_filter_sets, and Search page filter set editor (FilterTreeEditor, AppliedFilterSet) with color-coded entity highlighting and cross-window sync (BroadcastChannel, localStorage, postMessage).
     status: implemented
     priority: high
   - feature_id: graph_view
@@ -63,7 +63,7 @@ AI & Orchestration Ready: BimAtlas natively supports AI integration through two 
 Tech Stack
 Backend: Python, FastAPI, GraphQL (Strawberry). REST endpoints for agent chat, configs, chats; SSE for /stream/ifc-products and /stream/agent-events.
 
-Frontend: SvelteKit (Svelte 5), Three.js, 3d-force-graph. Routes: / (main), /search, /graph, /table, /attributes, /agent, /schema.
+Frontend: SvelteKit (Svelte 5), Three.js, 3d-force-graph. Routes: / (main), /search, /graph, /table, /attributes, /agent, /schema. Filter logic tree: FilterTreeEditor (nested Match ALL/ANY, max depth 2), AppliedFilterSet, FilterGuide, AppliedDisplayOrderPanel.
 
 Agent Layer: LlamaIndex for agent orchestration; provider-agnostic LLM support (OpenAI, Anthropic, Google, Ollama, Custom). Agent configs and chat history persisted in PostgreSQL.
 
