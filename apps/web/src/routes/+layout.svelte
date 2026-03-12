@@ -542,4 +542,37 @@
   :global(.revision-filter-group-chevron.collapsed) {
     transform: rotate(90deg);
   }
+
+  /* ---- Standardised page headers ---- */
+  :global(.page-header),
+  :global(.table-header) {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg-surface);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  :global(.page-header h2),
+  :global(.table-header h2) {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-action-primary);
+  }
+
+  :global(.page-header-title-row) {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+
+  :global(.page-header.page-header--stacked) {
+    align-items: flex-start;
+  }
 </style>

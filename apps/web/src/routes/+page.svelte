@@ -30,19 +30,28 @@
   } from "$lib/search/protocol";
   import {
     ATTRIBUTES_CHANNEL,
+    type AttributesContextPayload,
     type AttributesMessage,
   } from "$lib/attributes/protocol";
   import { getDescendantClasses } from "$lib/ifc/schema";
   import { getGraphStore } from "$lib/graph/graphStore.svelte";
   import { computeSubgraph } from "$lib/graph/subgraph";
-  import { GRAPH_CHANNEL, type GraphMessage } from "$lib/graph/protocol";
+  import {
+    GRAPH_CHANNEL,
+    type GraphContextPayload,
+    type GraphMessage,
+  } from "$lib/graph/protocol";
   import {
     TABLE_CHANNEL,
     TABLE_PROTOCOL_VERSION,
-    ENABLE_TABLE_VIEWER_SELECTION_SYNC,
     type TableMessage,
   } from "$lib/table/protocol";
   import { SCHEMA_CHANNEL, type SchemaMessage } from "$lib/schema/protocol";
+  import {
+    VALIDATION_CHANNEL,
+    type ValidationContextPayload,
+    type ValidationMessage,
+  } from "$lib/validation/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
@@ -99,6 +108,35 @@
   let schemaPopup: Window | null = null;
   let schemaChannel: BroadcastChannel | null = null;
   let validationPopup: Window | null = null;
+  let validationChannel: BroadcastChannel | null = null;
+  const APPLIED_FILTER_SETS_COMBINATION_LOGIC: "OR" = "OR";
+  let lastSentAttributesContextKey: string | null = null;
+  let lastSentGraphContextKey: string | null = null;
+  let lastSentTableContextKey: string | null = null;
+  let lastSentValidationContextKey: string | null = null;
+  /** Set by table popup via sync-mode message; when true, selection syncs both ways. */
+  let tableSyncEnabled = $state(false);
+
+  type MessageWithType = { type: string };
+  type ChannelHandlers<T extends MessageWithType> = {
+    [K in T["type"]]?: (message: Extract<T, { type: K }>) => void;
+  };
+
+  function setupChannel<T extends MessageWithType>(
+    channelName: string,
+    handlers: ChannelHandlers<T>,
+  ): BroadcastChannel {
+    const nextChannel = new BroadcastChannel(channelName);
+    nextChannel.onmessage = (e: MessageEvent<T>) => {
+      const message = e.data;
+      if (!message || typeof message.type !== "string") return;
+      const handler = handlers[message.type as T["type"]] as
+        | ((msg: T) => void)
+        | undefined;
+      handler?.(message);
+    };
+    return nextChannel;
+  }
 
   // Load saved settings and initialize state (only in browser)
   let settingsLoaded = $state(false);
@@ -132,14 +170,12 @@
     agentEventSource = es;
     es.onmessage = (e) => {
       try {
-        console.log("agent-events message", e.data);
         const event: AgentBusEvent = JSON.parse(e.data);
         if (
           event.type === "filter-applied" ||
           event.type === "filter-set-changed"
         ) {
           autoLoadAppliedFilterSets(event.branchId);
-          console.log("filter-applied or filter-set-changed", event);
         }
       } catch {}
     };
@@ -239,6 +275,68 @@
           ) ??
           null),
   );
+
+  function resolveContextNames(
+    projectId: string | null,
+    branchId: string | null,
+  ): { projectName: string | null; branchName: string | null } {
+    let projectName: string | null = null;
+    let branchName: string | null = null;
+    let project: ProjectData | null = null;
+
+    if (projectId != null) {
+      project = projects.find((p) => p.id === projectId) ?? null;
+      projectName = project?.name ?? null;
+    }
+
+    if (branchId == null) {
+      return { projectName, branchName };
+    }
+
+    const branchInProject = project?.branches.find((b) => b.id === branchId);
+    if (branchInProject) {
+      return { projectName, branchName: branchInProject.name };
+    }
+
+    for (const p of projects) {
+      const branch = p.branches.find((b) => b.id === branchId);
+      if (!branch) continue;
+      if (projectName == null) projectName = p.name;
+      branchName = branch.name;
+      break;
+    }
+
+    return { projectName, branchName };
+  }
+
+  function openPopupWithContext(
+    popup: Window | null,
+    options: {
+      route: string;
+      name: string;
+      features: string;
+      params: Record<string, string | number | null>;
+      sendContext: () => void;
+    },
+  ): Window | null {
+    if (!popup || popup.closed) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(options.params)) {
+        if (value != null) query.set(key, String(value));
+      }
+      const queryString = query.toString();
+      const url = queryString
+        ? `${options.route}?${queryString}`
+        : options.route;
+      const nextPopup = window.open(url, options.name, options.features);
+      setTimeout(options.sendContext, 500);
+      return nextPopup;
+    }
+
+    popup.focus();
+    options.sendContext();
+    return popup;
+  }
 
   // ---- Lifecycle ----
 
@@ -377,50 +475,12 @@
 
   // Keep Attribute pop-out in sync when selection or context changes
   $effect(() => {
-    const branchId = projectState.activeBranchId;
-    const projectId = projectState.activeProjectId;
-    const revision = revisionState.activeRevision;
-    const globalId = selection.activeGlobalId;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
-    if (!attributesChannel) return;
-    attributesChannel.postMessage({
-      type: "context",
-      branchId,
-      projectId,
-      branchName: branch?.name ?? null,
-      projectName: project?.name ?? null,
-      revision,
-      globalId,
-    } satisfies AttributesMessage);
+    sendAttributesContext();
   });
 
   // Keep Graph popup in sync when selection or context changes
   $effect(() => {
-    const branchId = projectState.activeBranchId;
-    const projectId = projectState.activeProjectId;
-    const revision = revisionState.activeRevision;
-    const globalId = selection.activeGlobalId;
-    const subgraphDepth = selection.subgraphDepth;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
-    if (!graphChannel) return;
-    graphChannel.postMessage({
-      type: "context",
-      branchId,
-      projectId,
-      branchName: branch?.name ?? null,
-      projectName: project?.name ?? null,
-      revision,
-      globalId,
-      subgraphDepth,
-    } satisfies GraphMessage);
+    sendGraphContext();
   });
 
   // Keep Schema popup in sync when project/branch/revision changes
@@ -428,20 +488,21 @@
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
     if (!schemaChannel) return;
     schemaChannel.postMessage({
       type: "context",
       branchId,
       projectId,
       revision,
-      projectName: project?.name ?? null,
-      branchName: branch?.name ?? null,
+      projectName,
+      branchName,
     } satisfies SchemaMessage);
+  });
+
+  // Keep Validation popup in sync when project/branch/revision changes
+  $effect(() => {
+    sendValidationContext();
   });
 
   let visibilityCleanup: (() => void) | null = null;
@@ -454,11 +515,8 @@
         handleApplyFilters(e.data.filters);
       } else if (e.data.type === "apply-filter-sets") {
         // Apply payload immediately, then refresh from API as source of truth.
-        void handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
-        void reloadGeometryFromAppliedFilterSets(
-          e.data.filterSets,
-          e.data.combinationLogic,
-        );
+        void handleApplyFilterSets(e.data.filterSets);
+        void reloadGeometryFromAppliedFilterSets(e.data.filterSets);
       } else if (e.data.type === "request-branch-context") {
         sendBranchContext();
       } else if (e.data.type === "set-filter-set-colors") {
@@ -473,25 +531,20 @@
 
     function applyFromStorage(payload: {
       filterSets: FilterSet[];
-      combinationLogic: "AND" | "OR";
     }) {
-      void handleApplyFilterSets(payload.filterSets, payload.combinationLogic);
-      void reloadGeometryFromAppliedFilterSets(
-        payload.filterSets,
-        payload.combinationLogic,
-      );
+      void handleApplyFilterSets(payload.filterSets);
+      void reloadGeometryFromAppliedFilterSets(payload.filterSets);
     }
 
     const onStorage = (e: StorageEvent) => {
       if (e.key !== APPLY_FILTER_SETS_STORAGE_KEY || !e.newValue) return;
       try {
-        const { filterSets, combinationLogic } = JSON.parse(e.newValue) as {
+        const { filterSets } = JSON.parse(e.newValue) as {
           filterSets: FilterSet[];
           combinationLogic: "AND" | "OR";
           timestamp?: number;
         };
-        if (filterSets && combinationLogic)
-          applyFromStorage({ filterSets, combinationLogic });
+        if (filterSets) applyFromStorage({ filterSets });
       } catch {}
     };
     window.addEventListener("storage", onStorage);
@@ -499,9 +552,8 @@
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
       if (e.data?.type !== APPLY_FILTER_SETS_MESSAGE_TYPE) return;
-      const { filterSets, combinationLogic } = e.data;
-      if (filterSets && combinationLogic)
-        applyFromStorage({ filterSets, combinationLogic });
+      const { filterSets } = e.data;
+      if (filterSets) applyFromStorage({ filterSets });
     };
     window.addEventListener("message", onMessage);
 
@@ -514,20 +566,15 @@
     try {
       const stored = localStorage.getItem(APPLY_FILTER_SETS_STORAGE_KEY);
       if (stored) {
-        const { filterSets, combinationLogic, timestamp } = JSON.parse(
+        const { filterSets, timestamp } = JSON.parse(
           stored,
         ) as {
           filterSets: FilterSet[];
           combinationLogic: "AND" | "OR";
           timestamp?: number;
         };
-        if (
-          filterSets &&
-          combinationLogic &&
-          timestamp &&
-          Date.now() - timestamp < 60000
-        ) {
-          applyFromStorage({ filterSets, combinationLogic });
+        if (filterSets && timestamp && Date.now() - timestamp < 60000) {
+          applyFromStorage({ filterSets });
         }
       }
     } catch {}
@@ -544,49 +591,54 @@
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    attributesChannel = new BroadcastChannel(ATTRIBUTES_CHANNEL);
-    attributesChannel.onmessage = (e: MessageEvent<AttributesMessage>) => {
-      if (e.data.type === "request-context") {
-        sendAttributesContext();
-      } else if (e.data.type === "selection-changed") {
-        selection.activeGlobalId = e.data.globalId;
-      }
-    };
+    attributesChannel = setupChannel<AttributesMessage>(ATTRIBUTES_CHANNEL, {
+      "request-context": () => {
+        sendAttributesContext(true);
+      },
+      "selection-changed": (message) => {
+        selection.activeGlobalId = message.globalId;
+      },
+    });
 
-    graphChannel = new BroadcastChannel(GRAPH_CHANNEL);
-    graphChannel.onmessage = (e: MessageEvent<GraphMessage>) => {
-      if (e.data.type === "request-context") {
-        sendGraphContext();
-      } else if (e.data.type === "selection-changed") {
-        selection.activeGlobalId = e.data.globalId;
-      }
-    };
+    graphChannel = setupChannel<GraphMessage>(GRAPH_CHANNEL, {
+      "request-context": () => {
+        sendGraphContext(true);
+      },
+      "selection-changed": (message) => {
+        selection.activeGlobalId = message.globalId;
+      },
+    });
 
-    tableChannel = new BroadcastChannel(TABLE_CHANNEL);
-    tableChannel.onmessage = (e: MessageEvent<TableMessage>) => {
-      if (e.data.type === "request-context") {
-        sendTableContext();
-      } else if (
-        ENABLE_TABLE_VIEWER_SELECTION_SYNC &&
-        e.data.type === "selection-changed"
-      ) {
-        selection.activeGlobalId = e.data.globalId;
-      }
-    };
+    tableChannel = setupChannel<TableMessage>(TABLE_CHANNEL, {
+      "request-context": () => {
+        sendTableContext(true);
+      },
+      "sync-mode": (message) => {
+        tableSyncEnabled = message.enabled;
+      },
+      "selection-changed": (message) => {
+        if (!tableSyncEnabled) return;
+        selection.activeGlobalId = message.globalId;
+      },
+    });
 
-    agentChannel = new BroadcastChannel(AGENT_CHANNEL);
-    agentChannel.onmessage = (e: MessageEvent<AgentChannelMessage>) => {
-      if (e.data.type === "request-context") {
+    agentChannel = setupChannel<AgentChannelMessage>(AGENT_CHANNEL, {
+      "request-context": () => {
         sendAgentContext();
-      }
-    };
+      },
+    });
 
-    schemaChannel = new BroadcastChannel(SCHEMA_CHANNEL);
-    schemaChannel.onmessage = (e: MessageEvent<SchemaMessage>) => {
-      if (e.data.type === "request-context") {
+    schemaChannel = setupChannel<SchemaMessage>(SCHEMA_CHANNEL, {
+      "request-context": () => {
         sendSchemaContext();
-      }
-    };
+      },
+    });
+
+    validationChannel = setupChannel<ValidationMessage>(VALIDATION_CHANNEL, {
+      "request-context": () => {
+        sendValidationContext(true);
+      },
+    });
   });
 
   onDestroy(() => {
@@ -597,11 +649,12 @@
     tableChannel?.close();
     agentChannel?.close();
     schemaChannel?.close();
+    validationChannel?.close();
   });
 
-  // Sync viewer selection to table popup (dormant when ENABLE_TABLE_VIEWER_SELECTION_SYNC is false).
+  // Sync viewer selection to table popup when table has sync enabled.
   $effect(() => {
-    if (!ENABLE_TABLE_VIEWER_SELECTION_SYNC) return;
+    if (!tableSyncEnabled) return;
     const globalId = selection.activeGlobalId;
     tableChannel?.postMessage({
       type: "selection-sync",
@@ -644,69 +697,79 @@
     };
   });
 
-  function sendAttributesContext() {
+  function buildAttributesContextPayload(): AttributesContextPayload {
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
-    attributesChannel?.postMessage({
-      type: "context",
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
+    return {
       branchId,
       projectId,
-      branchName: branch?.name ?? null,
-      projectName: project?.name ?? null,
+      branchName,
+      projectName,
       revision,
       globalId,
+    };
+  }
+
+  function sendAttributesContext(force = false) {
+    const payload = buildAttributesContextPayload();
+    if (!attributesChannel) return;
+    const key = JSON.stringify(payload);
+    if (!force && key === lastSentAttributesContextKey) return;
+    lastSentAttributesContextKey = key;
+    attributesChannel.postMessage({
+      type: "context",
+      ...payload,
     } satisfies AttributesMessage);
   }
 
-  function sendGraphContext() {
+  function buildGraphContextPayload(): GraphContextPayload {
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const globalId = selection.activeGlobalId;
     const subgraphDepth = selection.subgraphDepth;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
-    graphChannel?.postMessage({
-      type: "context",
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
+    return {
       branchId,
       projectId,
-      branchName: branch?.name ?? null,
-      projectName: project?.name ?? null,
+      branchName,
+      projectName,
       revision,
       globalId,
       subgraphDepth,
+    };
+  }
+
+  function sendGraphContext(force = false) {
+    const payload = buildGraphContextPayload();
+    if (!graphChannel) return;
+    const key = JSON.stringify(payload);
+    if (!force && key === lastSentGraphContextKey) return;
+    lastSentGraphContextKey = key;
+    graphChannel.postMessage({
+      type: "context",
+      ...payload,
     } satisfies GraphMessage);
   }
 
-  function sendTableContext() {
+  function sendTableContext(force = false) {
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
     const products = searchState.products;
 
     // Resolve human-readable names from loaded project list
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
 
     const contextBase = {
       type: "context" as const,
       branchId,
       projectId,
-      branchName: branch?.name ?? null,
-      projectName: project?.name ?? null,
+      branchName,
+      projectName,
       revision,
       version: TABLE_PROTOCOL_VERSION,
       activeGlobalId: selection.activeGlobalId,
@@ -723,13 +786,26 @@
       tag: p.tag,
       attributes: null,
     }));
+    const contextKey = JSON.stringify({
+      branchId,
+      projectId,
+      revision,
+      branchName,
+      projectName,
+      activeGlobalId: selection.activeGlobalId,
+      version: TABLE_PROTOCOL_VERSION,
+      products: leanProducts.map((p) => p.globalId),
+    });
+    if (!force && contextKey === lastSentTableContextKey) return;
+    lastSentTableContextKey = contextKey;
+
     tableChannel?.postMessage({
       ...contextBase,
       products: leanProducts,
     } satisfies TableMessage);
     // Do not send attribute chunks here; table will request them after receiving context
     // so it is guaranteed to be listening when chunks arrive (fixes chunks not reaching table).
-    if (ENABLE_TABLE_VIEWER_SELECTION_SYNC) {
+    if (tableSyncEnabled) {
       tableChannel?.postMessage({
         type: "selection-sync",
         globalId: selection.activeGlobalId,
@@ -741,18 +817,14 @@
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
     agentChannel?.postMessage({
       type: "context",
       branchId,
       projectId,
       revision,
-      projectName: project?.name ?? null,
-      branchName: branch?.name ?? null,
+      projectName,
+      branchName,
     } satisfies AgentChannelMessage);
   }
 
@@ -760,162 +832,141 @@
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
     const revision = revisionState.activeRevision;
-    const project = projects.find((p) => p.id === projectId) ?? null;
-    const branch =
-      project?.branches.find((b) => b.id === branchId) ??
-      projects.flatMap((p) => p.branches).find((b) => b.id === branchId) ??
-      null;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
     schemaChannel?.postMessage({
       type: "context",
       branchId,
       projectId,
       revision,
-      projectName: project?.name ?? null,
-      branchName: branch?.name ?? null,
+      projectName,
+      branchName,
     } satisfies SchemaMessage);
   }
 
+  function buildValidationContextPayload(): ValidationContextPayload {
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
+    return {
+      branchId,
+      projectId,
+      revision,
+      projectName,
+      branchName,
+    };
+  }
+
+  function sendValidationContext(force = false) {
+    if (!validationChannel) return;
+    const payload = buildValidationContextPayload();
+    const key = JSON.stringify(payload);
+    if (!force && key === lastSentValidationContextKey) return;
+    lastSentValidationContextKey = key;
+    validationChannel.postMessage({
+      type: "context",
+      ...payload,
+    } satisfies ValidationMessage);
+  }
+
   function openAgentPopup() {
-    if (!agentPopup || agentPopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      const query = params.toString();
-      const url = query ? `/agent?${query}` : "/agent";
-      agentPopup = window.open(url, "bimatlas-agent", "width=460,height=700");
-      setTimeout(sendAgentContext, 500);
-    } else {
-      agentPopup.focus();
-      sendAgentContext();
-    }
+    agentPopup = openPopupWithContext(agentPopup, {
+      route: "/agent",
+      name: "bimatlas-agent",
+      features: "width=460,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+      },
+      sendContext: sendAgentContext,
+    });
   }
 
   function openGraphPopup() {
-    if (!graphPopup || graphPopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const globalId = selection.activeGlobalId;
-      const subgraphDepth = selection.subgraphDepth;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      if (globalId != null) params.set("globalId", String(globalId));
-      params.set("subgraphDepth", String(subgraphDepth));
-      const query = params.toString();
-      const url = query ? `/graph?${query}` : "/graph";
-      graphPopup = window.open(url, "bimatlas-graph", "width=800,height=700");
-      setTimeout(sendGraphContext, 500);
-    } else {
-      graphPopup.focus();
-      sendGraphContext();
-    }
+    graphPopup = openPopupWithContext(graphPopup, {
+      route: "/graph",
+      name: "bimatlas-graph",
+      features: "width=800,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+        globalId: selection.activeGlobalId,
+        subgraphDepth: selection.subgraphDepth,
+      },
+      sendContext: () => sendGraphContext(true),
+    });
   }
 
   function openSearchPopup() {
-    if (!searchPopup || searchPopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      const query = params.toString();
-      const url = query ? `/search?${query}` : "/search";
-      searchPopup = window.open(url, "bimatlas-search", "width=520,height=700");
-      setTimeout(sendBranchContext, 500);
-    } else {
-      searchPopup.focus();
-      sendBranchContext();
-    }
+    searchPopup = openPopupWithContext(searchPopup, {
+      route: "/search",
+      name: "bimatlas-search",
+      features: "width=520,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+      },
+      sendContext: sendBranchContext,
+    });
   }
 
   function openAttributesPopup() {
-    if (!attributePopup || attributePopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const globalId = selection.activeGlobalId;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      if (globalId != null) params.set("globalId", String(globalId));
-      const query = params.toString();
-      const url = query ? `/attributes?${query}` : "/attributes";
-      attributePopup = window.open(
-        url,
-        "bimatlas-attributes",
-        "width=420,height=700",
-      );
-      setTimeout(sendAttributesContext, 500);
-    } else {
-      attributePopup.focus();
-      sendAttributesContext();
-    }
+    attributePopup = openPopupWithContext(attributePopup, {
+      route: "/attributes",
+      name: "bimatlas-attributes",
+      features: "width=420,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+        globalId: selection.activeGlobalId,
+      },
+      sendContext: () => sendAttributesContext(true),
+    });
   }
 
   function openTablePopup() {
-    if (!tablePopup || tablePopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      const query = params.toString();
-      const url = query ? `/table?${query}` : "/table";
-      tablePopup = window.open(url, "bimatlas-table", "width=900,height=700");
-      setTimeout(sendTableContext, 500);
-    } else {
-      tablePopup.focus();
-      sendTableContext();
-    }
+    tablePopup = openPopupWithContext(tablePopup, {
+      route: "/table",
+      name: "bimatlas-table",
+      features: "width=900,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+      },
+      sendContext: () => sendTableContext(true),
+    });
   }
 
   function openSchemaPopup() {
-    if (!schemaPopup || schemaPopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      const query = params.toString();
-      const url = query ? `/schema?${query}` : "/schema";
-      schemaPopup = window.open(url, "bimatlas-schema", "width=900,height=700");
-      setTimeout(sendSchemaContext, 500);
-    } else {
-      schemaPopup.focus();
-      sendSchemaContext();
-    }
+    schemaPopup = openPopupWithContext(schemaPopup, {
+      route: "/schema",
+      name: "bimatlas-schema",
+      features: "width=900,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+      },
+      sendContext: sendSchemaContext,
+    });
   }
 
   function openValidationPopup() {
-    if (!validationPopup || validationPopup.closed) {
-      const branchId = projectState.activeBranchId;
-      const projectId = projectState.activeProjectId;
-      const revision = revisionState.activeRevision;
-      const params = new URLSearchParams();
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      const query = params.toString();
-      const url = query ? `/validation?${query}` : "/validation";
-      validationPopup = window.open(
-        url,
-        "bimatlas-validation",
-        "width=900,height=700",
-      );
-    } else {
-      validationPopup.focus();
-    }
+    validationPopup = openPopupWithContext(validationPopup, {
+      route: "/validation",
+      name: "bimatlas-validation",
+      features: "width=900,height=700",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+      },
+      sendContext: () => sendValidationContext(true),
+    });
   }
 
   function filtersToQueryVars(
@@ -970,7 +1021,6 @@
 
   function filterSetsToQueryVars(
     filterSets: FilterSet[],
-    combinationLogic: "AND" | "OR",
   ): Record<string, unknown> {
     if (filterSets.length === 0) return {};
 
@@ -991,7 +1041,6 @@
 
   async function reloadGeometryFromAppliedFilterSets(
     fallbackFilterSets?: FilterSet[],
-    fallbackCombinationLogic: "AND" | "OR" = "OR",
   ) {
     const branchId = projectState.activeBranchId;
     if (!branchId) return;
@@ -1005,27 +1054,18 @@
         .toPromise();
       const data = result.data?.appliedFilterSets;
       const filterSets = data?.filterSets ?? [];
-      const combinationLogic = (
-        data?.combinationLogic === "AND" ? "AND" : "OR"
-      ) as "AND" | "OR";
-      await handleApplyFilterSets(filterSets, combinationLogic);
+      await handleApplyFilterSets(filterSets);
     } catch (err) {
       console.error("Failed to reload geometry from applied filter sets:", err);
       if (fallbackFilterSets) {
-        await handleApplyFilterSets(
-          fallbackFilterSets,
-          fallbackCombinationLogic,
-        );
+        await handleApplyFilterSets(fallbackFilterSets);
       }
     }
   }
 
-  async function handleApplyFilterSets(
-    filterSets: FilterSet[],
-    combinationLogic: "AND" | "OR",
-  ) {
+  async function handleApplyFilterSets(filterSets: FilterSet[]) {
     searchState.appliedFilterSets = filterSets;
-    searchState.combinationLogic = combinationLogic;
+    searchState.combinationLogic = APPLIED_FILTER_SETS_COMBINATION_LOGIC;
     searchState.activeFilters = [];
     const mgr = sceneManager;
     const rev = revisionState.activeRevision;
@@ -1034,7 +1074,7 @@
 
     const extraVars =
       filterSets.length > 0
-        ? filterSetsToQueryVars(filterSets, combinationLogic)
+        ? filterSetsToQueryVars(filterSets)
         : {};
     await loadGeometry(mgr, rev, branchId, extraVars);
     if (projectState.activeBranchId !== branchId) return;
@@ -1068,10 +1108,7 @@
         .toPromise();
       const data = result.data?.appliedFilterSets;
       if (data && data.filterSets && data.filterSets.length > 0) {
-        await handleApplyFilterSets(
-          data.filterSets,
-          data.combinationLogic ?? "AND",
-        );
+        await handleApplyFilterSets(data.filterSets);
         return true;
       }
       searchState.appliedFilterSets = [];
@@ -3434,9 +3471,6 @@
 
   .input::placeholder {
     color: var(--color-text-muted);
-  }
-
-  .create-project-btn {
   }
 
   .sidebar-section {

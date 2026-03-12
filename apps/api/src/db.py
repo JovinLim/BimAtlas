@@ -1682,6 +1682,7 @@ def fetch_all_ifc_schemas() -> list[dict]:
                        ARRAY[]::uuid[]
                    ) AS project_ids
             FROM ifc_schema s
+            WHERE s.active = TRUE
             ORDER BY s.version_name
             """
         )
@@ -1733,11 +1734,21 @@ def unapply_schema_from_project(project_id: str, schema_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def soft_delete_uploaded_schema(schema_id: str) -> bool:
+    """Flag an uploaded IFC schema as deleted (active = false). Returns True if updated."""
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE ifc_schema SET active = FALSE WHERE schema_id = %s AND active = TRUE",
+            (schema_id,),
+        )
+        return cur.rowcount > 0
+
+
 def fetch_ifc_schema_by_id(schema_id: str) -> dict | None:
     """Fetch ifc_schema row by schema_id. Returns None if not found."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT schema_id, version_name FROM ifc_schema WHERE schema_id = %s",
+            "SELECT schema_id, version_name FROM ifc_schema WHERE schema_id = %s AND active = TRUE",
             (schema_id,),
         )
         row = cur.fetchone()

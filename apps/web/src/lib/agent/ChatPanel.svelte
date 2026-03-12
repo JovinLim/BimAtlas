@@ -555,6 +555,20 @@
     const text = inputText.trim();
     if (!text || loading) return;
 
+    if (savedAgents.length > 0 && selectedAgentId == null) {
+      messages = [
+        ...messages,
+        {
+          id: generateMessageId(),
+          role: "assistant",
+          content: "Please select an agent from the Model dropdown above.",
+          timestamp: new Date().toISOString(),
+        },
+      ];
+      await scrollToBottom();
+      return;
+    }
+
     if (!branchId) {
       messages = [
         ...messages,
@@ -933,7 +947,8 @@
         type="button"
         class="send-btn"
         class:stop-btn={loading}
-        disabled={!loading && !inputText.trim()}
+        disabled={!loading && (!inputText.trim() || (savedAgents.length > 0 && selectedAgentId == null))}
+        title={savedAgents.length > 0 && selectedAgentId == null ? "Select an agent first" : undefined}
         onclick={loading ? stopStream : sendMessage}
         aria-label={loading ? "Stop" : "Send message"}
       >

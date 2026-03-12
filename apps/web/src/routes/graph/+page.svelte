@@ -30,6 +30,7 @@
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
   let lastFetchedBranchId = $state<string | null>(null);
   let lastFetchedRevision = $state<number | null>(null);
+  let lastSentSelectionId: string | null = null;
 
   function applyContextFromUrl() {
     const url = $page.url;
@@ -74,6 +75,15 @@
   function handleIncomingMessage(e: MessageEvent<GraphMessage>) {
     const msg = e.data;
     if (msg.type === "context") {
+      const contextChanged =
+        branchId !== msg.branchId ||
+        projectId !== msg.projectId ||
+        branchName !== (msg.branchName ?? null) ||
+        projectName !== (msg.projectName ?? null) ||
+        revision !== msg.revision ||
+        globalId !== msg.globalId ||
+        subgraphDepth !== msg.subgraphDepth;
+
       branchId = msg.branchId;
       projectId = msg.projectId;
       branchName = msg.branchName ?? null;
@@ -82,21 +92,7 @@
       globalId = msg.globalId;
       subgraphDepth = msg.subgraphDepth;
 
-      const params = new URLSearchParams($page.url.searchParams);
-      if (branchId != null) params.set("branchId", String(branchId));
-      else params.delete("branchId");
-      if (projectId != null) params.set("projectId", String(projectId));
-      else params.delete("projectId");
-      if (revision != null) params.set("revision", String(revision));
-      else params.delete("revision");
-      if (globalId != null) params.set("globalId", String(globalId));
-      else params.delete("globalId");
-      params.set("subgraphDepth", String(subgraphDepth));
-      window.history.replaceState(
-        null,
-        "",
-        `${$page.url.pathname}?${params.toString()}`,
-      );
+      if (contextChanged) syncUrlWithState();
 
       if (contextRetryInterval != null) {
         clearInterval(contextRetryInterval);
@@ -110,10 +106,30 @@
   }
 
   function handleNodeClick(id: string) {
+    if (lastSentSelectionId === id) return;
+    lastSentSelectionId = id;
     channel?.postMessage({
       type: "selection-changed",
       globalId: id,
     } satisfies GraphMessage);
+  }
+
+  function syncUrlWithState() {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams($page.url.searchParams);
+    if (branchId != null) params.set("branchId", String(branchId));
+    else params.delete("branchId");
+    if (projectId != null) params.set("projectId", String(projectId));
+    else params.delete("projectId");
+    if (revision != null) params.set("revision", String(revision));
+    else params.delete("revision");
+    if (globalId != null) params.set("globalId", String(globalId));
+    else params.delete("globalId");
+    params.set("subgraphDepth", String(subgraphDepth));
+    const nextQuery = params.toString();
+    const currentQuery = $page.url.searchParams.toString();
+    if (nextQuery === currentQuery) return;
+    window.history.replaceState(null, "", `${$page.url.pathname}?${nextQuery}`);
   }
 
   /** Map selected node to owning product when it is a synthetic IfcShapeRepresentation. */
@@ -158,31 +174,12 @@
     const full = graphStore.data;
     const sel = globalId;
     const depth = subgraphDepth;
-    console.log(
-      "[Graph popup] derive filteredGraphData",
-      "fullNodes=",
-      full.nodes.length,
-      "fullLinks=",
-      full.links.length,
-      "globalId=",
-      sel,
-      "depth=",
-      depth,
-    );
     if (!sel) {
       return { nodes: [], links: [] } as GraphData;
     }
     const effectiveId = effectiveSelectedId(full, sel);
     const ids = computeSubgraph(full, effectiveId, depth);
-    const filtered = filterGraphToIds(full, ids);
-    console.log(
-      "[Graph popup] filteredGraphData",
-      "nodes=",
-      filtered.nodes.length,
-      "links=",
-      filtered.links.length,
-    );
-    return filtered;
+    return filterGraphToIds(full, ids);
   });
 
   const graphEmptyMessage = $derived.by(() => (!globalId ? EMPTY_MESSAGE : undefined));
@@ -196,19 +193,6 @@
   const graphDataProp = $derived.by(() => {
     if (graphStore.loading) return undefined;
     const full = graphStore.data;
-    console.log(
-      "[Graph popup] graphDataProp derive",
-      "fullNodes=",
-      full.nodes.length,
-      "fullLinks=",
-      full.links.length,
-      "globalId=",
-      globalId,
-      "filteredNodes=",
-      filteredGraphData.nodes.length,
-      "filteredLinks=",
-      filteredGraphData.links.length,
-    );
     if (!full.nodes.length) return undefined;
     if (!globalId) {
       // No selection: do not render any graph elements, only the emptyMessage overlay.
@@ -244,14 +228,8 @@
 
   // Keep URL in sync with current depth for sharable links
   $effect(() => {
-    const url = $page.url;
-    const params = new URLSearchParams(url.searchParams);
-    params.set("subgraphDepth", String(subgraphDepth));
-    window.history.replaceState(
-      null,
-      "",
-      `${url.pathname}?${params.toString()}`,
-    );
+    void subgraphDepth;
+    syncUrlWithState();
   });
 
   onMount(() => {
@@ -298,7 +276,7 @@
 </svelte:head>
 
 <div class="graph-page">
-  <header class="page-header">
+  <header class="page-header page-header--stacked">
     <div class="page-header-main">
       <h2>Graph</h2>
       {#if branchName || projectName || branchId || projectId}
@@ -336,28 +314,10 @@
     overflow: hidden;
   }
 
-  .page-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
   .page-header-main {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-  }
-
-  .page-header h2 {
-    margin: 0;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-brand-500);
   }
 
   .page-header-controls {

@@ -18,6 +18,8 @@
   let channel: BroadcastChannel | null = null;
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
+  let lastContextKey: string | null = null;
+  let lastSelectionSent: string | null = null;
 
   function applyContextFromUrl() {
     const url = $page.url;
@@ -51,37 +53,76 @@
     }
   }
 
+  function syncUrlWithContext() {
+    const params = new URLSearchParams($page.url.searchParams);
+    if (branchId != null) params.set("branchId", String(branchId));
+    else params.delete("branchId");
+    if (projectId != null) params.set("projectId", String(projectId));
+    else params.delete("projectId");
+    if (revision != null) params.set("revision", String(revision));
+    else params.delete("revision");
+    if (globalId != null) params.set("globalId", String(globalId));
+    else params.delete("globalId");
+    const nextQuery = params.toString();
+    const currentQuery = $page.url.searchParams.toString();
+    if (nextQuery === currentQuery) return;
+    window.history.replaceState(null, "", `${$page.url.pathname}?${nextQuery}`);
+  }
+
+  function contextKey(msg: Extract<AttributesMessage, { type: "context" }>): string {
+    return JSON.stringify({
+      branchId: msg.branchId,
+      projectId: msg.projectId,
+      branchName: msg.branchName ?? null,
+      projectName: msg.projectName ?? null,
+      revision: msg.revision,
+      globalId: msg.globalId,
+    });
+  }
+
+  function handleContextMessage(msg: Extract<AttributesMessage, { type: "context" }>) {
+    const nextContextKey = contextKey(msg);
+    if (nextContextKey === lastContextKey) return;
+    lastContextKey = nextContextKey;
+
+    branchId = msg.branchId;
+    projectId = msg.projectId;
+    branchName = msg.branchName ?? null;
+    projectName = msg.projectName ?? null;
+    revision = msg.revision;
+    globalId = msg.globalId;
+    syncUrlWithContext();
+
+    if (contextRetryInterval != null) {
+      clearInterval(contextRetryInterval);
+      contextRetryInterval = null;
+    }
+  }
+
+  type AttributesMessageHandlers = {
+    [K in AttributesMessage["type"]]?: (
+      message: Extract<AttributesMessage, { type: K }>,
+    ) => void;
+  };
+
+  const attributesMessageHandlers: AttributesMessageHandlers = {
+    context: handleContextMessage,
+    "selection-changed": (message) => {
+      if (globalId === message.globalId) return;
+      globalId = message.globalId;
+    },
+    "close-panel": () => {
+      window.close();
+    },
+  };
+
   function handleIncomingMessage(e: MessageEvent<AttributesMessage>) {
     const msg = e.data;
-    if (msg.type === "context") {
-      branchId = msg.branchId;
-      projectId = msg.projectId;
-      branchName = msg.branchName ?? null;
-      projectName = msg.projectName ?? null;
-      revision = msg.revision;
-      globalId = msg.globalId;
-
-      // Persist current context in URL for refreshes
-      const params = new URLSearchParams($page.url.searchParams);
-      if (branchId != null) params.set("branchId", String(branchId));
-      if (projectId != null) params.set("projectId", String(projectId));
-      if (revision != null) params.set("revision", String(revision));
-      if (globalId != null) params.set("globalId", String(globalId));
-      window.history.replaceState(
-        null,
-        "",
-        `${$page.url.pathname}?${params.toString()}`,
-      );
-
-      if (contextRetryInterval != null) {
-        clearInterval(contextRetryInterval);
-        contextRetryInterval = null;
-      }
-    } else if (msg.type === "selection-changed") {
-      globalId = msg.globalId;
-    } else if (msg.type === "close-panel") {
-      window.close();
-    }
+    if (!msg || typeof msg.type !== "string") return;
+    const handler = attributesMessageHandlers[
+      msg.type as AttributesMessage["type"]
+    ] as ((message: AttributesMessage) => void) | undefined;
+    handler?.(msg);
   }
 
   function requestContext() {
@@ -90,6 +131,8 @@
 
   function handleSelectGlobalId(id: string | null) {
     globalId = id;
+    if (lastSelectionSent === id) return;
+    lastSelectionSent = id;
     channel?.postMessage({
       type: "selection-changed",
       globalId: id,
@@ -144,7 +187,9 @@
 
 <div class="attributes-page">
   <header class="page-header">
-    <h2>Attribute Panel</h2>
+    <div class="page-header-title-row">
+      <h2>Attributes</h2>
+    </div>
     {#if branchName || projectName || branchId || projectId}
       <span class="context-pill mono">
         {projectName ?? projectId ?? "—"} / {branchName ?? branchId ?? "—"}
@@ -172,29 +217,9 @@
     flex-direction: column;
     background: var(--color-bg-canvas);
     color: var(--color-text-primary);
-    padding: 1rem 1.25rem;
-    box-sizing: border-box;
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 0.8rem;
     overflow: hidden;
-  }
-
-  .page-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .page-header h2 {
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--color-text-primary);
   }
 
   .context-pill {
@@ -223,8 +248,9 @@
   .panel-wrapper {
     flex: 1 1 0;
     min-height: 0;
-    padding-top: 0.5rem;
+    padding: 1rem 1.25rem;
     overflow-y: auto;
+    box-sizing: border-box;
   }
 </style>
 
