@@ -138,13 +138,19 @@ CREATE INDEX IF NOT EXISTS idx_ifc_entity_validation_run
 -- ============================================================================
 -- Filter sets (named, reusable filter collections scoped to a branch)
 -- ============================================================================
+-- filters: Canonical tree shape { kind: "group", op: "ALL"|"ANY", children: [...] }
+--   - Group: { kind: "group", op: "ALL"|"ANY", children: [group|leaf, ...] }
+--   - Leaf:  { kind: "leaf", mode: "class"|"attribute"|"relation", ... }
+--   - Max depth 2 (root -> subgroup -> leaf). Legacy flat arrays are
+--     canonicalized by migration 012 and by the API at read time.
+-- logic: Deprecated; use filters.op. Kept for compatibility.
 
 CREATE TABLE IF NOT EXISTS filter_sets (
     filter_set_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     branch_id     UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
     name          VARCHAR NOT NULL,
     logic         logic_operator NOT NULL DEFAULT 'AND',
-    filters       JSONB NOT NULL DEFAULT '[]',
+    filters       JSONB NOT NULL DEFAULT '{"kind":"group","op":"ALL","children":[]}',
     color         VARCHAR NOT NULL DEFAULT '#4A90D9',
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now()

@@ -373,7 +373,13 @@ const FILTER_SET_FIELDS = `
 		relation
 		operator
 		valueType
+		relationTargetClass
+		relationTargetAttribute
+		relationTargetOperator
+		relationTargetValue
+		relationTargetValueType
 	}
+	filtersTree
 	color
 	createdAt
 	updatedAt
@@ -409,31 +415,33 @@ export const APPLIED_FILTER_SETS_QUERY = gql`
 	}
 `;
 
-/** Create a new filter set. */
+/** Create a new filter set. Supports filters (legacy) or filtersTree (canonical tree). */
 export const CREATE_FILTER_SET_MUTATION = gql`
 	mutation CreateFilterSet(
 		$branchId: String!
 		$name: String!
 		$logic: String!
-		$filters: [FilterInput!]!
+		$filters: [FilterInput!]
+		$filtersTree: JSON
 		$color: String
 	) {
-		createFilterSet(branchId: $branchId, name: $name, logic: $logic, filters: $filters, color: $color) {
+		createFilterSet(branchId: $branchId, name: $name, logic: $logic, filters: $filters, filtersTree: $filtersTree, color: $color) {
 			${FILTER_SET_FIELDS}
 		}
 	}
 `;
 
-/** Update an existing filter set. */
+/** Update an existing filter set. Supports filters (legacy) or filtersTree (canonical tree). */
 export const UPDATE_FILTER_SET_MUTATION = gql`
 	mutation UpdateFilterSet(
 		$id: String!
 		$name: String
 		$logic: String
 		$filters: [FilterInput!]
+		$filtersTree: JSON
 		$color: String
 	) {
-		updateFilterSet(id: $id, name: $name, logic: $logic, filters: $filters, color: $color) {
+		updateFilterSet(id: $id, name: $name, logic: $logic, filters: $filters, filtersTree: $filtersTree, color: $color) {
 			${FILTER_SET_FIELDS}
 		}
 	}

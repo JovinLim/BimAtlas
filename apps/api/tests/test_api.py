@@ -83,6 +83,23 @@ class TestUploadIfcEndpoint:
         data = response.json()
         assert data["branch_id"] == api_branch
 
+    def test_upload_ifc_stream_reports_progress_and_result(self, client, test_ifc_file, api_branch):
+        """Test streamed upload endpoint emits progress and final result events."""
+        with open(test_ifc_file, "rb") as f:
+            response = client.post(
+                "/upload-ifc/stream",
+                files={"file": (test_ifc_file.name, f, "application/octet-stream")},
+                data={"branch_id": str(api_branch)},
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+        assert any("progress" in line for line in lines)
+        assert any(line.get("type") == "result" for line in lines)
+        final = next(line["result"] for line in lines if line.get("type") == "result")
+        assert final["branch_id"] == api_branch
+        assert final["total_products"] > 0
+
     def test_upload_ifc_multiple_times(self, client, test_ifc_file, api_branch):
         """Test uploading same file multiple times."""
         # First upload

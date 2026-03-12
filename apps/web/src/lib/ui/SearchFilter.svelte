@@ -114,7 +114,12 @@
 			value: undefined,
 			relation: undefined,
 			operator: undefined,
-			valueType: undefined
+			valueType: undefined,
+			relationTargetClass: undefined,
+			relationTargetAttribute: undefined,
+			relationTargetOperator: undefined,
+			relationTargetValue: undefined,
+			relationTargetValueType: undefined
 		});
 	}
 
@@ -454,6 +459,124 @@
 	function getRelInputValue() {
 		return relDropdownOpen ? relQuery : selectedRelLabel;
 	}
+
+	// ---- Relation target entity (class + attribute filter) ----
+	const relTargetClassLabel = $derived.by(() => {
+		if (!filter.relationTargetClass) return '';
+		const entries = flattenTree();
+		const entry = entries.find((e) => e.name === filter.relationTargetClass);
+		return entry ? entry.name : filter.relationTargetClass.trim();
+	});
+	let relTargetClassQuery = $state('');
+	let relTargetClassDropdownOpen = $state(false);
+	let relTargetClassHighlightIndex = $state(0);
+	let relTargetClassComboboxEl = $state<HTMLDivElement | null>(null);
+	let relTargetClassInputEl = $state<HTMLInputElement | null>(null);
+	let relTargetClassDropdownRect = $state<{ top: number; left: number; width: number } | null>(null);
+
+	$effect(() => {
+		if (!relTargetClassDropdownOpen) {
+			relTargetClassDropdownRect = null;
+			return;
+		}
+		if (relTargetClassInputEl) {
+			const r = relTargetClassInputEl.getBoundingClientRect();
+			relTargetClassDropdownRect = { top: r.bottom + 4, left: r.left, width: r.width };
+		} else relTargetClassDropdownRect = null;
+		let raf = 0;
+		function scheduleUpdate() {
+			if (raf) cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				if (relTargetClassInputEl) {
+					const r = relTargetClassInputEl.getBoundingClientRect();
+					relTargetClassDropdownRect = { top: r.bottom + 4, left: r.left, width: r.width };
+				}
+			});
+		}
+		tick().then(scheduleUpdate);
+		const onResize = () => scheduleUpdate();
+		const onScroll = () => scheduleUpdate();
+		window.addEventListener('resize', onResize);
+		window.addEventListener('scroll', onScroll, true);
+		return () => {
+			if (raf) cancelAnimationFrame(raf);
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('scroll', onScroll, true);
+		};
+	});
+
+	const filteredRelTargetClassEntries = $derived.by(() => {
+		const entries = flattenTree();
+		const q = relTargetClassQuery.trim().toLowerCase();
+		return q === '' ? entries : entries.filter((e) => e.name.toLowerCase().includes(q));
+	});
+
+	function openRelTargetClassDropdown() {
+		relTargetClassDropdownOpen = true;
+		relTargetClassHighlightIndex = 0;
+	}
+	function closeRelTargetClassDropdown() {
+		relTargetClassDropdownOpen = false;
+		relTargetClassQuery = '';
+		relTargetClassHighlightIndex = 0;
+	}
+	function selectRelTargetClass(name: string) {
+		onupdate({ relationTargetClass: name });
+		closeRelTargetClassDropdown();
+	}
+
+	let relTargetAttrQuery = $state('');
+	let relTargetAttrDropdownOpen = $state(false);
+	let relTargetAttrHighlightIndex = $state(0);
+	let relTargetAttrComboboxEl = $state<HTMLDivElement | null>(null);
+	let relTargetAttrInputEl = $state<HTMLInputElement | null>(null);
+	let relTargetAttrDropdownRect = $state<{ top: number; left: number; width: number } | null>(null);
+
+	$effect(() => {
+		if (!relTargetAttrDropdownOpen) {
+			relTargetAttrDropdownRect = null;
+			return;
+		}
+		if (relTargetAttrInputEl) {
+			const r = relTargetAttrInputEl.getBoundingClientRect();
+			relTargetAttrDropdownRect = { top: r.bottom + 4, left: r.left, width: r.width };
+		} else relTargetAttrDropdownRect = null;
+		let raf = 0;
+		function scheduleUpdate() {
+			if (raf) cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				if (relTargetAttrInputEl) {
+					const r = relTargetAttrInputEl.getBoundingClientRect();
+					relTargetAttrDropdownRect = { top: r.bottom + 4, left: r.left, width: r.width };
+				}
+			});
+		}
+		tick().then(scheduleUpdate);
+		const onResize = () => scheduleUpdate();
+		const onScroll = () => scheduleUpdate();
+		window.addEventListener('resize', onResize);
+		window.addEventListener('scroll', onScroll, true);
+		return () => {
+			if (raf) cancelAnimationFrame(raf);
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('scroll', onScroll, true);
+		};
+	});
+
+	const filteredRelTargetAttrSuggestions = $derived.by(() => {
+		const q = relTargetAttrQuery.trim().toLowerCase();
+		if (!q) return COMMON_ATTRIBUTE_SUGGESTIONS;
+		return COMMON_ATTRIBUTE_SUGGESTIONS.filter((attr) => attr.toLowerCase().includes(q));
+	});
+
+	function selectRelTargetAttribute(name: string) {
+		onupdate({ relationTargetAttribute: name });
+		relTargetAttrDropdownOpen = false;
+		relTargetAttrQuery = '';
+		relTargetAttrHighlightIndex = 0;
+	}
 </script>
 
 <div class="filter-row">
@@ -484,7 +607,7 @@
 		</button>
 	</div>
 
-	<div class="filter-fields" class:filter-fields--attribute={filter.mode === 'attribute'}>
+	<div class="filter-fields" class:filter-fields--attribute={filter.mode === 'attribute'} class:filter-fields--relation={filter.mode === 'relation'}>
 		{#if filter.mode === 'class'}
 			<select
 				class="filter-select filter-select--op"
@@ -526,7 +649,7 @@
 						role="listbox"
 						aria-label="IFC class"
 						style={classDropdownRect
-							? `top: ${classDropdownRect.top}px; left: ${classDropdownRect.left}px; width: ${classDropdownRect.width}px;`
+							? `--dropdown-top: ${classDropdownRect.top}px; --dropdown-left: ${classDropdownRect.left}px; --dropdown-min-width: ${classDropdownRect.width}px; top: ${classDropdownRect.top}px; left: ${classDropdownRect.left}px;`
 							: ''}
 					>
 						{#each filteredClassEntries as entry, i}
@@ -589,7 +712,7 @@
 						role="listbox"
 						aria-label="Common attributes"
 						style={attrDropdownRect
-							? `top: ${attrDropdownRect.top}px; left: ${attrDropdownRect.left}px; width: ${attrDropdownRect.width}px;`
+							? `--dropdown-top: ${attrDropdownRect.top}px; --dropdown-left: ${attrDropdownRect.left}px; --dropdown-min-width: ${attrDropdownRect.width}px; top: ${attrDropdownRect.top}px; left: ${attrDropdownRect.left}px;`
 							: ''}
 					>
 						{#each filteredAttrSuggestions as attr, i}
@@ -684,7 +807,7 @@
 						role="listbox"
 						aria-label="IFC relation"
 						style={relDropdownRect
-							? `top: ${relDropdownRect.top}px; left: ${relDropdownRect.left}px; width: ${relDropdownRect.width}px;`
+							? `--dropdown-top: ${relDropdownRect.top}px; --dropdown-left: ${relDropdownRect.left}px; --dropdown-min-width: ${relDropdownRect.width}px; top: ${relDropdownRect.top}px; left: ${relDropdownRect.left}px;`
 							: ''}
 					>
 						{#each filteredRelEntries as name, i}
@@ -715,10 +838,255 @@
 					</ul>
 				{/if}
 			</div>
+			<span class="filter-relation-to">to</span>
+			<div
+				class="filter-combobox"
+				bind:this={relTargetClassComboboxEl}
+				onfocusout={() => {
+					setTimeout(() => {
+						closeRelTargetClassDropdown();
+						if (relTargetClassQuery === '' && !filter.relationTargetClass) {
+							onupdate({ relationTargetClass: undefined });
+						}
+					}, 150);
+				}}
+			>
+				<input
+					bind:this={relTargetClassInputEl}
+					class="filter-select filter-input-combo"
+					type="text"
+					autocomplete="off"
+					role="combobox"
+					aria-expanded={relTargetClassDropdownOpen}
+					aria-haspopup="listbox"
+					aria-controls="rel-target-class-listbox"
+					placeholder="Entity class…"
+					value={relTargetClassDropdownOpen ? relTargetClassQuery : relTargetClassLabel}
+					onfocus={() => {
+						relTargetClassQuery = filter.relationTargetClass ?? '';
+						openRelTargetClassDropdown();
+					}}
+					oninput={(e) => {
+						relTargetClassQuery = (e.currentTarget as HTMLInputElement).value;
+						relTargetClassHighlightIndex = 0;
+						if (!relTargetClassDropdownOpen) relTargetClassDropdownOpen = true;
+					}}
+					onkeydown={(e) => {
+						if (!relTargetClassDropdownOpen) {
+							if (e.key === 'ArrowDown' || e.key === 'Enter') {
+								e.preventDefault();
+								openRelTargetClassDropdown();
+							}
+							return;
+						}
+						if (e.key === 'Escape') {
+							e.preventDefault();
+							closeRelTargetClassDropdown();
+							relTargetClassInputEl?.blur();
+							return;
+						}
+						if (e.key === 'ArrowDown') {
+							e.preventDefault();
+							relTargetClassHighlightIndex = Math.min(
+								relTargetClassHighlightIndex + 1,
+								filteredRelTargetClassEntries.length - 1,
+							);
+							return;
+						}
+						if (e.key === 'ArrowUp') {
+							e.preventDefault();
+							relTargetClassHighlightIndex = Math.max(relTargetClassHighlightIndex - 1, 0);
+							return;
+						}
+						if (e.key === 'Enter') {
+							e.preventDefault();
+							const entry = filteredRelTargetClassEntries[relTargetClassHighlightIndex];
+							if (entry) selectRelTargetClass(entry.name);
+						}
+					}}
+				/>
+				{#if relTargetClassDropdownOpen}
+					<ul
+						id="rel-target-class-listbox"
+						class="filter-combobox-list filter-combobox-list--fixed"
+						role="listbox"
+						aria-label="Related entity class"
+						style={relTargetClassDropdownRect
+							? `--dropdown-top: ${relTargetClassDropdownRect.top}px; --dropdown-left: ${relTargetClassDropdownRect.left}px; --dropdown-min-width: ${relTargetClassDropdownRect.width}px; top: ${relTargetClassDropdownRect.top}px; left: ${relTargetClassDropdownRect.left}px;`
+							: ''}
+					>
+						{#each filteredRelTargetClassEntries as entry, i}
+							<li
+								role="option"
+								tabindex="-1"
+								aria-selected={i === relTargetClassHighlightIndex}
+								class="filter-combobox-option"
+								class:highlighted={i === relTargetClassHighlightIndex}
+								onmousedown={(e) => e.preventDefault()}
+								onclick={() => selectRelTargetClass(entry.name)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										selectRelTargetClass(entry.name);
+									}
+								}}
+							>
+								{'  '.repeat(entry.depth)}{entry.name}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+			<div
+				class="filter-combobox"
+				bind:this={relTargetAttrComboboxEl}
+				onfocusout={() => {
+					const hadEmptyQuery = relTargetAttrQuery.trim() === '';
+					setTimeout(() => {
+						relTargetAttrDropdownOpen = false;
+						relTargetAttrQuery = '';
+						if (hadEmptyQuery && !filter.relationTargetAttribute) {
+							onupdate({ relationTargetAttribute: undefined });
+						}
+					}, 150);
+				}}
+			>
+				<input
+					bind:this={relTargetAttrInputEl}
+					class="filter-select filter-input-combo"
+					type="text"
+					autocomplete="off"
+					role="combobox"
+					aria-expanded={relTargetAttrDropdownOpen}
+					aria-haspopup="listbox"
+					aria-controls="rel-target-attr-listbox"
+					placeholder="Attribute…"
+					value={relTargetAttrDropdownOpen ? relTargetAttrQuery : (filter.relationTargetAttribute ?? '')}
+					onfocus={() => {
+						relTargetAttrQuery = filter.relationTargetAttribute ?? '';
+						relTargetAttrDropdownOpen = true;
+						relTargetAttrHighlightIndex = 0;
+					}}
+					oninput={(e) => {
+						relTargetAttrQuery = (e.currentTarget as HTMLInputElement).value;
+						onupdate({
+							relationTargetAttribute:
+								relTargetAttrQuery.trim() === '' ? undefined : relTargetAttrQuery
+						});
+						relTargetAttrHighlightIndex = 0;
+						if (!relTargetAttrDropdownOpen) relTargetAttrDropdownOpen = true;
+					}}
+					onkeydown={(e) => {
+						if (!relTargetAttrDropdownOpen) {
+							if (e.key === 'ArrowDown' || e.key === 'Enter') {
+								e.preventDefault();
+								relTargetAttrDropdownOpen = true;
+							}
+							return;
+						}
+						if (e.key === 'Escape') {
+							e.preventDefault();
+							relTargetAttrDropdownOpen = false;
+							relTargetAttrInputEl?.blur();
+							return;
+						}
+						if (e.key === 'ArrowDown') {
+							e.preventDefault();
+							relTargetAttrHighlightIndex = Math.min(
+								relTargetAttrHighlightIndex + 1,
+								filteredRelTargetAttrSuggestions.length - 1,
+							);
+							return;
+						}
+						if (e.key === 'ArrowUp') {
+							e.preventDefault();
+							relTargetAttrHighlightIndex = Math.max(relTargetAttrHighlightIndex - 1, 0);
+							return;
+						}
+						if (e.key === 'Enter') {
+							const entry = filteredRelTargetAttrSuggestions[relTargetAttrHighlightIndex];
+							if (entry) {
+								e.preventDefault();
+								selectRelTargetAttribute(entry);
+							}
+						}
+					}}
+				/>
+				{#if relTargetAttrDropdownOpen}
+					<ul
+						id="rel-target-attr-listbox"
+						class="filter-combobox-list filter-combobox-list--fixed"
+						role="listbox"
+						aria-label="Related entity attribute"
+						style={relTargetAttrDropdownRect
+							? `--dropdown-top: ${relTargetAttrDropdownRect.top}px; --dropdown-left: ${relTargetAttrDropdownRect.left}px; --dropdown-min-width: ${relTargetAttrDropdownRect.width}px; top: ${relTargetAttrDropdownRect.top}px; left: ${relTargetAttrDropdownRect.left}px;`
+							: ''}
+					>
+						{#each filteredRelTargetAttrSuggestions as attr, i}
+							<li
+								role="option"
+								tabindex="-1"
+								aria-selected={i === relTargetAttrHighlightIndex}
+								class="filter-combobox-option"
+								class:highlighted={i === relTargetAttrHighlightIndex}
+								onmousedown={(e) => e.preventDefault()}
+								onclick={() => selectRelTargetAttribute(attr)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										selectRelTargetAttribute(attr);
+									}
+								}}
+							>
+								{attr}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+			<select
+				class="filter-select filter-select--op"
+				value={
+					filter.relationTargetValueType === 'numeric'
+						? (NUMERIC_OPERATORS.includes(filter.relationTargetOperator as (typeof NUMERIC_OPERATORS)[number])
+								? filter.relationTargetOperator
+								: 'equals')
+						: (filter.relationTargetOperator ?? 'contains')
+				}
+				onchange={(e) => onupdate({ relationTargetOperator: e.currentTarget.value || undefined })}
+			>
+				{#each (filter.relationTargetValueType === 'numeric'
+					? NUMERIC_OPERATORS
+					: STRING_OPERATORS) as op}
+					<option value={op}>{OPERATOR_LABELS[op] ?? op}</option>
+				{/each}
+			</select>
+			<select
+				class="filter-select filter-select--value-type"
+				value={filter.relationTargetValueType ?? 'string'}
+				onchange={(e) =>
+					onupdate({
+						relationTargetValueType: (e.currentTarget.value as 'string' | 'numeric' | 'object') || undefined,
+						relationTargetOperator: undefined
+					})}
+			>
+				<option value="string">String</option>
+				<option value="numeric">Numeric</option>
+				<option value="object">Object</option>
+			</select>
+			{#if !VALUE_OPTIONAL_OPERATORS.has(filter.relationTargetOperator ?? '')}
+				<input
+					class="filter-input"
+					type={filter.relationTargetValueType === 'numeric' ? 'number' : 'text'}
+					placeholder="Value…"
+					value={filter.relationTargetValue ?? ''}
+					oninput={(e) => onupdate({ relationTargetValue: e.currentTarget.value })}
+				/>
+			{/if}
 		{/if}
 	</div>
 
-	<button class="remove-btn" onclick={onremove} aria-label="Remove filter">
+	<button type="button" class="btn-icon btn-danger" onclick={onremove} aria-label="Remove filter" title="Remove filter">
 		<svg width="14" height="14" viewBox="0 0 16 16" fill="none">
 			<path
 				d="M4 4L12 12M12 4L4 12"
@@ -741,9 +1109,11 @@
 		--control-bg: var(--color-bg-elevated);
 		--control-focus-border: var(--color-border-strong);
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.5rem 0;
+		min-width: 0;
 	}
 
 	.mode-toggle {
@@ -779,9 +1149,10 @@
 
 	.filter-fields {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.35rem;
-		flex: 1;
+		flex: 1 1 auto;
 		min-width: 0;
 	}
 
@@ -854,6 +1225,13 @@
 		bottom: auto;
 		margin: 0;
 		z-index: 9999;
+		/* Constrain to viewport so dropdown stays visible and scrolls internally */
+		max-height: min(220px, calc(100vh - var(--dropdown-top, 0px) - 16px));
+		overflow-y: auto;
+		/* Expand to fit content width, at least input width, capped by viewport */
+		min-width: var(--dropdown-min-width, 0);
+		width: max-content;
+		max-width: min(400px, calc(100vw - var(--dropdown-left, 0px) - 16px));
 	}
 
 	.filter-combobox-option {
@@ -861,7 +1239,7 @@
 		font-size: var(--control-font-size);
 		color: var(--color-text-primary);
 		cursor: pointer;
-		white-space: pre;
+		white-space: nowrap;
 	}
 
 	.filter-combobox-option:hover,
@@ -881,8 +1259,8 @@
 	}
 
 	.filter-combobox--attr {
-		flex: 1.35;
-		min-width: 220px;
+		flex: 1 1 120px;
+		min-width: 100px;
 	}
 
 	.filter-select--op {
@@ -901,24 +1279,23 @@
 	}
 
 	.filter-fields--attribute .filter-input {
-		flex: 2;
-		min-width: 240px;
+		flex: 1 1 120px;
+		min-width: 80px;
 	}
 
-	.remove-btn {
-		background: none;
-		border: none;
+	.filter-relation-to {
+		font-size: var(--control-font-size);
 		color: var(--color-text-muted);
-		cursor: pointer;
-		padding: 0.2rem;
-		border-radius: 0.25rem;
-		display: flex;
-		align-items: center;
 		flex-shrink: 0;
-		transition: color 0.15s;
 	}
 
-	.remove-btn:hover {
-		color: var(--color-danger);
+	.filter-fields--relation {
+		flex-wrap: wrap;
 	}
+
+	.filter-fields--relation .filter-input {
+		flex: 1;
+		min-width: 100px;
+	}
+
 </style>

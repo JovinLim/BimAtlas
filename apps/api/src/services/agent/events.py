@@ -50,5 +50,12 @@ class AgentEventBus:
             "matchedCount": matched_count,
         })
 
+    def publish_filter_set_changed(self, branch_id: str) -> None:
+        """Notify when a filter set is created or modified (e.g. via agent tools)."""
+        self.publish(branch_id, {
+            "type": "filter-set-changed",
+            "branchId": branch_id,
+        })
+
 
 event_bus = AgentEventBus()

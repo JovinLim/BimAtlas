@@ -13,9 +13,11 @@ for SCD Type 2 range comparisons, joined via the UUID FK columns
 
 from __future__ import annotations
 
-import hashlib
 import json
+import hashlib
+import logging
 from contextlib import contextmanager
+from typing import Any
 from uuid import uuid4
 
 import psycopg2
@@ -25,6 +27,7 @@ import psycopg2.pool
 from .config import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
+logger = logging.getLogger("bimatlas.db")
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +434,49 @@ def _resolve_relation_gids(
     return list(all_gids)
 
 
+def _resolve_relation_gids_with_target_filter(
+    relation: str,
+    f: dict,
+    rev: int,
+    branch_id: str,
+) -> list[str]:
+    """Resolve GIDs of entities that have *relation* to entities matching the target filter in *f*."""
+    from .services.graph.age_client import get_product_ids_related_to_targets
+
+    target_filters: list[dict] = []
+    ifc_class = f.get("relationTargetClass") or f.get("relation_target_class")
+    if ifc_class:
+        target_filters.append({
+            "mode": "class",
+            "ifcClass": ifc_class,
+            "operator": "is",
+        })
+    attr = f.get("relationTargetAttribute") or f.get("relation_target_attribute")
+    if attr:
+        op = f.get("relationTargetOperator") or f.get("relation_target_operator") or "contains"
+        val = f.get("relationTargetValue") or f.get("relation_target_value")
+        from .schema.filter_operators import value_required_for_operator
+        if value_required_for_operator(op) and (not val or (isinstance(val, str) and not val.strip())):
+            pass  # Skip attribute filter when value required but missing
+        else:
+            target_filters.append({
+                "mode": "attribute",
+                "attribute": attr,
+                "operator": op,
+                "value": val,
+                "valueType": f.get("relationTargetValueType") or f.get("relation_target_value_type") or "string",
+            })
+    if not target_filters:
+        return []
+    rows = fetch_entities_with_filter_sets(
+        rev, branch_id,
+        [{"logic": "AND", "filters": target_filters}],
+        combination_logic="AND",
+    )
+    target_gids = [r["ifc_global_id"] for r in rows]
+    return get_product_ids_related_to_targets(relation, target_gids, rev, branch_id)
+
+
 def fetch_entities_at_revision(
     rev: int,
     branch_id: str,
@@ -644,17 +690,33 @@ def _next_default_color(branch_id: str) -> str:
 
 
 def create_filter_set(
-    branch_id: str, name: str, logic: str, filters_json: list[dict],
+    branch_id: str, name: str, logic: str, filters_json: list[dict] | dict,
     color: str | None = None,
 ) -> dict:
-    """Create a new filter set on a branch. Returns the new row."""
+    """Create a new filter set on a branch. Returns the new row.
+
+    filters_json: legacy list of leaf dicts, or canonical tree (kind=group).
+    Stored as canonical tree after validation.
+    """
+    from .schema.filter_tree import canonicalize_filters, validate_filter_tree
+
+    tree = (
+        canonicalize_filters(filters_json, logic)
+        if isinstance(filters_json, list)
+        else filters_json
+    )
+    if not isinstance(tree, dict) or tree.get("kind") != "group":
+        tree = canonicalize_filters([], logic)
+    errs = validate_filter_tree(tree)
+    if errs:
+        raise ValueError(f"Invalid filter tree: {'; '.join(errs)}")
     if color is None:
         color = _next_default_color(branch_id)
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
             f"INSERT INTO filter_sets (branch_id, name, logic, filters, color) "
             f"VALUES (%s, %s, %s, %s, %s) RETURNING {_FILTER_SET_COLS}",
-            (branch_id, name, logic, json.dumps(filters_json), color),
+            (branch_id, name, logic, json.dumps(tree), color),
         )
         return dict(cur.fetchone())
 
@@ -663,10 +725,15 @@ def update_filter_set(
     filter_set_id: str,
     name: str | None = None,
     logic: str | None = None,
-    filters_json: list[dict] | None = None,
+    filters_json: list[dict] | dict | None = None,
     color: str | None = None,
 ) -> dict | None:
-    """Update specified fields on a filter set. Returns the updated row."""
+    """Update specified fields on a filter set. Returns the updated row.
+
+    filters_json: legacy list or canonical tree. Validated and stored as tree.
+    """
+    from .schema.filter_tree import canonicalize_filters, validate_filter_tree
+
     sets: list[str] = ["updated_at = now()"]
     params: list = []
     if name is not None:
@@ -676,8 +743,18 @@ def update_filter_set(
         sets.append("logic = %s")
         params.append(logic)
     if filters_json is not None:
+        tree = (
+            canonicalize_filters(filters_json, logic)
+            if isinstance(filters_json, list)
+            else filters_json
+        )
+        if not isinstance(tree, dict) or tree.get("kind") != "group":
+            tree = canonicalize_filters([], logic or "AND")
+        errs = validate_filter_tree(tree)
+        if errs:
+            raise ValueError(f"Invalid filter tree: {'; '.join(errs)}")
         sets.append("filters = %s")
-        params.append(json.dumps(filters_json))
+        params.append(json.dumps(tree))
     if color is not None:
         sets.append("color = %s")
         params.append(color)
@@ -1150,7 +1227,15 @@ def _build_class_clause(f: dict, params: list) -> str | None:
     if op not in CLASS_OPERATORS:
         op = "is"
     if op == "inherits_from":
-        classes = get_descendants(ifc_class, include_self=True, concrete_only=True)
+        try:
+            classes = get_descendants(ifc_class, include_self=True, concrete_only=True)
+        except RuntimeError as exc:
+            logger.warning(
+                "Falling back to exact class match for inherits_from(%s): %s",
+                ifc_class,
+                exc,
+            )
+            classes = [ifc_class]
         if not classes:
             return "FALSE"
         params.append(classes)
@@ -1326,11 +1411,23 @@ def _build_attribute_clause(f: dict, params: list) -> str | None:
 
 
 def _build_relation_clause(f: dict, params: list, rev: int, branch_id: str) -> str | None:
-    """Build SQL for relation mode (AGE-resolved GID set)."""
+    """Build SQL for relation mode (AGE-resolved GID set).
+
+    If relation target filter is provided (relationTargetClass or relationTargetAttribute),
+    find entities that have the relation to entities matching that filter.
+    Otherwise, find all entities participating in the relation.
+    """
     relation = f.get("relation")
     if not relation or not rev or not branch_id:
         return None
-    gids = _resolve_relation_gids([relation], rev, branch_id)
+    has_target = (
+        f.get("relationTargetClass") or f.get("relation_target_class")
+        or f.get("relationTargetAttribute") or f.get("relation_target_attribute")
+    )
+    if has_target:
+        gids = _resolve_relation_gids_with_target_filter(relation, f, rev, branch_id)
+    else:
+        gids = _resolve_relation_gids([relation], rev, branch_id)
     if not gids:
         return "FALSE"
     params.append(gids)
@@ -1356,6 +1453,51 @@ def _build_filter_clause(
     return None
 
 
+def _compile_filter_tree(
+    node: dict,
+    params: list,
+    rev: int,
+    branch_id: str,
+    depth: int,
+) -> list[str]:
+    """Recursively compile filter tree to SQL clauses. Returns list of clause strings."""
+    from .schema.filter_tree import MAX_DEPTH
+
+    if depth > MAX_DEPTH:
+        return []
+
+    kind = node.get("kind")
+    if kind == "leaf":
+        clause = _build_filter_clause(node, params, rev=rev, branch_id=branch_id)
+        return [clause] if clause else []
+
+    if kind == "group":
+        op = (node.get("op") or "ALL").upper()
+        sql_op = " AND " if op == "ALL" else " OR "
+        children = node.get("children") or []
+        clauses: list[str] = []
+        for c in children:
+            if isinstance(c, dict):
+                clauses.extend(_compile_filter_tree(c, params, rev, branch_id, depth + 1))
+        if not clauses:
+            return []
+        joined = sql_op.join(clauses)
+        return [f"({joined})"]
+
+    return []
+
+
+def _filters_to_tree(filters: Any, logic: str | None) -> dict:
+    """Normalize filters to canonical tree. Uses compatibility adapter for legacy."""
+    from .schema.filter_tree import canonicalize_filters, is_legacy_filters
+
+    if is_legacy_filters(filters):
+        return canonicalize_filters(filters, logic)
+    if isinstance(filters, dict) and filters.get("kind") == "group":
+        return filters
+    return canonicalize_filters([], logic)
+
+
 def fetch_entities_with_filter_sets(
     rev: int,
     branch_id: str,
@@ -1364,9 +1506,9 @@ def fetch_entities_with_filter_sets(
 ) -> list[dict]:
     """Query entities matching multiple filter sets with configurable logic.
 
-    Each entry in *filter_sets_data* has keys ``logic`` (``"AND"``/``"OR"``)
-    and ``filters`` (list of filter dicts).  Conditions within a set are
-    joined by the set's ``logic``; the resulting groups are joined by
+    Each entry in *filter_sets_data* has ``logic`` and ``filters``. Filters may
+    be a legacy flat array or a canonical tree (kind=group, op=ALL|ANY, children).
+    Conditions within a set follow the tree; set groups are joined by
     *combination_logic*.
     """
     from .schema.filter_operators import normalize_logic
@@ -1376,15 +1518,10 @@ def fetch_entities_with_filter_sets(
 
     group_sqls: list[str] = []
     for fs in filter_sets_data:
-        fs_logic = normalize_logic(fs.get("logic"))
-        filter_clauses: list[str] = []
-        for f in fs.get("filters", []):
-            clause = _build_filter_clause(f, params, rev=rev, branch_id=branch_id)
-            if clause:
-                filter_clauses.append(clause)
-        if filter_clauses:
-            joiner = f" {fs_logic} "
-            group_sqls.append(f"({joiner.join(filter_clauses)})")
+        tree = _filters_to_tree(fs.get("filters"), fs.get("logic"))
+        clauses = _compile_filter_tree(tree, params, rev, branch_id, depth=0)
+        if clauses:
+            group_sqls.append(clauses[0])
 
     if group_sqls:
         set_joiner = f" {normalize_logic(combination_logic)} "
@@ -1407,27 +1544,19 @@ def fetch_filter_set_matches(
     """Return per-filter-set matching entity global IDs.
 
     Each entry in *filter_sets_data* must have ``filter_set_id``, ``logic``,
-    and ``filters``.  Returns a list of dicts
+    and ``filters`` (tree or legacy). Returns list of
     ``{"filter_set_id": ..., "global_ids": [...]}``, preserving input order.
     """
-    from .schema.filter_operators import normalize_logic
-
     results: list[dict] = []
     for fs in filter_sets_data:
         fs_id = fs.get("filter_set_id") or fs.get("id")
-        fs_logic = normalize_logic(fs.get("logic"))
+        tree = _filters_to_tree(fs.get("filters"), fs.get("logic"))
         clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
         params: list = [branch_id, rev, rev]
 
-        filter_clauses: list[str] = []
-        for f in fs.get("filters", []):
-            clause = _build_filter_clause(f, params, rev=rev, branch_id=branch_id)
-            if clause:
-                filter_clauses.append(clause)
-
-        if filter_clauses:
-            joiner = f" {fs_logic} "
-            clauses.append(f"({joiner.join(filter_clauses)})")
+        compiled = _compile_filter_tree(tree, params, rev, branch_id, depth=0)
+        if compiled:
+            clauses.append(compiled[0])
 
         where = " AND ".join(clauses)
         with get_cursor() as cur:
@@ -2087,11 +2216,28 @@ def _row_to_agent(row: dict, project_id: str) -> dict:
     }
 
 
+def _get_revision_id_for_agent(branch_id: str) -> str:
+    """Return the latest revision_id for the branch. Create one only if none exist."""
+    seq = get_latest_revision_seq(branch_id)
+    if seq is not None:
+        rid = get_revision_id_for_seq(branch_id, seq)
+        if rid:
+            return rid
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
+            "VALUES (%s, %s, %s) RETURNING revision_id",
+            (branch_id, "agent_config", "IfcAgent"),
+        )
+        return str(cur.fetchone()["revision_id"])
+
+
 def create_agent_config(
     project_id: str, name: str, provider: str, model: str,
     api_key: str = "", base_url: str | None = None, pre_prompt: str | None = None,
 ) -> dict:
-    """Create an IfcAgent entity on the project's main branch."""
+    """Create an IfcAgent entity on the project's main branch. Uses the latest
+    revision on the branch; does not create a new revision."""
     branches = fetch_branches(project_id)
     if not branches:
         raise ValueError(f"Project {project_id} has no branches")
@@ -2101,14 +2247,9 @@ def create_agent_config(
     attrs = _agent_attrs(name, provider, model, api_key, base_url, pre_prompt)
     content_hash = _agent_content_hash(attrs)
     ifc_global_id = f"agent_{uuid4().hex[:20]}"
+    revision_id = _get_revision_id_for_agent(branch_id)
 
     with get_cursor(dict_cursor=True) as cur:
-        cur.execute(
-            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
-            "VALUES (%s, %s, %s) RETURNING revision_id",
-            (branch_id, "agent_config", f"IfcAgent: {name}"),
-        )
-        revision_id = cur.fetchone()["revision_id"]
         cur.execute(
             "INSERT INTO ifc_entity "
             "(branch_id, ifc_global_id, ifc_class, attributes, "
@@ -2170,7 +2311,7 @@ def update_agent_config(
     model: str | None = None, api_key: str | None = None, base_url: str | None = None,
     pre_prompt: str | None = None,
 ) -> dict | None:
-    """Update an IfcAgent by closing the old row and inserting a new one (SCD Type 2)."""
+    """Update an IfcAgent in place. Does not create a revision or obsolete the row."""
     existing = fetch_agent_config(entity_id)
     if not existing:
         return None
@@ -2187,72 +2328,26 @@ def update_agent_config(
 
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT branch_id, ifc_global_id FROM ifc_entity "
-            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
-            (entity_id,),
+            "UPDATE ifc_entity SET attributes = %s, content_hash = %s "
+            "WHERE entity_id = %s AND ifc_class = %s AND obsoleted_in_revision_id IS NULL "
+            "RETURNING entity_id, branch_id, attributes",
+            (psycopg2.extras.Json(attrs), content_hash, entity_id, IFC_AGENT_CLASS),
         )
         row = cur.fetchone()
     if not row:
         return None
-    branch_id = str(row["branch_id"])
-    ifc_global_id = row["ifc_global_id"]
-
-    with get_cursor(dict_cursor=True) as cur:
-        cur.execute(
-            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
-            "VALUES (%s, %s, %s) RETURNING revision_id",
-            (branch_id, "agent_config", f"IfcAgent update: {attrs['name']}"),
-        )
-        revision_id = cur.fetchone()["revision_id"]
-        cur.execute(
-            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
-            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
-            (revision_id, entity_id),
-        )
-        cur.execute(
-            "INSERT INTO ifc_entity "
-            "(branch_id, ifc_global_id, ifc_class, attributes, "
-            " content_hash, created_in_revision_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
-            "RETURNING entity_id, attributes",
-            (
-                branch_id,
-                ifc_global_id,
-                IFC_AGENT_CLASS,
-                psycopg2.extras.Json(attrs),
-                content_hash,
-                revision_id,
-            ),
-        )
-        new_row = cur.fetchone()
-    branch = fetch_branch(branch_id)
+    branch = fetch_branch(str(row["branch_id"]))
     project_id = str(branch["project_id"]) if branch else ""
-    return _row_to_agent(dict(new_row), project_id)
+    return _row_to_agent(dict(row), project_id)
 
 
 def delete_agent_config(entity_id: str) -> bool:
-    """Obsolete an IfcAgent entity (SCD Type 2 close)."""
-    with get_cursor(dict_cursor=True) as cur:
+    """Delete an IfcAgent entity. Does not create a revision or use obsoletion."""
+    with get_cursor() as cur:
         cur.execute(
-            "SELECT branch_id FROM ifc_entity "
+            "DELETE FROM ifc_entity "
             "WHERE entity_id = %s AND ifc_class = %s AND obsoleted_in_revision_id IS NULL",
             (entity_id, IFC_AGENT_CLASS),
-        )
-        row = cur.fetchone()
-    if not row:
-        return False
-
-    with get_cursor(dict_cursor=True) as cur:
-        cur.execute(
-            "INSERT INTO revision (branch_id, ifc_filename, commit_message) "
-            "VALUES (%s, %s, %s) RETURNING revision_id",
-            (str(row["branch_id"]), "agent_config", "IfcAgent delete"),
-        )
-        revision_id = cur.fetchone()["revision_id"]
-        cur.execute(
-            "UPDATE ifc_entity SET obsoleted_in_revision_id = %s "
-            "WHERE entity_id = %s AND obsoleted_in_revision_id IS NULL",
-            (revision_id, entity_id),
         )
         return cur.rowcount > 0
 

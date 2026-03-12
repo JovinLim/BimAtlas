@@ -1,23 +1,25 @@
 """Tests for the MCP tool layer (FEAT-004 Agentic Filtering Framework).
 
-These tests verify the four MCP tools that wrap existing DB functions:
+These tests verify the MCP tools that wrap existing DB functions:
   1. get_project_schema
   2. create_filter_set
   3. add_filter_condition
-  4. apply_filter_set_to_context
+  4. add_filter_group
+  5. apply_filter_set_to_context
 """
 
 import json
+
 import pytest
 
 from src import db
 from src.services.agent.mcp_tools import (
     add_filter_condition,
+    add_filter_group,
     apply_filter_set_to_context,
     create_filter_set,
     get_project_schema,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,6 +108,8 @@ class TestCreateFilterSet:
         assert result["name"] == "Test Set"
         assert result["logic"] == "AND"
         assert result["filters"] == []
+        assert result["filters_tree"]["kind"] == "group"
+        assert result["filters_tree"]["children"] == []
 
     def test_defaults_to_and_logic(self, test_branch):
         result = create_filter_set(test_branch, "Default Logic")
@@ -134,6 +138,8 @@ class TestAddFilterCondition:
         assert result["filters"][0]["mode"] == "class"
         assert result["filters"][0]["operator"] == "is"
         assert result["filters"][0]["ifcClass"] == "IfcWall"
+        assert result["filters_tree"]["kind"] == "group"
+        assert result["filters_tree"]["children"][0]["ifcClass"] == "IfcWall"
 
     def test_add_inherits_from(self, test_branch):
         fs = create_filter_set(test_branch, "Inheritance Filter")
@@ -230,6 +236,123 @@ class TestAddFilterCondition:
         with pytest.raises(ValueError, match="not found"):
             add_filter_condition(fake_id, "class", "is", ifc_class="IfcWall")
 
+    def test_add_condition_to_nested_group(self, test_branch):
+        """Add condition with parent_path to a group created by add_filter_group."""
+        fs = create_filter_set(test_branch, "Nested", logic="AND")
+        add_filter_condition(fs["filter_set_id"], "class", "is", ifc_class="IfcWall")
+        grp = add_filter_group(
+            fs["filter_set_id"],
+            op="OR",
+            mode="attribute",
+            operator="contains",
+            attribute="Name",
+            value="Core",
+            value_type="string",
+        )
+        assert "group_index" in grp
+        assert grp["group_index"] == 1  # root has [leaf, group]
+        result = add_filter_condition(
+            fs["filter_set_id"],
+            mode="attribute",
+            operator="is",
+            attribute="Tag",
+            value="A1",
+            value_type="string",
+            parent_path=str(grp["group_index"]),
+        )
+        assert result["condition_count"] == 3
+        tree = result["filters_tree"]
+        assert tree["kind"] == "group"
+        assert len(tree["children"]) == 2  # leaf + group
+        sub = tree["children"][1]
+        assert sub["kind"] == "group"
+        assert sub["op"] == "ANY"
+        assert len(sub["children"]) == 2  # Core, A1
+
+    def test_invalid_parent_path_raises(self, test_branch):
+        fs = create_filter_set(test_branch, "Bad Path")
+        with pytest.raises(ValueError, match="parent_path|No child at index"):
+            add_filter_condition(
+                fs["filter_set_id"],
+                "class", "is", ifc_class="IfcWall",
+                parent_path="99",
+            )
+        with pytest.raises(ValueError, match="not a group"):
+            add_filter_condition(
+                fs["filter_set_id"],
+                "class", "is", ifc_class="IfcWall",
+            )
+            add_filter_condition(
+                fs["filter_set_id"],
+                "class", "is", ifc_class="IfcDoor",
+                parent_path="0",  # index 0 is a leaf, not a group
+            )
+
+
+# ---------------------------------------------------------------------------
+# add_filter_group
+# ---------------------------------------------------------------------------
+
+class TestAddFilterGroup:
+    def test_creates_nested_group_with_first_condition(self, test_branch):
+        fs = create_filter_set(test_branch, "Group Test", logic="AND")
+        result = add_filter_group(
+            fs["filter_set_id"],
+            op="OR",
+            mode="class",
+            operator="is",
+            ifc_class="IfcDoor",
+        )
+        assert result["group_index"] == 0
+        assert result["condition_count"] == 1
+        tree = result["filters_tree"]
+        assert tree["children"][0]["kind"] == "group"
+        assert tree["children"][0]["op"] == "ANY"
+        assert tree["children"][0]["children"][0]["ifcClass"] == "IfcDoor"
+
+    def test_nested_tree_via_tools_matches_expected(self, test_branch):
+        """Build ALL(IfcWall, ANY(Name contains Interior, Tag is W2)) via MCP tools."""
+        rev_id, rev_seq = _create_revision(test_branch)
+        products = [
+            ("g1", "IfcWall", "Exterior Wall", "W1"),
+            ("g5", "IfcWall", "Interior Wall", "W2"),
+            ("g2", "IfcDoor", "Front Door", "D1"),
+        ]
+        for gid, cls, name, tag in products:
+            _insert_entity(
+                test_branch, rev_id, gid, cls,
+                {"Name": name, "Tag": tag},
+            )
+
+        fs = create_filter_set(test_branch, "Nested Walls", logic="AND")
+        add_filter_condition(fs["filter_set_id"], "class", "is", ifc_class="IfcWall")
+        grp = add_filter_group(
+            fs["filter_set_id"],
+            op="OR",
+            mode="attribute",
+            operator="contains",
+            attribute="Name",
+            value="Interior",
+            value_type="string",
+        )
+        add_filter_condition(
+            fs["filter_set_id"],
+            mode="attribute",
+            operator="is",
+            attribute="Tag",
+            value="W2",
+            value_type="string",
+            parent_path=str(grp["group_index"]),
+        )
+
+        row = db.fetch_filter_set(fs["filter_set_id"])
+        filter_sets_data = [{"logic": row["logic"], "filters": row["filters"]}]
+        rows = db.fetch_entities_with_filter_sets(
+            rev_seq, test_branch, filter_sets_data, "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g5"
+
 
 # ---------------------------------------------------------------------------
 # apply_filter_set_to_context
@@ -243,6 +366,7 @@ class TestApplyFilterSetToContext:
         assert result["combination_logic"] == "OR"
         assert len(result["applied_filter_sets"]) == 1
         assert result["applied_filter_sets"][0]["name"] == "Apply Test"
+        assert result["applied_filter_sets"][0]["filters_tree"]["kind"] == "group"
         assert result["matched_entity_count"] >= 0
 
     def test_forces_or_logic(self, test_branch):
@@ -273,14 +397,15 @@ class TestApplyFilterSetToContext:
 # ---------------------------------------------------------------------------
 
 class TestToolRegistry:
-    def test_get_agent_tools_returns_four(self, test_branch):
+    def test_get_agent_tools_includes_nested_tree_tools(self, test_branch):
         from src.services.agent.mcp_tools import get_agent_tools
         tools = get_agent_tools(test_branch, revision=None)
-        assert len(tools) == 4
+        assert len(tools) == 5
         names = {t.metadata.name for t in tools}
         assert names == {
             "get_project_schema",
             "create_filter_set",
             "add_filter_condition",
+            "add_filter_group",
             "apply_filter_set_to_context",
         }

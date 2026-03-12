@@ -2,7 +2,9 @@
 
 Run with::
 
-    uvicorn src.main:app --reload
+    uvicorn src.main:app --reload --timeout-graceful-shutdown 5
+
+Or use run.sh (includes DB check and timeout).
 """
 
 import asyncio
@@ -49,6 +51,20 @@ from .services.ifc.ingestion import ingest_ifc
 from .services.agent.live_streams import live_chat_streams
 
 logger = logging.getLogger("bimatlas")
+
+
+def _ingestion_result_payload(result) -> dict:
+    return {
+        "revision_id": result.revision_id,
+        "revision_seq": result.revision_seq,
+        "branch_id": result.branch_id,
+        "total_products": result.total_products,
+        "added": result.added,
+        "modified": result.modified,
+        "deleted": result.deleted,
+        "unchanged": result.unchanged,
+        "edges_created": result.edges_created,
+    }
 
 
 @asynccontextmanager
@@ -157,32 +173,37 @@ def _stream_ifc_products_generator(
             yield f"data: {json.dumps({'type': 'error', 'message': 'No revisions on this branch'})}\n\n"
             return
 
-    applied = fetch_applied_filter_sets(branch_id)
-    if applied["filter_sets"]:
-        filter_sets_data = [
-            {"logic": fs.get("logic", "AND"), "filters": fs.get("filters", [])}
-            for fs in applied["filter_sets"]
-        ]
-        rows = fetch_entities_with_filter_sets(
-            rev,
-            branch_id,
-            filter_sets_data,
-            combination_logic=applied["combination_logic"],
-        )
-    else:
-        rows = fetch_entities_at_revision(
-            rev,
-            branch_id,
-            ifc_class=ifc_class,
-            ifc_classes=ifc_classes,
-            contained_in=contained_in,
-            name=name,
-            object_type=object_type,
-            tag=tag,
-            description=description,
-            global_id=global_id,
-            relation_types=relation_types,
-        )
+    try:
+        applied = fetch_applied_filter_sets(branch_id)
+        if applied["filter_sets"]:
+            filter_sets_data = [
+                {"logic": fs.get("logic", "AND"), "filters": fs.get("filters", [])}
+                for fs in applied["filter_sets"]
+            ]
+            rows = fetch_entities_with_filter_sets(
+                rev,
+                branch_id,
+                filter_sets_data,
+                combination_logic=applied["combination_logic"],
+            )
+        else:
+            rows = fetch_entities_at_revision(
+                rev,
+                branch_id,
+                ifc_class=ifc_class,
+                ifc_classes=ifc_classes,
+                contained_in=contained_in,
+                name=name,
+                object_type=object_type,
+                tag=tag,
+                description=description,
+                global_id=global_id,
+                relation_types=relation_types,
+            )
+    except Exception as exc:
+        logger.exception("Failed to stream IFC products")
+        yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        return
 
     yield f"data: {json.dumps({'type': 'start', 'total': len(rows)})}\n\n"
 
@@ -292,17 +313,69 @@ async def upload_ifc(
                 detail=f"Failed to parse IFC file: {e!s}",
             ) from e
 
-    return {
-        "revision_id": result.revision_id,
-        "revision_seq": result.revision_seq,
-        "branch_id": result.branch_id,
-        "total_products": result.total_products,
-        "added": result.added,
-        "modified": result.modified,
-        "deleted": result.deleted,
-        "unchanged": result.unchanged,
-        "edges_created": result.edges_created,
-    }
+    return _ingestion_result_payload(result)
+
+
+@app.post("/upload-ifc/stream")
+async def upload_ifc_stream(
+    file: UploadFile = File(...),
+    branch_id: str = Form(...),
+    label: str | None = Form(None),
+):
+    """Stream IFC ingestion progress and final result as NDJSON."""
+    if not file.filename or not file.filename.lower().endswith(".ifc"):
+        raise HTTPException(status_code=400, detail="Only .ifc files are accepted")
+
+    try:
+        UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
+
+    branch = fetch_branch(branch_id)
+    if branch is None:
+        raise HTTPException(status_code=404, detail=f"Branch {branch_id} not found")
+
+    contents = await file.read()
+
+    async def generate():
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def push(event: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        def worker() -> None:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir) / file.filename
+                tmp_path.write_bytes(contents)
+                try:
+                    result = ingest_ifc(
+                        str(tmp_path),
+                        branch_id=branch_id,
+                        label=label,
+                        progress_callback=push,
+                    )
+                    push({"type": "result", "result": _ingestion_result_payload(result)})
+                except (OSError, ValueError) as exc:
+                    logger.exception("IFC ingestion failed")
+                    push({"type": "error", "message": f"Failed to parse IFC file: {exc!s}"})
+                except Exception as exc:
+                    logger.exception("IFC ingestion failed")
+                    push({"type": "error", "message": str(exc)})
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        task = asyncio.create_task(asyncio.to_thread(worker))
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield json.dumps(event) + "\n"
+        finally:
+            await task
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @app.post("/ifc-schema", status_code=201)

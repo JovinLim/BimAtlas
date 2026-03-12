@@ -20,6 +20,8 @@
   } from "$lib/state/selection.svelte";
   import { getSearchState } from "$lib/state/search.svelte";
   import {
+    APPLY_FILTER_SETS_MESSAGE_TYPE,
+    APPLY_FILTER_SETS_STORAGE_KEY,
     SEARCH_CHANNEL,
     type FilterSet,
     type ProductMeta,
@@ -61,6 +63,21 @@
   import { untrack, onMount, onDestroy, tick } from "svelte";
   import { loadSettings, saveSettings } from "$lib/state/persistence";
   import { setProductTreeFromApi } from "$lib/ifc/schema";
+
+  /** Maps vertical wheel scroll to horizontal scroll on the element. */
+  function wheelToHorizontalScroll(node: HTMLElement) {
+    function handleWheel(e: WheelEvent) {
+      if (node.scrollWidth <= node.clientWidth) return;
+      node.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return {
+      destroy() {
+        node.removeEventListener("wheel", handleWheel);
+      },
+    };
+  }
 
   const selection = getSelection();
   const revisionState = getRevisionState();
@@ -115,9 +132,14 @@
     agentEventSource = es;
     es.onmessage = (e) => {
       try {
+        console.log("agent-events message", e.data);
         const event: AgentBusEvent = JSON.parse(e.data);
-        if (event.type === "filter-applied") {
+        if (
+          event.type === "filter-applied" ||
+          event.type === "filter-set-changed"
+        ) {
           autoLoadAppliedFilterSets(event.branchId);
+          console.log("filter-applied or filter-set-changed", event);
         }
       } catch {}
     };
@@ -132,6 +154,8 @@
   let showImportModal = $state(false);
   let importing = $state(false);
   let importError = $state<string | null>(null);
+  let importProgressPercent = $state(0);
+  let importProgressMessage = $state("Preparing import...");
   let loadingGeometry = $state(false);
   let loadingGeometryCurrent = $state(0);
   let loadingGeometryTotal = $state(0);
@@ -316,6 +340,9 @@
 
     const selectedId = selection.activeGlobalId;
     const depth = selection.subgraphDepth;
+    const filterColors = filterSetColorsEnabled;
+    const branchId = projectState.activeBranchId;
+    const rev = revisionState.activeRevision;
 
     if (selectedId) {
       // If the selected node is a synthetic IfcShapeRepresentation, map it back
@@ -340,7 +367,11 @@
       const subgraphIds = computeSubgraph(graph, effectiveSelectedId, depth);
       mgr.applySubgraphFilter(effectiveSelectedId, subgraphIds);
     } else {
-      mgr.applySubgraphFilter(null, null);
+      if (filterColors && branchId && rev !== null) {
+        applyFilterSetColorsToScene(mgr, branchId, rev);
+      } else {
+        mgr.applySubgraphFilter(null, null);
+      }
     }
   });
 
@@ -413,6 +444,8 @@
     } satisfies SchemaMessage);
   });
 
+  let visibilityCleanup: (() => void) | null = null;
+
   // BroadcastChannels for cross-window communication
   onMount(() => {
     searchChannel = new BroadcastChannel(SEARCH_CHANNEL);
@@ -420,7 +453,12 @@
       if (e.data.type === "apply-filters") {
         handleApplyFilters(e.data.filters);
       } else if (e.data.type === "apply-filter-sets") {
-        handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
+        // Apply payload immediately, then refresh from API as source of truth.
+        void handleApplyFilterSets(e.data.filterSets, e.data.combinationLogic);
+        void reloadGeometryFromAppliedFilterSets(
+          e.data.filterSets,
+          e.data.combinationLogic,
+        );
       } else if (e.data.type === "request-branch-context") {
         sendBranchContext();
       } else if (e.data.type === "set-filter-set-colors") {
@@ -428,6 +466,83 @@
         handleFilterSetColorToggle();
       }
     };
+    // Request current applied filter sets from search popup (if open) so viewer syncs after mount/refresh
+    searchChannel.postMessage({
+      type: "request-applied-filter-sets",
+    } satisfies SearchMessage);
+
+    function applyFromStorage(payload: {
+      filterSets: FilterSet[];
+      combinationLogic: "AND" | "OR";
+    }) {
+      void handleApplyFilterSets(payload.filterSets, payload.combinationLogic);
+      void reloadGeometryFromAppliedFilterSets(
+        payload.filterSets,
+        payload.combinationLogic,
+      );
+    }
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== APPLY_FILTER_SETS_STORAGE_KEY || !e.newValue) return;
+      try {
+        const { filterSets, combinationLogic } = JSON.parse(e.newValue) as {
+          filterSets: FilterSet[];
+          combinationLogic: "AND" | "OR";
+          timestamp?: number;
+        };
+        if (filterSets && combinationLogic)
+          applyFromStorage({ filterSets, combinationLogic });
+      } catch {}
+    };
+    window.addEventListener("storage", onStorage);
+
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type !== APPLY_FILTER_SETS_MESSAGE_TYPE) return;
+      const { filterSets, combinationLogic } = e.data;
+      if (filterSets && combinationLogic)
+        applyFromStorage({ filterSets, combinationLogic });
+    };
+    window.addEventListener("message", onMessage);
+
+    visibilityCleanup = () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("message", onMessage);
+    };
+
+    try {
+      const stored = localStorage.getItem(APPLY_FILTER_SETS_STORAGE_KEY);
+      if (stored) {
+        const { filterSets, combinationLogic, timestamp } = JSON.parse(
+          stored,
+        ) as {
+          filterSets: FilterSet[];
+          combinationLogic: "AND" | "OR";
+          timestamp?: number;
+        };
+        if (
+          filterSets &&
+          combinationLogic &&
+          timestamp &&
+          Date.now() - timestamp < 60000
+        ) {
+          applyFromStorage({ filterSets, combinationLogic });
+        }
+      }
+    } catch {}
+
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === "visible" &&
+        projectState.activeBranchId
+      ) {
+        searchChannel?.postMessage({
+          type: "request-applied-filter-sets",
+        } satisfies SearchMessage);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     attributesChannel = new BroadcastChannel(ATTRIBUTES_CHANNEL);
     attributesChannel.onmessage = (e: MessageEvent<AttributesMessage>) => {
@@ -475,6 +590,7 @@
   });
 
   onDestroy(() => {
+    visibilityCleanup?.();
     searchChannel?.close();
     attributesChannel?.close();
     graphChannel?.close();
@@ -501,6 +617,7 @@
         type: "branch-context",
         branchId,
         projectId,
+        filterSetColorsEnabled,
       } satisfies SearchMessage);
       searchChannel?.postMessage({
         type: "filter-result-count",
@@ -508,6 +625,7 @@
         total: searchState.totalProductCount,
       } satisfies SearchMessage);
     }
+  }
 
   // Keep a reactive element count in sync with the SceneManager.
   $effect(() => {
@@ -525,7 +643,6 @@
       mgr.setElementCountListener(null);
     };
   });
-  }
 
   function sendAttributesContext() {
     const branchId = projectState.activeBranchId;
@@ -753,11 +870,7 @@
       if (revision != null) params.set("revision", String(revision));
       const query = params.toString();
       const url = query ? `/table?${query}` : "/table";
-      tablePopup = window.open(
-        url,
-        "bimatlas-table",
-        "width=900,height=700",
-      );
+      tablePopup = window.open(url, "bimatlas-table", "width=900,height=700");
       setTimeout(sendTableContext, 500);
     } else {
       tablePopup.focus();
@@ -876,6 +989,37 @@
     return filtersToQueryVars(allFilters);
   }
 
+  async function reloadGeometryFromAppliedFilterSets(
+    fallbackFilterSets?: FilterSet[],
+    fallbackCombinationLogic: "AND" | "OR" = "OR",
+  ) {
+    const branchId = projectState.activeBranchId;
+    if (!branchId) return;
+    try {
+      const result = await client
+        .query(
+          APPLIED_FILTER_SETS_QUERY,
+          { branchId },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      const data = result.data?.appliedFilterSets;
+      const filterSets = data?.filterSets ?? [];
+      const combinationLogic = (
+        data?.combinationLogic === "AND" ? "AND" : "OR"
+      ) as "AND" | "OR";
+      await handleApplyFilterSets(filterSets, combinationLogic);
+    } catch (err) {
+      console.error("Failed to reload geometry from applied filter sets:", err);
+      if (fallbackFilterSets) {
+        await handleApplyFilterSets(
+          fallbackFilterSets,
+          fallbackCombinationLogic,
+        );
+      }
+    }
+  }
+
   async function handleApplyFilterSets(
     filterSets: FilterSet[],
     combinationLogic: "AND" | "OR",
@@ -898,8 +1042,12 @@
     await ensureTotalProductCount(branchId, rev);
     if (projectState.activeBranchId !== branchId) return;
 
-    if (filterSetColorsEnabled && filterSets.length > 0) {
-      await applyFilterSetColorsToScene(mgr, branchId, rev);
+    if (filterSetColorsEnabled) {
+      if (filterSets.length > 0) {
+        await applyFilterSetColorsToScene(mgr, branchId, rev);
+      } else {
+        mgr.applyFilterSetColors(null);
+      }
     }
 
     searchChannel?.postMessage({
@@ -912,7 +1060,11 @@
   async function autoLoadAppliedFilterSets(branchId: string): Promise<boolean> {
     try {
       const result = await client
-        .query(APPLIED_FILTER_SETS_QUERY, { branchId })
+        .query(
+          APPLIED_FILTER_SETS_QUERY,
+          { branchId },
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       const data = result.data?.appliedFilterSets;
       if (data && data.filterSets && data.filterSets.length > 0) {
@@ -1458,7 +1610,7 @@
   }
 
   function hexToThreeColor(hex: string): number {
-    return parseInt(hex.replace('#', ''), 16);
+    return parseInt(hex.replace("#", ""), 16);
   }
 
   async function handleFilterSetColorToggle() {
@@ -1482,7 +1634,11 @@
   ) {
     try {
       const result = await client
-        .query(FILTER_SET_MATCHES_QUERY, { branchId, revision }, { requestPolicy: "network-only" })
+        .query(
+          FILTER_SET_MATCHES_QUERY,
+          { branchId, revision },
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       const matches = result.data?.filterSetMatches ?? [];
       if (matches.length === 0) {
@@ -1512,13 +1668,15 @@
     showImportModal = false;
     importing = true;
     importError = null;
+    importProgressPercent = 0;
+    importProgressMessage = "Uploading IFC file...";
 
     try {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("branch_id", String(branchId));
 
-      const res = await fetch(`${API_BASE}/upload-ifc`, {
+      const res = await fetch(`${API_BASE}/upload-ifc/stream`, {
         method: "POST",
         body: formData,
       });
@@ -1528,8 +1686,49 @@
         throw new Error(text || `Upload failed (${res.status})`);
       }
 
-      const result = await res.json();
-      revisionState.activeRevision = result.revision_seq;
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("Upload stream was not available");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalResult: { revision_seq: number } | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          const event = JSON.parse(line) as
+            | {
+                progress: number;
+                message: string;
+                stage: string;
+                filename: string;
+              }
+            | { type: "result"; result: { revision_seq: number } }
+            | { type: "error"; message: string };
+          if ("progress" in event) {
+            importProgressPercent = event.progress;
+            importProgressMessage = event.message;
+          } else if (event.type === "result") {
+            finalResult = event.result;
+          } else if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        }
+      }
+
+      if (!finalResult) {
+        throw new Error("Upload completed without a final result");
+      }
+
+      importProgressPercent = 100;
+      importProgressMessage = "Import complete";
+      revisionState.activeRevision = finalResult.revision_seq;
     } catch (err) {
       importError = err instanceof Error ? err.message : "Import failed";
     } finally {
@@ -1596,7 +1795,13 @@
             title="New branch"
             aria-label="New branch"
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              focusable="false"
+            >
               <path
                 d="M8 3v10M3 8h10"
                 fill="none"
@@ -1620,7 +1825,13 @@
               }
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              focusable="false"
+            >
               <path
                 d="M4 4L12 12M12 4L4 12"
                 fill="none"
@@ -1686,7 +1897,13 @@
                       showDeleteProject = true;
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
                       <path
                         d="M4 4L12 12M12 4L4 12"
                         fill="none"
@@ -1741,7 +1958,13 @@
               aria-label="New project"
               onclick={() => (showCreateProject = true)}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                focusable="false"
+              >
                 <path
                   d="M8 3v10M3 8h10"
                   fill="none"
@@ -2049,7 +2272,7 @@
           {/if}
           <!-- View Options section -->
         </Sidebar>
-        <div class="search-actions">
+        <div class="search-actions" use:wheelToHorizontalScroll>
           <!-- Search button -->
           <button
             class="search-btn"
@@ -2234,7 +2457,13 @@
                 stroke="currentColor"
                 stroke-width="2"
               />
-              <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              <path
+                d="M9 12l2 2 4-4"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
             </svg>
             Schema
           </button>
@@ -2499,7 +2728,17 @@
     <!-- Full-screen loading overlay while importing -->
     {#if importing}
       <div class="loading-overlay">
-        <Spinner size="3.5rem" message="Parsing and importing IFC model..." />
+        <div class="import-loading-card">
+          <Spinner size="3.5rem" />
+          <p class="import-loading-message">{importProgressMessage}</p>
+          <p class="import-loading-percent">{importProgressPercent}%</p>
+          <div class="viewport-loading-bar import-loading-bar">
+            <div
+              class="viewport-loading-fill"
+              style="width: {importProgressPercent}%"
+            ></div>
+          </div>
+        </div>
       </div>
     {/if}
 
@@ -3231,6 +3470,11 @@
     pointer-events: auto;
     display: inline-flex;
     gap: 0.5rem;
+    max-width: calc(100vw - 2rem);
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
   }
 
   .search-btn,
@@ -3239,11 +3483,17 @@
   .schema-btn,
   .attributes-btn,
   .agent-btn {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    background: color-mix(in srgb, var(--color-action-primary) 15%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-action-primary) 35%, transparent);
+    background: color-mix(
+      in srgb,
+      var(--color-action-primary) 15%,
+      transparent
+    );
+    border: 1px solid
+      color-mix(in srgb, var(--color-action-primary) 35%, transparent);
     color: var(--color-action-primary);
     padding: 0.45rem 1rem;
     border-radius: 12px;
@@ -3339,6 +3589,41 @@
     backdrop-filter: blur(6px);
   }
 
+  .import-loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 260px;
+    padding: 1.5rem 1.75rem;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.12);
+  }
+
+  .import-loading-message,
+  .import-loading-percent {
+    margin: 0;
+  }
+
+  .import-loading-message {
+    color: var(--color-text-secondary);
+    font-size: 0.92rem;
+    text-align: center;
+  }
+
+  .import-loading-percent {
+    color: var(--color-text-primary);
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .import-loading-bar {
+    width: 100%;
+  }
+
   /* ---- Error toast ---- */
 
   .error-toast {
@@ -3359,5 +3644,4 @@
     backdrop-filter: blur(8px);
     max-width: 90%;
   }
-
 </style>

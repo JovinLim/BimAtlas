@@ -1,0 +1,28 @@
+---
+description: Ensure BroadcastChannel and postMessage payloads are cloneable to avoid DataCloneError
+alwaysApply: true
+---
+
+# BroadcastChannel / postMessage: Cloneable Payloads Only
+
+`BroadcastChannel.postMessage()` and `window.postMessage()` use the **structured clone algorithm**. Objects with non-cloneable values (functions, symbols, class instances, DOM nodes, GraphQL proxies, Svelte reactive proxies) throw:
+
+```
+DataCloneError: Failed to execute 'postMessage' on 'BroadcastChannel': #<Object> could not be cloned.
+```
+
+## Fix
+
+Serialize and re-parse to produce a plain JSON-serializable clone before posting:
+
+```javascript
+const message = { type: "apply-filter-sets", filterSets, combinationLogic };
+const clone = JSON.parse(JSON.stringify(message));
+channel.postMessage(clone);
+```
+
+## When to Apply
+
+- Any `BroadcastChannel.postMessage(...)`
+- Any `window.postMessage(...)` or `window.opener.postMessage(...)`
+- Payloads built from API responses, Svelte state, or objects that may contain non-plain data

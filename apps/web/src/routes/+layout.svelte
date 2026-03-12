@@ -379,11 +379,10 @@
   :global(.btn-icon.btn-danger) {
     background: none;
     border: none;
-    color: var(--color-danger);
+    color: var(--color-text-muted);
   }
 
   :global(.btn-icon.btn-danger:hover:not(:disabled)) {
-    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
     color: var(--color-danger);
   }
 

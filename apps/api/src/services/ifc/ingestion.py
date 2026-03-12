@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import ifcopenshell
 import ifcopenshell.geom
@@ -33,6 +34,7 @@ from ..graph import age_client
 from .geometry import IfcEntityRecord, extract_products_from_model, make_shape_rep_global_id
 
 logger = logging.getLogger("bimatlas.ingestion")
+ProgressCallback = Callable[[dict], None]
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +446,7 @@ def ingest_ifc(
     ifc_path: str,
     branch_id: str,
     label: str | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> IngestionResult:
     """Ingest an IFC file into a branch, creating a new revision with diff-aware SCD2 storage.
 
@@ -473,9 +476,24 @@ def ingest_ifc(
     ifc_filename = Path(ifc_path).name
     logger.info("Starting ingestion of %s into branch %s", ifc_filename, branch_id)
 
+    def emit(progress: int, stage: str, message: str) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            {
+                "progress": max(0, min(100, int(progress))),
+                "stage": stage,
+                "message": message,
+                "filename": ifc_filename,
+            }
+        )
+
     # ---- Phase 1: Extract from IFC ----------------------------------------
+    emit(5, "opening", f"Opening {ifc_filename}")
     model = ifcopenshell.open(ifc_path)
+    emit(20, "extracting-products", "Extracting products")
     records = extract_products_from_model(model)
+    emit(35, "extracting-relationships", "Extracting relationships")
     relationships = _extract_relationships(model)
     new_by_gid: dict[str, IfcEntityRecord] = {r.ifc_global_id: r for r in records}
     all_new_gids = set(new_by_gid.keys())
@@ -492,6 +510,7 @@ def ingest_ifc(
     try:
         with conn.cursor() as cur:
             # Step 2: Create revision on the branch
+            emit(50, "creating-revision", "Creating revision")
             revision_id, revision_seq = _create_revision(cur, branch_id, ifc_filename, label)
             logger.info(
                 "Created revision %s (seq %d) for %s on branch %s",
@@ -502,6 +521,7 @@ def ingest_ifc(
             )
 
             # Step 3: Load current hashes for this branch & diff
+            emit(60, "diffing", "Comparing against current branch")
             current_hashes = _load_current_hashes(cur, branch_id)
             added, modified, deleted_gids, unchanged_gids = _diff_products(
                 records, current_hashes
@@ -516,6 +536,7 @@ def ingest_ifc(
             )
 
             # Step 4: Close modified/deleted rows on this branch
+            emit(70, "updating-entities", "Updating relational entities")
             close_gids = list(deleted_gids | {r.ifc_global_id for r in modified})
             _close_product_rows(cur, close_gids, revision_id, branch_id)
 
@@ -524,6 +545,7 @@ def ingest_ifc(
             _insert_product_rows(cur, insert_records, revision_id, branch_id)
 
         conn.commit()
+        emit(80, "committed", "Committed relational changes")
         logger.info("Relational changes committed for revision %s", revision_id)
     except Exception:
         conn.rollback()
@@ -539,6 +561,7 @@ def ingest_ifc(
     # Step 6: Close graph nodes + edges for modified/deleted
     gids_to_close = deleted_gids | modified_gids
     if gids_to_close:
+        emit(88, "closing-graph", "Closing outdated graph entities")
         logger.info(
             "Closing %d graph nodes (+ edges) for revision %d",
             len(gids_to_close),
@@ -548,6 +571,7 @@ def ingest_ifc(
 
     # Step 7: Create graph nodes for added/modified
     if insert_records:
+        emit(93, "creating-graph-nodes", "Creating graph nodes")
         logger.info(
             "Creating %d graph nodes for revision %d",
             len(insert_records),
@@ -556,6 +580,7 @@ def ingest_ifc(
         _create_graph_nodes(insert_records, revision_seq, branch_id)
 
     # Step 8: Create edges for relationships involving changed products
+    emit(97, "creating-graph-edges", "Creating graph edges")
     edges_created = _create_graph_edges(
         relationships, changed_or_new_gids, all_new_gids, revision_seq, branch_id
     )
@@ -576,5 +601,6 @@ def ingest_ifc(
         unchanged=len(unchanged_gids),
         edges_created=edges_created,
     )
+    emit(100, "complete", "Ingestion complete")
     logger.info("Ingestion complete: %s", result)
     return result

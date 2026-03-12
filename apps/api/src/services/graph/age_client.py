@@ -394,6 +394,31 @@ def get_product_ids_by_relation(
     return [row[0] for row in _exec_cypher(cypher, cols)]
 
 
+def get_product_ids_related_to_targets(
+    rel_type: str,
+    target_gids: list[str],
+    rev: int,
+    branch_id: str,
+) -> list[str]:
+    """Return global_ids of products that have relation *rel_type* to any entity in *target_gids*.
+
+    For each edge (n)-[r]-(m) where m is in target_gids, returns n.ifc_global_id.
+    """
+    if not target_gids:
+        return []
+    label = _validate_label(rel_type)
+    gids_cypher = "[" + ", ".join(f"'{_validate_id(g)}'" for g in target_gids) + "]"
+    cypher = cypher_tpl.PRODUCTS_RELATED_TO_TARGETS.format(
+        rel_type=label,
+        r_filter=_rev_filter("r", rev, branch_id),
+        n_filter=_rev_filter("n", rev, branch_id),
+        m_filter=_rev_filter("m", rev, branch_id),
+        target_gids=gids_cypher,
+    )
+    cols = ["gid"]
+    return [row[0] for row in _exec_cypher(cypher, cols)]
+
+
 def get_spatial_tree_roots(rev: int, branch_id: str) -> list[dict]:
     """Return ``IfcProject`` root nodes visible at *rev* on *branch_id*."""
     cypher = cypher_tpl.SPATIAL_ROOTS.format(p_filter=_rev_filter("p", rev, branch_id))

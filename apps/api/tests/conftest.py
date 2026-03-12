@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS filter_sets (
     branch_id     UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
     name          VARCHAR NOT NULL,
     logic         logic_operator NOT NULL DEFAULT 'AND',
-    filters       JSONB NOT NULL DEFAULT '[]',
+    filters       JSONB NOT NULL DEFAULT '{"kind":"group","op":"ALL","children":[]}',
     color         VARCHAR NOT NULL DEFAULT '#4A90D9',
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now()

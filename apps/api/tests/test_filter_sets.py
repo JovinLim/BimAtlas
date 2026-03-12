@@ -3,6 +3,24 @@
 import pytest
 
 from src import db
+from src.schema.filter_tree import flatten_tree_to_filters
+
+
+def _filter_count(row: dict) -> int:
+    """Return number of leaf filters (handles tree or legacy)."""
+    f = row.get("filters")
+    if isinstance(f, dict) and f.get("kind") == "group":
+        return len(flatten_tree_to_filters(f))
+    return len(f) if isinstance(f, list) else 0
+
+
+def _first_filter(row: dict) -> dict | None:
+    """Return first leaf filter (handles tree or legacy)."""
+    f = row.get("filters")
+    if isinstance(f, dict) and f.get("kind") == "group":
+        flat = flatten_tree_to_filters(f)
+        return flat[0] if flat else None
+    return f[0] if isinstance(f, list) and f else None
 
 
 class TestFilterSetCRUD:
@@ -18,8 +36,8 @@ class TestFilterSetCRUD:
         assert str(fs["branch_id"]) == str(branch_id)
         assert fs["name"] == "Walls Only"
         assert fs["logic"] == "AND"
-        assert len(fs["filters"]) == 1
-        assert fs["filters"][0]["ifcClass"] == "IfcWall"
+        assert _filter_count(fs) == 1
+        assert _first_filter(fs).get("ifcClass") == "IfcWall"
 
     def test_create_filter_set_or_logic(self, db_pool, test_branch):
         fs = db.create_filter_set(
@@ -30,7 +48,7 @@ class TestFilterSetCRUD:
             ],
         )
         assert fs["logic"] == "OR"
-        assert len(fs["filters"]) == 2
+        assert _filter_count(fs) == 2
 
     def test_fetch_filter_set(self, db_pool, test_branch):
         fs = db.create_filter_set(
@@ -64,7 +82,7 @@ class TestFilterSetCRUD:
         new_filters = [{"mode": "class", "ifcClass": "IfcBeam"}]
         updated = db.update_filter_set(str(fs["filter_set_id"]), filters_json=new_filters)
         assert updated is not None
-        assert len(updated["filters"]) == 1
+        assert _filter_count(updated) == 1
 
     def test_update_filter_set_not_found(self, db_pool):
         assert db.update_filter_set("00000000-0000-0000-0000-000000000000", name="x") is None
@@ -395,6 +413,17 @@ class TestProductFilterWithFilterSets:
         assert len(rows) >= 2
         assert all(r["ifc_class"] == "IfcWall" for r in rows)
 
+    def test_operator_inherits_from_without_schema_rules_falls_back_to_exact_match(self):
+        """Without uploaded schema rules, inherits_from should degrade gracefully."""
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq,
+            self.branch_id,
+            [{"logic": "AND", "filters": [{"mode": "class", "ifcClass": "IfcWall", "operator": "inherits_from"}]}],
+            "AND",
+        )
+        assert len(rows) == 2
+        assert all(r["ifc_class"] == "IfcWall" for r in rows)
+
     def test_logic_allowlist_normalized(self):
         """Invalid logic tokens default to AND."""
         rows = db.fetch_entities_with_filter_sets(
@@ -500,3 +529,96 @@ class TestProductFilterWithFilterSets:
         )
         assert len(rows) == 1
         assert rows[0]["ifc_global_id"] == "g3"
+
+    def test_nested_tree_all_then_any(self):
+        """ALL( IfcWall, ANY( Name contains Interior, Tag is W2 ) ) -> 1 result (g5)."""
+        tree = {
+            "kind": "group",
+            "op": "ALL",
+            "children": [
+                {"kind": "leaf", "mode": "class", "ifcClass": "IfcWall", "operator": "is"},
+                {
+                    "kind": "group",
+                    "op": "ANY",
+                    "children": [
+                        {"kind": "leaf", "mode": "attribute", "attribute": "Name", "value": "Interior", "operator": "contains", "valueType": "string"},
+                        {"kind": "leaf", "mode": "attribute", "attribute": "Tag", "value": "W2", "operator": "is", "valueType": "string"},
+                    ],
+                },
+            ],
+        }
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "AND", "filters": tree}],
+            "AND",
+        )
+        assert len(rows) == 1
+        assert rows[0]["ifc_global_id"] == "g5"
+
+    def test_nested_tree_any_of_two(self):
+        """ANY( IfcDoor, IfcSlab ) -> 2 results."""
+        tree = {
+            "kind": "group",
+            "op": "ANY",
+            "children": [
+                {"kind": "leaf", "mode": "class", "ifcClass": "IfcDoor", "operator": "is"},
+                {"kind": "leaf", "mode": "class", "ifcClass": "IfcSlab", "operator": "is"},
+            ],
+        }
+        rows = db.fetch_entities_with_filter_sets(
+            self.rev_seq, self.branch_id,
+            [{"logic": "OR", "filters": tree}],
+            "AND",
+        )
+        assert len(rows) == 2
+        gids = {r["ifc_global_id"] for r in rows}
+        assert gids == {"g2", "g4"}
+
+
+class TestFilterTreeValidation:
+    """Test filter tree validation and canonicalization."""
+
+    def test_create_rejects_invalid_depth(self, db_pool, test_branch):
+        """Tree with depth > 2 should be rejected."""
+        tree = {
+            "kind": "group",
+            "op": "ALL",
+            "children": [
+                {
+                    "kind": "group",
+                    "op": "ANY",
+                    "children": [
+                        {
+                            "kind": "group",
+                            "op": "ALL",
+                            "children": [{"kind": "leaf", "mode": "class", "ifcClass": "IfcWall", "operator": "is"}],
+                        },
+                    ],
+                },
+            ],
+        }
+        with pytest.raises(ValueError, match="Invalid filter tree"):
+            db.create_filter_set(test_branch, "Bad", "AND", tree)
+
+    def test_create_accepts_tree(self, db_pool, test_branch):
+        """Can create with canonical tree."""
+        tree = {
+            "kind": "group",
+            "op": "ALL",
+            "children": [
+                {"kind": "leaf", "mode": "class", "ifcClass": "IfcWall", "operator": "is"},
+            ],
+        }
+        fs = db.create_filter_set(test_branch, "Tree FS", "AND", tree)
+        assert _filter_count(fs) == 1
+        assert _first_filter(fs).get("ifcClass") == "IfcWall"
+
+    def test_legacy_flat_creates_tree(self, db_pool, test_branch):
+        """Legacy flat list is canonicalized to tree on create."""
+        fs = db.create_filter_set(
+            test_branch, "Legacy", "OR",
+            [{"mode": "class", "ifcClass": "IfcDoor"}, {"mode": "class", "ifcClass": "IfcWindow"}],
+        )
+        assert fs["filters"]["kind"] == "group"
+        assert fs["filters"]["op"] == "ANY"
+        assert _filter_count(fs) == 2
