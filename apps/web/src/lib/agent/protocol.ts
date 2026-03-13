@@ -19,14 +19,36 @@ export type AgentMessage =
 
 // --- Chat message types ---
 
+export interface GuidanceRequest {
+	question: string;
+	context: string;
+}
+
+export interface TokenUsage {
+	prompt_tokens: number;
+	completion_tokens: number;
+	total_tokens: number;
+	cost_usd?: number;
+}
+
 export interface ChatMsg {
 	id: string;
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
 	thinkingSteps?: string[];
 	toolCalls?: ToolCallInfo[];
+	attachments?: FileAttachment[];
+	guidanceRequest?: GuidanceRequest;
+	usage?: TokenUsage;
 	isStreaming?: boolean;
 	timestamp: string;
+}
+
+export interface FileAttachment {
+	filename: string;
+	size_bytes: number;
+	content_type: string;
+	url?: string;
 }
 
 export interface ToolCallInfo {
@@ -41,8 +63,16 @@ export interface ToolCallInfo {
 export type AgentSSEEvent =
 	| { type: 'thinking'; content: string }
 	| { type: 'tool_call'; name: string; arguments: Record<string, unknown>; result?: string }
+	| { type: 'guidance_request'; question: string; context: string }
 	| { type: 'message'; content: string }
 	| { type: 'error'; content: string }
+	| {
+			type: 'usage';
+			prompt_tokens: number;
+			completion_tokens: number;
+			total_tokens: number;
+			cost_usd?: number;
+	  }
 	| { type: 'done' };
 
 // --- Saved agent config (IfcAgent as ifc_entity) ---

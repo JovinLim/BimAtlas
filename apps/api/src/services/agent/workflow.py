@@ -1,95 +1,64 @@
 """LlamaIndex ReActAgent workflow for agentic IFC filtering.
 
-Uses a ReActAgent with a strong system prompt that guides the agent through
-Discovery -> Validation -> Creation -> Application steps.  The agent
-autonomously selects tools based on the system prompt instructions.
+Uses a ReActAgent with API discovery and direct HTTP execution. The agent
+discovers the API contract via discover_api and calls endpoints via execute_request.
+No MCP/filter tools — all operations go through the API.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any, AsyncGenerator
+from uuid import uuid4
 
 from llama_index.core.agent import ReActAgent
 from llama_index.core.agent.workflow import AgentInput, AgentStream, ToolCall, ToolCallResult
+from llama_index.core.callbacks import TokenCountingHandler
 from llama_index.core.llms import ChatMessage, MessageRole
 from workflows.events import StopEvent
 
 from .llm_factory import create_llm
-from .mcp_tools import get_agent_tools
+from .pricing import compute_cost_usd
+from .sandbox_tools import get_api_tools
 
 logger = logging.getLogger("bimatlas.agent")
 
 SYSTEM_PROMPT = """\
-You are the BimAtlas Filtering Agent.  Your sole purpose is to help users \
-create and apply IFC data filters on BimAtlas projects.  You translate \
-natural language filter requests into structured filter set operations.
+You are the BimAtlas Technical Agent, an autonomous data analyst and automation
+engineer for BIM/IFC projects.
 
-## Workflow — follow these steps IN ORDER for every request:
+You have these tools:
+- `search_skills` — Search IFC skills by intent. Call FIRST for filter requests.
+- `discover_api` — API contract + IFC cheat sheet. Read cheat sheet before constructing GraphQL.
+- `ask_user_for_guidance` — Request domain guidance when path is unclear. Do NOT guess.
+- `save_ifc_skill` — Save learned IFC mapping after user provides guidance.
+- `execute_request` — Execute HTTP/GraphQL requests.
+- `search_web` — Search the web for up-to-date info, building codes, specs. Use `fetch_webpage` for full content.
+- `list_uploaded_files`, `read_uploaded_file` — For attached files.
 
-1. **Discovery**: ALWAYS call `get_project_schema` first to learn which IFC \
-classes, attributes, operators, and relationships exist in the current \
-project context.  Never guess — only use classes and attributes that are \
-confirmed by the schema.
+## Web search for IFC content
+When using `search_web` for IFC-related queries (schema, entities, relationships, documentation),
+prefer official buildingSMART sources. Include site-specific terms in your query, e.g.:
+- "site:standards.buildingsmart.org IfcWall"
+- "site:technical.buildingsmart.org IFC schema"
+- "site:buildingsmart.org IFC4"
+This yields authoritative IFC definitions over third-party or outdated content.
 
-2. **Validation**: Before creating any filters, verify that:
-   - The IFC class(es) mentioned by the user exist in the schema.
-   - The attribute key(s) exist in common_attributes.
-   - The operator is valid for the chosen mode.
-   If something doesn't match, inform the user and suggest alternatives from \
-the schema.
-
-3. **Creation**: Create a filter set with `create_filter_set`, then add \
-conditions with `add_filter_condition`. For nested logic like "A AND (B OR C)", \
-use `add_filter_group` to create a sub-group with its first condition, then \
-`add_filter_condition(..., parent_path=group_index)` to add more conditions \
-to that group. Filter tree: root (depth 0) with op ALL/ANY; sub-groups (depth 1) \
-with their own op; max depth 2.
-
-4. **Application**: Apply the filter set with `apply_filter_set_to_context`.  \
-The combination_logic between multiple filter sets is always "OR".
-
-## Operator Reference
-
-### Class mode operators
-- `is` — exact class match
-- `is_not` — exclude exact class
-- `inherits_from` — class + all descendants in the IFC hierarchy \
-(e.g. `inherits_from IfcWindow` matches IfcWindow AND IfcWindowStandardCase)
-
-### Attribute mode — string operators
-is, is_not, contains, not_contains, starts_with, ends_with, is_empty, is_not_empty
-
-### Attribute mode — numeric operators (set value_type="numeric")
-equals, not_equals, gt, lt, gte, lte
-
-### Attribute value_type selection (IMPORTANT)
-- `string`: match string values under the attribute key.
-- `numeric`: match numeric values (required for equals/not_equals/gt/lt/gte/lte).
-- `object`: match nested object key names under the attribute key.
-- For property-set name filtering (e.g. `PropertySets` contains `Pset_WallCommon`),
-  ALWAYS use `value_type="object"`, not string.
-
-### Relation mode
-Use the relation name (e.g. 'IfcRelVoidsElement') as the filter value.
-
-## Filter tree and limitations
-- Filter tree: root group (op ALL or ANY) with children that are leaves or \
-sub-groups. Sub-groups have their own op. Max depth 2.
-- For "X AND (Y OR Z)": create_filter_set(logic=AND), add_filter_condition(X), \
-add_filter_group(op=OR, first condition Y), add_filter_condition(Z, parent_path=group_index).
-- Multiple filter sets are always combined with OR.
-
-## Rules
-- NEVER create filters without calling `get_project_schema` first.
-- NEVER guess IFC class names — only use classes from the schema response.
-- ALWAYS choose an explicit attribute `value_type` that matches user intent.
-- When the user says "inherits from" or "subtypes of", use `inherits_from`.
-- When creating multi-condition filters within a single set, use `logic="AND"` \
-to require all conditions to match, or `logic="OR"` for any.
-- After applying filters, report how many entities matched.
-- Be concise.  Do not explain IFC concepts unless the user asks.
-- If the user's request is ambiguous, ask a clarifying question.
+## Domain-safe filter policy (MANDATORY)
+1. Classify: Is this a simple attribute filter or complex relational filter (spatial, material, type)?
+2. For complex filters: Call `search_skills(intent)` FIRST.
+3. Call `discover_api` and read the `ifc_cheat_sheet` before constructing any GraphQL.
+4. If no skill exists and the cheat sheet does not clearly define the path: Call
+   `ask_user_for_guidance(question)` immediately. NEVER guess IFC relationships.
+5. After user provides guidance: Use it to build the filter, then call `save_ifc_skill`
+   to memorize the logic for future sessions.
+6. Use `execute_request` for all API calls. Use branchId and revision from context.
+7. Do not invent field names. Use only prescribed relationships from cheat sheet or skills.
+8. For relational intent, build queries with IFC relation semantics (e.g. `relationTypes`,
+   relation-mode filter sets, `IfcRelContainedInSpatialStructure`, `IfcRelAggregates`,
+   `IfcRelDefinesByType`). Do not rely on plain attribute matching.
+9. `containedIn` is spatial-only convenience. Use it only for spatial containment
+   targets; it is not a general relation mechanism.
 """
 
 
@@ -135,6 +104,32 @@ def _compose_user_message(message: str, pre_prompt: str | None) -> str:
     )
 
 
+def _compose_uploaded_files_note(uploaded_files: list[str] | None) -> str:
+    if not uploaded_files:
+        return ""
+    joined = ", ".join(uploaded_files)
+    return (
+        "Uploaded files available in this chat session: "
+        f"{joined}. Use list_uploaded_files/read_uploaded_file only if the user asks "
+        "to analyze those attachments."
+    )
+
+
+def _compose_branch_context(branch_id: str, revision: int | None) -> str:
+    """Inject branch and revision into system prompt so the agent uses them in API calls."""
+    rev_str = str(revision) if revision is not None else "latest"
+    return (
+        f"Current context: branchId={branch_id!r}, revision={rev_str}. "
+        "Use these in all GraphQL variables and REST query params that require them."
+    )
+
+
+def _compose_project_context(project_id: str | None) -> str:
+    if not project_id:
+        return "Current context: projectId is unavailable for this request."
+    return f"Current context: projectId={project_id!r}. Use this when endpoints require projectId."
+
+
 async def run_agent_streaming(
     message: str,
     branch_id: str,
@@ -145,6 +140,10 @@ async def run_agent_streaming(
     base_url: str | None = None,
     pre_prompt: str | None = None,
     chat_history: list[dict[str, str]] | None = None,
+    session_id: str | None = None,
+    uploaded_files: list[str] | None = None,
+    api_spec_provider: Any | None = None,
+    project_id: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run the agent and yield SSE-compatible event dicts.
 
@@ -159,7 +158,23 @@ async def run_agent_streaming(
         yield {"type": "done"}
         return
 
-    tools = get_agent_tools(branch_id, revision)
+    token_handler = TokenCountingHandler()
+    llm.callback_manager.add_handler(token_handler)
+
+    sid = session_id or str(uuid4())
+    tools = []
+    if callable(api_spec_provider):
+        tools.extend(
+            get_api_tools(
+                sid,
+                api_spec_provider,
+                include_discover=True,
+                branch_id=branch_id,
+                revision=revision,
+                project_id=project_id,
+                api_key=api_key,
+            )
+        )
 
     prior_messages: list[ChatMessage] = []
     if chat_history:
@@ -174,10 +189,23 @@ async def run_agent_streaming(
             )
 
     try:
+        files_note = _compose_uploaded_files_note(uploaded_files)
+        branch_note = _compose_branch_context(branch_id, revision)
+        project_note = _compose_project_context(project_id)
+        system_prompt = _build_system_prompt(pre_prompt)
+        system_prompt = (
+            f"{system_prompt}\n\n## Runtime Context\n{project_note}\n{branch_note}\n"
+            "The word 'revision' in user requests refers to the current project branch revision "
+            "(model data in the API), not an uploaded file revision.\n"
+            "Never send placeholder values like '<use branchId from context>' in API variables. "
+            "Always use the exact IDs provided in Runtime Context."
+        )
+        if files_note:
+            system_prompt = f"{system_prompt}\n\n## Uploaded File Context\n{files_note}"
         agent = ReActAgent(
             tools=tools,
             llm=llm,
-            system_prompt=_build_system_prompt(pre_prompt),
+            system_prompt=system_prompt,
         )
     except Exception as exc:
         yield {"type": "error", "content": f"Failed to create agent: {exc}"}
@@ -218,6 +246,17 @@ async def run_agent_streaming(
                     result_preview = str(event.tool_output)[:500]
                 except Exception:
                     result_preview = "(could not serialize)"
+                out = event.tool_output
+                if (
+                    event.tool_name == "ask_user_for_guidance"
+                    and isinstance(out, dict)
+                    and out.get("type") == "guidance_request"
+                ):
+                    yield {
+                        "type": "guidance_request",
+                        "question": out.get("question", ""),
+                        "context": out.get("context", ""),
+                    }
                 yield {
                     "type": "tool_call",
                     "name": event.tool_name,
@@ -232,6 +271,19 @@ async def run_agent_streaming(
         response = await handler
         final_response = _normalize_assistant_response(str(getattr(response, "response", "") or latest_streamed_response))
         yield {"type": "message", "content": final_response}
+
+        prompt_tokens = token_handler.prompt_llm_token_count
+        completion_tokens = token_handler.completion_llm_token_count
+        total_tokens = token_handler.total_llm_token_count
+        if total_tokens > 0:
+            cost_usd = compute_cost_usd(provider, model, prompt_tokens, completion_tokens)
+            yield {
+                "type": "usage",
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cost_usd": cost_usd,
+            }
 
     except Exception as exc:
         logger.exception("Agent execution failed")

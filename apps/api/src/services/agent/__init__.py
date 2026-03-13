@@ -1,1 +1,1 @@
-"""Agentic filtering framework: MCP tools, LlamaIndex workflow, event bus."""
+"""Agentic filtering framework: API discovery, LlamaIndex workflow, event bus."""

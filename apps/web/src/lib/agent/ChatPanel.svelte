@@ -6,6 +6,7 @@
     type ChatMsg,
     type AgentSSEEvent,
     type ToolCallInfo,
+    type FileAttachment,
     type AgentConfigDraft,
     type AgentConfig,
     type ChatSession,
@@ -34,12 +35,18 @@
 
   const STORAGE_KEY = "bimatlas-agent-config";
   const ACTIVE_CHAT_STORAGE_PREFIX = "bimatlas-agent-active-chat";
+  const AGENT_PER_CHAT_STORAGE_KEY = "bimatlas-agent-agent-per-chat";
+  const DRAFT_PER_CHAT_STORAGE_KEY = "bimatlas-agent-draft-per-chat";
   const API_BASE = import.meta.env.VITE_API_URL
     ? (import.meta.env.VITE_API_URL as string).replace("/graphql", "")
     : "/api";
 
   let messages = $state<ChatMsg[]>([]);
   let inputText = $state("");
+  let pendingFiles = $state<File[]>([]);
+  let uploadingFiles = $state(false);
+  let sessionId = $state<string | null>(null);
+  let fileInputEl: HTMLInputElement | undefined = $state(undefined);
   let loading = $state(false);
   let abortController: AbortController | null = $state(null);
   let liveStreamSource: EventSource | null = $state(null);
@@ -133,6 +140,58 @@
     if (projectId && branchId) loadChatSessions();
   });
 
+  // Debounced persist of input draft for current chat (survives page refresh)
+  $effect(() => {
+    if (typeof window === "undefined" || !activeChatId) return;
+    const chat = activeChatId;
+    const text = inputText;
+    const t = setTimeout(() => {
+      persistDraftForChat(chat, text);
+    }, 400);
+    return () => clearTimeout(t);
+  });
+
+  // Restore per-chat agent selection when switching chats or when savedAgents load
+  $effect(() => {
+    if (typeof window === "undefined" || !activeChatId || savedAgents.length === 0)
+      return;
+    const map = readAgentPerChatMap();
+    const agentId = map[activeChatId];
+    const agent = agentId
+      ? savedAgents.find((a) => a.entity_id === agentId)
+      : null;
+    if (agent) {
+      selectedAgentId = agent.entity_id;
+      config = {
+        name: agent.name || `${agent.provider}/${agent.model}`,
+        provider: agent.provider as AgentConfigDraft["provider"],
+        model: agent.model,
+        apiKey: agent.api_key,
+        baseUrl: agent.base_url ?? undefined,
+        prePrompt: agent.pre_prompt ?? "",
+      };
+    } else {
+      selectedAgentId = null;
+      let fallbackApiKey = "";
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          fallbackApiKey = parsed?.apiKey ?? "";
+        }
+      } catch {}
+      config = {
+        name: "Default Agent",
+        provider: "openai",
+        model: "gpt-4o",
+        apiKey: fallbackApiKey,
+        baseUrl: undefined,
+        prePrompt: "",
+      };
+      persistAgentForChat(activeChatId, null);
+    }
+  });
+
   async function loadContext() {
     if (!projectId || !branchId) {
       apiProjectName = null;
@@ -198,12 +257,61 @@
     }
   }
 
+  function readAgentPerChatMap(): Record<string, string> {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem(AGENT_PER_CHAT_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function persistAgentForChat(chatId: string | null, agentId: string | null) {
+    if (typeof window === "undefined") return;
+    try {
+      const map = readAgentPerChatMap();
+      if (chatId) {
+        if (agentId) map[chatId] = agentId;
+        else delete map[chatId];
+      }
+      localStorage.setItem(AGENT_PER_CHAT_STORAGE_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  function readDraftPerChatMap(): Record<string, string> {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem(DRAFT_PER_CHAT_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function persistDraftForChat(chatId: string | null, text: string) {
+    if (typeof window === "undefined") return;
+    try {
+      const map = readDraftPerChatMap();
+      if (chatId) {
+        if (text) map[chatId] = text;
+        else delete map[chatId];
+      }
+      localStorage.setItem(DRAFT_PER_CHAT_STORAGE_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
   async function loadChatSessions() {
     if (!projectId || !branchId) {
       closeLiveStream();
       chatSessions = [];
       activeChatId = null;
       messages = [];
+      inputText = "";
       return;
     }
     try {
@@ -216,6 +324,7 @@
       if (sessions.length === 0) {
         activeChatId = null;
         messages = [];
+        inputText = "";
         persistActiveChat(null);
         return;
       }
@@ -253,6 +362,7 @@
       prePrompt: agent.pre_prompt ?? "",
     };
     configModalOpen = false;
+    if (activeChatId) persistAgentForChat(activeChatId, agent.entity_id);
   }
 
   function clearAgentSelection() {
@@ -266,6 +376,7 @@
       prePrompt: "",
     };
     configModalOpen = true; // open modal so user can fill new agent
+    if (activeChatId) persistAgentForChat(activeChatId, null);
   }
 
   async function saveCurrentAgent() {
@@ -390,6 +501,8 @@
         activeChatId = chat.chat_id;
         persistActiveChat(chat.chat_id);
         messages = [];
+        inputText = "";
+        sessionId = null;
         await loadChatSessions();
       }
     } catch {}
@@ -400,7 +513,10 @@
     opts: { persist?: boolean } = {},
   ) {
     closeLiveStream();
+    if (activeChatId) persistDraftForChat(activeChatId, inputText);
     activeChatId = chat.chat_id;
+    sessionId = null;
+    inputText = readDraftPerChatMap()[chat.chat_id] ?? "";
     if (opts.persist ?? true) persistActiveChat(chat.chat_id);
     try {
       const res = await fetch(
@@ -413,6 +529,8 @@
           role: m.role as string,
           content: m.content as string,
           toolCalls: (m.tool_calls as ToolCallInfo[] | null) ?? undefined,
+          attachments: (m.attachments as FileAttachment[] | null) ?? undefined,
+          usage: (m.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_usd?: number } | null) ?? undefined,
           timestamp: m.created_at as string,
         }));
       }
@@ -426,10 +544,13 @@
   async function deleteChat(id: string) {
     try {
       await fetch(`${API_BASE}/agent/chats/${id}`, { method: "DELETE" });
+      persistAgentForChat(id, null);
+      persistDraftForChat(id, "");
       if (activeChatId === id) {
         activeChatId = null;
         persistActiveChat(null);
         messages = [];
+        inputText = "";
       }
       await loadChatSessions();
     } catch {}
@@ -455,6 +576,7 @@
     chatId: string,
     thinkingSteps: string[],
     toolCalls: ToolCallInfo[],
+    attachments: FileAttachment[],
     content: string,
   ): string {
     const msgId = `live-${chatId}-${Date.now()}`;
@@ -466,6 +588,7 @@
         content,
         thinkingSteps: thinkingSteps.length > 0 ? [...thinkingSteps] : undefined,
         toolCalls: toolCalls.length > 0 ? [...toolCalls] : undefined,
+        attachments: attachments.length > 0 ? [...attachments] : undefined,
         isStreaming: true,
         timestamp: new Date().toISOString(),
       },
@@ -493,11 +616,14 @@
           }))
         : [];
       let assistantContent: string = (state.message as string) ?? "";
+      let guidanceRequest: { question: string; context: string } | null = null;
+      let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_usd?: number } | undefined;
       let hadError = false;
       const streamingMessageId = appendLiveStreamingMessage(
         chatId,
         thinkingSteps,
         toolCalls,
+        [],
         assistantContent,
       );
 
@@ -526,12 +652,29 @@
             updateMessageById(streamingMessageId, (msg) => ({
               ...msg,
               toolCalls: [...toolCalls],
+              guidanceRequest: guidanceRequest ?? undefined,
+            }));
+          } else if (event.type === "guidance_request") {
+            guidanceRequest = {
+              question: event.question ?? "",
+              context: event.context ?? "",
+            };
+            updateMessageById(streamingMessageId, (msg) => ({
+              ...msg,
+              guidanceRequest: guidanceRequest ?? undefined,
             }));
           } else if (event.type === "message") {
             assistantContent = event.content;
           } else if (event.type === "error") {
             hadError = true;
             assistantContent = event.content;
+          } else if (event.type === "usage") {
+            usage = {
+              prompt_tokens: event.prompt_tokens ?? 0,
+              completion_tokens: event.completion_tokens ?? 0,
+              total_tokens: event.total_tokens ?? 0,
+              cost_usd: event.cost_usd,
+            };
           } else if (event.type === "done") {
             updateMessageById(streamingMessageId, (msg) => ({
               ...msg,
@@ -539,6 +682,8 @@
               content: assistantContent || "(no response)",
               thinkingSteps: thinkingSteps.length > 0 ? [...thinkingSteps] : undefined,
               toolCalls: toolCalls.length > 0 ? [...toolCalls] : undefined,
+              guidanceRequest: guidanceRequest ?? undefined,
+              usage,
               isStreaming: false,
             }));
             loading = false;
@@ -554,6 +699,11 @@
     closeLiveStream();
     const text = inputText.trim();
     if (!text || loading) return;
+
+    if ((!projectId || !branchId) && onRequestContext) {
+      onRequestContext();
+      await tick();
+    }
 
     if (savedAgents.length > 0 && selectedAgentId == null) {
       messages = [
@@ -618,14 +768,60 @@
       } catch {}
     }
 
+    const userAttachments: FileAttachment[] =
+      pendingFiles.length > 0
+        ? pendingFiles.map((f) => ({
+            filename: f.name,
+            size_bytes: f.size,
+            content_type: f.type || "application/octet-stream",
+          }))
+        : [];
+
+    if (pendingFiles.length > 0) {
+      if (!sessionId) sessionId = crypto.randomUUID();
+      uploadingFiles = true;
+      try {
+        for (const file of pendingFiles) {
+          const form = new FormData();
+          form.append("file", file);
+          form.append("session_id", sessionId);
+          const uploadRes = await fetch(`${API_BASE}/agent/upload`, {
+            method: "POST",
+            body: form,
+          });
+          if (!uploadRes.ok) {
+            const errText = await uploadRes.text();
+            throw new Error(errText || `Upload failed: ${uploadRes.status}`);
+          }
+        }
+      } catch (err) {
+        uploadingFiles = false;
+        messages = [
+          ...messages,
+          {
+            id: generateMessageId(),
+            role: "tool",
+            content: `File upload failed: ${err instanceof Error ? err.message : err}`,
+            timestamp: new Date().toISOString(),
+          },
+        ];
+        await scrollToBottom();
+        return;
+      } finally {
+        uploadingFiles = false;
+      }
+    }
+
     const userMsg: ChatMsg = {
       id: generateMessageId(),
       role: "user",
       content: text,
+      attachments: userAttachments.length > 0 ? userAttachments : undefined,
       timestamp: new Date().toISOString(),
     };
     messages = [...messages, userMsg];
     inputText = "";
+    if (activeChatId) persistDraftForChat(activeChatId, "");
     loading = true;
     const streamingMessageId = generateMessageId();
     messages = [
@@ -647,15 +843,21 @@
       provider: config.provider,
       model: config.model,
       apiKey: config.apiKey,
+      projectId,
       branchId,
       revision,
       baseUrl: config.baseUrl || null,
       prePrompt: config.prePrompt || "",
+      sessionId,
+      files: userAttachments.map((f) => f.filename),
     };
     if (activeChatId) body.chatId = activeChatId;
+    pendingFiles = [];
 
     const toolCalls: ToolCallInfo[] = [];
     const thinkingSteps: string[] = [];
+    let guidanceRequest: { question: string; context: string } | null = null;
+    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_usd?: number } | undefined;
     let assistantContent = "";
     let hadError = false;
 
@@ -708,10 +910,28 @@
               updateMessageById(streamingMessageId, (msg) => ({
                 ...msg,
                 toolCalls: [...toolCalls],
+                guidanceRequest: guidanceRequest ?? undefined,
+              }));
+              await scrollToBottom();
+            } else if (event.type === "guidance_request") {
+              guidanceRequest = {
+                question: event.question ?? "",
+                context: event.context ?? "",
+              };
+              updateMessageById(streamingMessageId, (msg) => ({
+                ...msg,
+                guidanceRequest: guidanceRequest ?? undefined,
               }));
               await scrollToBottom();
             } else if (event.type === "message") {
               assistantContent = event.content;
+            } else if (event.type === "usage") {
+              usage = {
+                prompt_tokens: event.prompt_tokens ?? 0,
+                completion_tokens: event.completion_tokens ?? 0,
+                total_tokens: event.total_tokens ?? 0,
+                cost_usd: event.cost_usd,
+              };
             } else if (event.type === "error") {
               hadError = true;
               assistantContent = event.content;
@@ -735,6 +955,8 @@
       content: assistantContent || "(no response)",
       thinkingSteps: thinkingSteps.length > 0 ? thinkingSteps : undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      guidanceRequest: guidanceRequest ?? undefined,
+      usage,
       isStreaming: false,
       timestamp: new Date().toISOString(),
     };
@@ -753,9 +975,58 @@
   function stopStream() {
     abortController?.abort();
   }
+
+  function addPendingFiles(files: FileList | File[]) {
+    const allowed = new Set([".pdf", ".csv", ".txt", ".json", ".xml", ".xlsx"]);
+    const next: File[] = [];
+    for (const f of Array.from(files)) {
+      const ext = f.name.includes(".")
+        ? f.name.slice(f.name.lastIndexOf(".")).toLowerCase()
+        : "";
+      if (!allowed.has(ext)) continue;
+      if (f.size > 20 * 1024 * 1024) continue;
+      next.push(f);
+    }
+    if (next.length === 0) return;
+    const existingNames = new Set(pendingFiles.map((f) => f.name));
+    pendingFiles = [...pendingFiles, ...next.filter((f) => !existingNames.has(f.name))];
+  }
+
+  function handleFileSelect(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    if (!input.files) return;
+    addPendingFiles(input.files);
+    input.value = "";
+  }
+
+  function removePendingFile(index: number) {
+    pendingFiles = pendingFiles.filter((_, i) => i !== index);
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    if (loading || uploadingFiles) return;
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      addPendingFiles(e.dataTransfer.files);
+    }
+  }
 </script>
 
-<div class="chat-panel">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="chat-panel" ondragover={handleDragOver} ondrop={handleDrop}>
   <!-- Left sidebar -->
   <aside class="chat-sidebar">
     <!-- Toolbar -->
@@ -935,19 +1206,44 @@
 
     <!-- Input -->
     <div class="input-area">
+      <input
+        type="file"
+        bind:this={fileInputEl}
+        accept=".pdf,.csv,.txt,.json,.xml,.xlsx"
+        multiple
+        onchange={handleFileSelect}
+        style="display:none"
+      />
+      <button
+        type="button"
+        class="attach-btn"
+        title="Attach files"
+        onclick={() => fileInputEl?.click()}
+        disabled={loading || uploadingFiles}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M21.44 11.05L12.25 20.24a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 115.65 5.65l-9.2 9.2a2 2 0 11-2.83-2.83l8.48-8.48"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
       <textarea
         class="chat-input"
-        placeholder="Describe your filter..."
+        placeholder="Ask the agent (attachments supported)..."
         rows="1"
         bind:value={inputText}
         onkeydown={handleKeydown}
-        disabled={loading}
+        disabled={loading || uploadingFiles}
       ></textarea>
       <button
         type="button"
         class="send-btn"
         class:stop-btn={loading}
-        disabled={!loading && (!inputText.trim() || (savedAgents.length > 0 && selectedAgentId == null))}
+        disabled={!loading && (!inputText.trim() || uploadingFiles || (savedAgents.length > 0 && selectedAgentId == null))}
         title={savedAgents.length > 0 && selectedAgentId == null ? "Select an agent first" : undefined}
         onclick={loading ? stopStream : sendMessage}
         aria-label={loading ? "Stop" : "Send message"}
@@ -969,6 +1265,23 @@
         {/if}
       </button>
     </div>
+    {#if pendingFiles.length > 0}
+      <div class="pending-files">
+        {#each pendingFiles as file, i}
+          <span class="pending-file-chip">
+            {file.name} ({formatBytes(file.size)})
+            <button
+              type="button"
+              class="remove-file-btn"
+              onclick={() => removePendingFile(i)}
+              aria-label={`Remove ${file.name}`}
+            >
+              ×
+            </button>
+          </span>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -1464,6 +1777,30 @@
     min-width: 0;
   }
 
+  .attach-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.2rem;
+    min-width: 2.2rem;
+    border-radius: 0.35rem;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .attach-btn:hover:not(:disabled),
+  .attach-btn:focus-visible:not(:disabled) {
+    border-color: var(--color-border-strong);
+    color: var(--color-text-primary);
+  }
+
+  .attach-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   .chat-input {
     flex: 1;
     min-width: 0;
@@ -1546,6 +1883,37 @@
   .send-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  .pending-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding: 0 0.6rem 0.5rem;
+    border-top: 1px solid var(--color-border-subtle);
+    background: var(--color-bg-canvas);
+  }
+
+  .pending-file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, var(--color-brand-500) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-brand-500) 26%, transparent);
+    font-size: 0.72rem;
+    color: var(--color-text-primary);
+  }
+
+  .remove-file-btn {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0;
   }
 
   /* Edit agent overlay */

@@ -15,6 +15,16 @@
 		(message.thinkingSteps && message.thinkingSteps.length > 0) ||
 		(message.toolCalls && message.toolCalls.length > 0)
 	);
+	const hasAttachments = $derived((message.attachments?.length ?? 0) > 0);
+	const hasGuidanceRequest = $derived(
+		(message.guidanceRequest?.question?.length ?? 0) > 0
+	);
+
+	function formatBytes(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	}
 </script>
 
 <div class="chat-msg" class:user={isUser} class:assistant={!isUser && !isError} class:error={isError}>
@@ -55,8 +65,44 @@
 				{/if}
 			</div>
 		{/if}
+		{#if hasGuidanceRequest && message.guidanceRequest}
+			<div class="guidance-request">
+				<span class="guidance-label">Requesting your guidance</span>
+				<p class="guidance-question">{message.guidanceRequest.question}</p>
+				{#if message.guidanceRequest.context}
+					<p class="guidance-context">{message.guidanceRequest.context}</p>
+				{/if}
+				<p class="guidance-hint">Reply in the input below to provide the IFC path or schema details.</p>
+			</div>
+		{/if}
+		{#if hasAttachments}
+			<div class="attachments">
+				{#each message.attachments ?? [] as item}
+					{#if item.url && !isUser}
+						<a class="attachment-chip link" href={item.url} target="_blank" rel="noreferrer">
+							<span>{item.filename}</span>
+							<span class="attachment-size">({formatBytes(item.size_bytes)})</span>
+						</a>
+					{:else}
+						<span class="attachment-chip">
+							<span>{item.filename}</span>
+							<span class="attachment-size">({formatBytes(item.size_bytes)})</span>
+						</span>
+					{/if}
+				{/each}
+			</div>
+		{/if}
 		{#if message.content || !message.isStreaming}
 			<p class="msg-text">{message.content}</p>
+		{/if}
+		{#if message.usage && !isUser}
+			<p class="msg-usage">
+				{message.usage.total_tokens.toLocaleString()} tokens
+				{#if message.usage.prompt_tokens > 0 || message.usage.completion_tokens > 0}
+					(prompt: {message.usage.prompt_tokens.toLocaleString()}, completion: {message.usage.completion_tokens.toLocaleString()})
+				{/if}
+				· {message.usage.cost_usd != null ? `~$${message.usage.cost_usd.toFixed(4)}` : '—'}
+			</p>
 		{/if}
 	</div>
 </div>
@@ -120,6 +166,43 @@
 		white-space: pre-wrap;
 	}
 
+	.msg-usage {
+		margin: 0.4rem 0 0;
+		font-size: 0.68rem;
+		color: var(--color-text-muted, #94a3b8);
+	}
+
+	.attachments {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		margin-bottom: 0.4rem;
+	}
+
+	.attachment-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		padding: 0.15rem 0.4rem;
+		border-radius: 0.3rem;
+		font-size: 0.7rem;
+		background: color-mix(in srgb, var(--color-brand-500) 14%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-brand-500) 24%, transparent);
+		color: var(--color-text-primary);
+	}
+
+	.attachment-chip.link {
+		text-decoration: none;
+	}
+
+	.attachment-chip.link:hover {
+		text-decoration: underline;
+	}
+
+	.attachment-size {
+		color: var(--color-text-muted);
+	}
+
 	.error .msg-text {
 		display: inline;
 	}
@@ -181,5 +264,40 @@
 		line-height: 1.45;
 		white-space: pre-wrap;
 		word-break: break-word;
+	}
+
+	.guidance-request {
+		margin: 0.5rem 0;
+		padding: 0.6rem 0.75rem;
+		border-radius: 0.45rem;
+		background: color-mix(in srgb, var(--color-brand-500, #3b82f6) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-brand-500, #3b82f6) 28%, transparent);
+	}
+
+	.guidance-label {
+		display: block;
+		font-size: 0.62rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-brand-500, #3b82f6);
+		margin-bottom: 0.4rem;
+	}
+
+	.guidance-question {
+		margin: 0 0 0.3rem;
+		font-weight: 500;
+		font-size: 0.85rem;
+	}
+
+	.guidance-context {
+		margin: 0 0 0.3rem;
+		font-size: 0.78rem;
+		color: var(--color-text-secondary, #64748b);
+	}
+
+	.guidance-hint {
+		margin: 0;
+		font-size: 0.7rem;
+		color: var(--color-text-muted, #94a3b8);
 	}
 </style>
