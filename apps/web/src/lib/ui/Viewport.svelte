@@ -46,10 +46,36 @@
     ro.observe(viewportEl);
     return () => ro.disconnect();
   });
+
+  let projectionIsometric = $state(false);
+
+  function toggleProjection(): void {
+    if (!manager) return;
+    projectionIsometric = !projectionIsometric;
+    manager.setProjectionMode(projectionIsometric);
+  }
+
+  $effect(() => {
+    if (manager) {
+      projectionIsometric = manager.projectionIsometric;
+    }
+  });
 </script>
 
 <div class="viewport" bind:this={viewportEl}>
   <canvas bind:this={canvas}></canvas>
+  {#if manager}
+    <div class="gumball-controls">
+      <button
+        type="button"
+        class="projection-toggle"
+        onclick={toggleProjection}
+        title={projectionIsometric ? "Switch to perspective" : "Switch to isometric"}
+      >
+        {projectionIsometric ? "Isometric" : "Perspective"}
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -57,11 +83,41 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+    position: relative;
   }
 
   canvas {
     width: 100%;
     height: 100%;
     display: block;
+  }
+
+  .gumball-controls {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    pointer-events: auto;
+  }
+
+  .projection-toggle {
+    padding: 4px 12px;
+    min-width: 5.5rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-text-muted, #64748b);
+    background: color-mix(in srgb, var(--color-bg-surface, #fff) 95%, transparent);
+    border: 1px solid var(--color-border-subtle, #e2e8f0);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .projection-toggle:hover {
+    color: var(--color-text-primary, #0f172a);
+    background: var(--color-bg-surface, #fff);
   }
 </style>

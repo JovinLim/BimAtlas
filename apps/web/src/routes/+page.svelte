@@ -52,10 +52,16 @@
     type ValidationContextPayload,
     type ValidationMessage,
   } from "$lib/validation/protocol";
+  import {
+    VIEWS_CHANNEL,
+    type ViewsMessage,
+    type SavedViewPayload,
+  } from "$lib/views/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
     APPLIED_FILTER_SETS_QUERY,
+    APPLY_FILTER_SETS_MUTATION,
     FILTER_SET_MATCHES_QUERY,
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
@@ -109,6 +115,8 @@
   let schemaChannel: BroadcastChannel | null = null;
   let validationPopup: Window | null = null;
   let validationChannel: BroadcastChannel | null = null;
+  let viewsPopup: Window | null = null;
+  let viewsChannel: BroadcastChannel | null = null;
   const APPLIED_FILTER_SETS_COMBINATION_LOGIC: "OR" = "OR";
   let lastSentAttributesContextKey: string | null = null;
   let lastSentGraphContextKey: string | null = null;
@@ -505,6 +513,11 @@
     sendValidationContext();
   });
 
+  // Keep Views popup in sync when project/branch changes
+  $effect(() => {
+    sendViewsContext();
+  });
+
   let visibilityCleanup: (() => void) | null = null;
 
   // BroadcastChannels for cross-window communication
@@ -639,6 +652,20 @@
         sendValidationContext(true);
       },
     });
+
+    viewsChannel = setupChannel<ViewsMessage>(VIEWS_CHANNEL, {
+      "request-context": () => {
+        sendViewsContext(true);
+      },
+      "LOAD_VIEW": (message) => {
+        if (message.type !== "LOAD_VIEW" || !message.view) return;
+        void handleLoadView(message.view);
+      },
+      "TOGGLE_GHOST_MODE": (message) => {
+        if (message.type !== "TOGGLE_GHOST_MODE") return;
+        void handleToggleGhostMode(message.filterSetId, message.enabled);
+      },
+    });
   });
 
   onDestroy(() => {
@@ -650,6 +677,7 @@
     agentChannel?.close();
     schemaChannel?.close();
     validationChannel?.close();
+    viewsChannel?.close();
   });
 
   // Sync viewer selection to table popup when table has sync enabled.
@@ -869,6 +897,97 @@
     } satisfies ValidationMessage);
   }
 
+  function sendViewsContext(force = false) {
+    if (!viewsChannel) return;
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const key = JSON.stringify({ branchId, projectId });
+    if (!force && key === lastSentViewsContextKey) return;
+    lastSentViewsContextKey = key;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
+    viewsChannel.postMessage(
+      JSON.parse(
+        JSON.stringify({
+          type: "context",
+          branchId,
+          projectId,
+          branchName,
+          projectName,
+        } satisfies ViewsMessage),
+      ),
+    );
+  }
+
+  let lastSentViewsContextKey: string | null = null;
+
+  let ghostedFilterSetIds = $state<Set<string>>(new Set());
+
+  async function handleLoadView(view: SavedViewPayload) {
+    const branchId = projectState.activeBranchId;
+    if (!branchId || view.branchId !== branchId) return;
+    const mgr = sceneManager;
+    if (!mgr) return;
+
+    ghostedFilterSetIds = new Set();
+    mgr.setGhostedGlobalIds(new Set());
+
+    const filterSets = view.filterSets ?? [];
+    const filterSetIds = filterSets.map((fs) => fs.id ?? fs.filterSetId ?? "").filter(Boolean);
+    try {
+      await client.mutation(
+        APPLY_FILTER_SETS_MUTATION,
+        {
+          branchId,
+          filterSetIds,
+          combinationLogic: "AND",
+        },
+        { requestPolicy: "network-only" },
+      ).toPromise();
+    } catch (err) {
+      console.error("Failed to apply filter sets for view:", err);
+    }
+
+    await reloadGeometryFromAppliedFilterSets();
+
+    const bcf = view.bcfCameraState;
+    if (bcf && (bcf.perspective_camera || bcf.orthogonal_camera)) {
+      mgr.applyBcfCamera(bcf);
+    }
+  }
+
+  async function handleToggleGhostMode(filterSetId: string, enabled: boolean) {
+    const mgr = sceneManager;
+    const branchId = projectState.activeBranchId;
+    const rev = revisionState.activeRevision;
+    if (!mgr || !branchId || rev === null) return;
+
+    const next = new Set(ghostedFilterSetIds);
+    if (enabled) next.add(filterSetId);
+    else next.delete(filterSetId);
+    ghostedFilterSetIds = next;
+
+    try {
+      const result = await client
+        .query(FILTER_SET_MATCHES_QUERY, { branchId, revision: rev }, { requestPolicy: "network-only" })
+        .toPromise();
+      const matches = (result.data?.filterSetMatches ?? []) as Array<{ filterSetId: string; globalIds: string[] }>;
+      const ghostedIds = new Set<string>();
+      for (const m of matches) {
+        if (ghostedFilterSetIds.has(m.filterSetId)) {
+          for (const gid of m.globalIds) ghostedIds.add(gid);
+        }
+      }
+      mgr.setGhostedGlobalIds(ghostedIds);
+      if (filterSetColorsEnabled) {
+        await applyFilterSetColorsToScene(mgr, branchId, rev);
+      } else {
+        mgr.applyFilterSetColors(null);
+      }
+    } catch (err) {
+      console.error("Failed to apply ghost mode:", err);
+    }
+  }
+
   function openAgentPopup() {
     agentPopup = openPopupWithContext(agentPopup, {
       route: "/agent",
@@ -966,6 +1085,19 @@
         revision: revisionState.activeRevision,
       },
       sendContext: () => sendValidationContext(true),
+    });
+  }
+
+  function openViewsPopup() {
+    viewsPopup = openPopupWithContext(viewsPopup, {
+      route: "/views",
+      name: "bimatlas-views",
+      features: "width=480,height=600",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+      },
+      sendContext: () => sendViewsContext(true),
     });
   }
 
@@ -2476,6 +2608,22 @@
             </svg>
             Validation
           </button>
+          <!-- Views popup button -->
+          <button
+            class="table-btn"
+            onclick={openViewsPopup}
+            aria-label="Open saved views"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+            Views
+          </button>
           <!-- Schema Browser popup button -->
           <button
             class="schema-btn"
@@ -3490,10 +3638,11 @@
 
   .element-count {
     position: absolute;
-    bottom: 1rem;
-    right: 1rem;
+    top: 1rem;
+    left: 1rem;
     font-size: 0.72rem;
     color: var(--color-text-muted);
+    z-index: 1;
   }
 
   .search-actions {
