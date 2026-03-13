@@ -477,6 +477,14 @@ def _resolve_relation_gids_with_target_filter(
     return get_product_ids_related_to_targets(relation, target_gids, rev, branch_id)
 
 
+def _looks_like_ifc_global_id(s: str) -> bool:
+    """Return True if s matches IFC GlobalId format (22 chars, base64-like)."""
+    if not s or len(s) != 22:
+        return False
+    allowed = set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$-")
+    return all(c in allowed for c in s)
+
+
 def fetch_entities_at_revision(
     rev: int,
     branch_id: str,
@@ -490,7 +498,13 @@ def fetch_entities_at_revision(
     global_id: str | None = None,
     relation_types: list[str] | None = None,
 ) -> list[dict]:
-    """List entities visible at *rev* on *branch_id*, optionally filtered."""
+    """List entities visible at *rev* on *branch_id*, optionally filtered.
+
+    When contained_in is provided:
+    - If it looks like an IFC GlobalId (22 chars), filters by attributes.ContainedIn.
+    - Otherwise treats it as a spatial container Name (e.g. "Ground Floor") and
+      resolves via IfcRelContainedInSpatialStructure in the graph, same as filter sets.
+    """
     clauses: list[str] = ["e.branch_id = %s", _REV_FILTER]
     params: list = [branch_id, rev, rev]
 
@@ -501,8 +515,22 @@ def fetch_entities_at_revision(
         clauses.append("e.ifc_class = %s")
         params.append(ifc_class)
     if contained_in is not None:
-        clauses.append("e.attributes->>'ContainedIn' = %s")
-        params.append(contained_in)
+        if _looks_like_ifc_global_id(contained_in):
+            clauses.append("e.attributes->>'ContainedIn' = %s")
+            params.append(contained_in)
+        else:
+            # Resolve by spatial container name via graph (IfcRelContainedInSpatialStructure)
+            from .services.graph.age_client import get_entities_in_spatial_scope
+            gids = get_entities_in_spatial_scope(
+                scope_global_id=None,
+                scope_name=contained_in,
+                rev=rev,
+                branch_id=branch_id,
+            )
+            if not gids:
+                return []
+            clauses.append("e.ifc_global_id = ANY(%s)")
+            params.append(gids)
     if name is not None:
         clauses.append("e.attributes->>'Name' ILIKE %s")
         params.append(f"%{name}%")
@@ -967,6 +995,224 @@ def fetch_sheet_templates_for_project(project_id: str) -> list[dict]:
         if isinstance(r.get("sheet"), str):
             r["sheet"] = json.loads(r["sheet"]) if r["sheet"] else {}
     return rows
+
+
+# ---------------------------------------------------------------------------
+# App views CRUD (BCF-compliant saved views, branch-scoped)
+# ---------------------------------------------------------------------------
+
+_APP_VIEW_COLS = (
+    "id, branch_id, name, bcf_camera_state, ui_filters, created_at, updated_at"
+)
+
+
+def _parse_jsonb_col(row: dict, key: str) -> None:
+    """In-place: parse JSONB column from string to dict if needed."""
+    val = row.get(key)
+    if isinstance(val, str):
+        row[key] = json.loads(val) if val else {}
+
+
+def validate_bcf_camera_state(obj: dict) -> list[str]:
+    """Validate BCF viewpoint camera/clipping shape. Returns list of error messages."""
+    errs: list[str] = []
+    if not isinstance(obj, dict):
+        return ["bcf_camera_state must be an object"]
+    has_perspective = "perspective_camera" in obj and obj["perspective_camera"] is not None
+    has_orthogonal = "orthogonal_camera" in obj and obj["orthogonal_camera"] is not None
+    if not has_perspective and not has_orthogonal:
+        errs.append("bcf_camera_state must include perspective_camera or orthogonal_camera")
+    if has_perspective:
+        pc = obj["perspective_camera"]
+        if not isinstance(pc, dict):
+            errs.append("perspective_camera must be an object")
+        else:
+            for k in ("position", "direction", "up_vector"):
+                if k not in pc or not isinstance(pc[k], (list, tuple)) or len(pc[k]) != 3:
+                    errs.append(f"perspective_camera.{k} must be a 3-element array")
+    if has_orthogonal:
+        oc = obj["orthogonal_camera"]
+        if not isinstance(oc, dict):
+            errs.append("orthogonal_camera must be an object")
+        else:
+            for k in ("position", "direction", "up_vector"):
+                if k not in oc or not isinstance(oc[k], (list, tuple)) or len(oc[k]) != 3:
+                    errs.append(f"orthogonal_camera.{k} must be a 3-element array")
+            if "view_to_world_scale" not in oc:
+                errs.append("orthogonal_camera.view_to_world_scale is required")
+    if "clipping_planes" in obj:
+        cp = obj["clipping_planes"]
+        if not isinstance(cp, list):
+            errs.append("clipping_planes must be an array")
+        else:
+            for i, plane in enumerate(cp):
+                if not isinstance(plane, dict):
+                    errs.append(f"clipping_planes[{i}] must be an object")
+                elif "location" not in plane or "direction" not in plane:
+                    errs.append(f"clipping_planes[{i}] must have location and direction")
+    return errs
+
+
+def create_app_view(
+    branch_id: str,
+    name: str,
+    bcf_camera_state: dict,
+    ui_filters: dict | None = None,
+) -> dict:
+    """Create a new saved view. Returns the new row."""
+    errs = validate_bcf_camera_state(bcf_camera_state)
+    if errs:
+        raise ValueError(f"Invalid BCF camera state: {'; '.join(errs)}")
+    ui = ui_filters if isinstance(ui_filters, dict) else {}
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO app_views (branch_id, name, bcf_camera_state, ui_filters) "
+            f"VALUES (%s, %s, %s, %s) RETURNING {_APP_VIEW_COLS}",
+            (branch_id, name, json.dumps(bcf_camera_state), json.dumps(ui)),
+        )
+        row = dict(cur.fetchone())
+    _parse_jsonb_col(row, "bcf_camera_state")
+    _parse_jsonb_col(row, "ui_filters")
+    return row
+
+
+def fetch_app_view(view_id: str) -> dict | None:
+    """Fetch a single app view by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_APP_VIEW_COLS} FROM app_views WHERE id = %s",
+            (view_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        r = dict(row)
+    _parse_jsonb_col(r, "bcf_camera_state")
+    _parse_jsonb_col(r, "ui_filters")
+    return r
+
+
+def fetch_app_views_for_branch(branch_id: str) -> list[dict]:
+    """Return all app views for a branch, newest first."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_APP_VIEW_COLS} FROM app_views "
+            "WHERE branch_id = %s ORDER BY updated_at DESC",
+            (branch_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        _parse_jsonb_col(r, "bcf_camera_state")
+        _parse_jsonb_col(r, "ui_filters")
+    return rows
+
+
+def fetch_app_view_with_filter_sets(view_id: str) -> dict | None:
+    """Fetch a view and its linked filter sets in one aggregated payload."""
+    view = fetch_app_view(view_id)
+    if view is None:
+        return None
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT fs.filter_set_id, fs.branch_id, fs.name, fs.logic, fs.filters, "
+            "fs.color, fs.created_at, fs.updated_at "
+            "FROM view_filter_sets vfs "
+            "JOIN filter_sets fs ON vfs.filter_set_id = fs.filter_set_id "
+            "WHERE vfs.view_id = %s ORDER BY vfs.display_order ASC",
+            (view_id,),
+        )
+        fs_rows = cur.fetchall()
+    filter_sets = []
+    for r in fs_rows:
+        d = dict(r)
+        if isinstance(d.get("filters"), str):
+            d["filters"] = json.loads(d["filters"]) if d["filters"] else {}
+        filter_sets.append(d)
+    view["filter_sets"] = filter_sets
+    return view
+
+
+def update_app_view(
+    view_id: str,
+    *,
+    name: str | None = None,
+    bcf_camera_state: dict | None = None,
+    ui_filters: dict | None = None,
+) -> dict | None:
+    """Update an app view. Returns the updated row or None if not found."""
+    if bcf_camera_state is not None:
+        errs = validate_bcf_camera_state(bcf_camera_state)
+        if errs:
+            raise ValueError(f"Invalid BCF camera state: {'; '.join(errs)}")
+    updates: list[str] = []
+    params: list = []
+    if name is not None:
+        updates.append("name = %s")
+        params.append(name)
+    if bcf_camera_state is not None:
+        updates.append("bcf_camera_state = %s")
+        params.append(json.dumps(bcf_camera_state))
+    if ui_filters is not None:
+        updates.append("ui_filters = %s")
+        params.append(json.dumps(ui_filters))
+    if not updates:
+        return fetch_app_view(view_id)
+    updates.append("updated_at = now()")
+    params.append(view_id)
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"UPDATE app_views SET {', '.join(updates)} WHERE id = %s",
+            params,
+        )
+    return fetch_app_view(view_id)
+
+
+def delete_app_view(view_id: str) -> bool:
+    """Delete an app view. Returns True if a row was deleted."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM app_views WHERE id = %s", (view_id,))
+        return cur.rowcount > 0
+
+
+def attach_filter_sets_to_view(view_id: str, filter_set_ids: list[str]) -> None:
+    """Replace linked filter sets for a view. Validates filter sets exist on same branch."""
+    view = fetch_app_view(view_id)
+    if view is None:
+        raise ValueError("View not found")
+    branch_id = str(view["branch_id"])
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT filter_set_id FROM filter_sets WHERE branch_id = %s",
+            (branch_id,),
+        )
+        valid_ids = {str(r["filter_set_id"]) for r in cur.fetchall()}
+    for fsid in filter_set_ids:
+        if str(fsid) not in valid_ids:
+            raise ValueError(f"Filter set {fsid} not found or not on same branch")
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM view_filter_sets WHERE view_id = %s", (view_id,))
+        for i, fsid in enumerate(filter_set_ids):
+            cur.execute(
+                "INSERT INTO view_filter_sets (view_id, filter_set_id, display_order) "
+                "VALUES (%s, %s, %s)",
+                (view_id, fsid, i),
+            )
+
+
+def fetch_view_filter_set_ids(view_id: str) -> list[str]:
+    """Return filter set IDs linked to a view, ordered by display_order."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT filter_set_id FROM view_filter_sets WHERE view_id = %s "
+            "ORDER BY display_order ASC",
+            (view_id,),
+        )
+        return [str(r[0]) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Sheet template search
+# ---------------------------------------------------------------------------
 
 
 def search_sheet_templates(query: str, project_id: str) -> list[dict]:
@@ -2489,7 +2735,7 @@ def refresh_mv_entity_validations() -> None:
 # ---------------------------------------------------------------------------
 
 _CHAT_COLS = "chat_id, project_id, branch_id, title, created_at, updated_at"
-_MSG_COLS = "message_id, chat_id, role, content, tool_calls, created_at"
+_MSG_COLS = "message_id, chat_id, role, content, tool_calls, usage, created_at"
 
 
 def create_agent_chat(project_id: str, branch_id: str, title: str = "New chat") -> dict:
@@ -2537,13 +2783,23 @@ def delete_agent_chat(chat_id: str) -> bool:
 
 
 def add_chat_message(
-    chat_id: str, role: str, content: str, tool_calls: list[dict] | None = None,
+    chat_id: str,
+    role: str,
+    content: str,
+    tool_calls: list[dict] | None = None,
+    usage: dict | None = None,
 ) -> dict:
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"INSERT INTO agent_chat_message (chat_id, role, content, tool_calls) "
-            f"VALUES (%s, %s, %s, %s) RETURNING {_MSG_COLS}",
-            (chat_id, role, content, json.dumps(tool_calls) if tool_calls else None),
+            f"INSERT INTO agent_chat_message (chat_id, role, content, tool_calls, usage) "
+            f"VALUES (%s, %s, %s, %s, %s) RETURNING {_MSG_COLS}",
+            (
+                chat_id,
+                role,
+                content,
+                json.dumps(tool_calls) if tool_calls else None,
+                json.dumps(usage) if usage else None,
+            ),
         )
         row = dict(cur.fetchone())
         cur.execute(
@@ -2564,4 +2820,131 @@ def fetch_chat_messages(chat_id: str) -> list[dict]:
         for r in rows:
             if isinstance(r.get("tool_calls"), str):
                 r["tool_calls"] = json.loads(r["tool_calls"])
+            u = r.get("usage")
+            if isinstance(u, str):
+                r["usage"] = json.loads(u) if u else None
+        return rows
+
+
+# ---------------------------------------------------------------------------
+# IFC skills (pgvector-backed semantic search, project/branch scoped)
+# ---------------------------------------------------------------------------
+
+_IFC_SKILL_COLS = (
+    "skill_id, project_id, branch_id, title, intent, frontmatter, content_md, "
+    "embedding, created_at, updated_at"
+)
+
+
+def insert_ifc_skill(
+    project_id: str,
+    title: str,
+    intent: str,
+    frontmatter: dict,
+    content_md: str,
+    embedding: list[float] | None = None,
+    branch_id: str | None = None,
+) -> dict:
+    """Insert a new IFC skill. Returns the created row."""
+    emb_val = "[" + ",".join(str(x) for x in embedding) + "]" if embedding else None
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "INSERT INTO ifc_skill (project_id, branch_id, title, intent, frontmatter, content_md, embedding) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s::vector) RETURNING " + _IFC_SKILL_COLS,
+            (
+                project_id,
+                branch_id,
+                title,
+                intent,
+                json.dumps(frontmatter) if isinstance(frontmatter, dict) else "{}",
+                content_md,
+                emb_val,
+            ),
+        )
+        row = dict(cur.fetchone())
+        if isinstance(row.get("frontmatter"), str):
+            row["frontmatter"] = json.loads(row["frontmatter"]) if row["frontmatter"] else {}
+        return row
+
+
+def search_ifc_skills_semantic(
+    query_embedding: list[float],
+    project_id: str,
+    branch_id: str | None = None,
+    top_k: int = 5,
+) -> list[dict]:
+    """Semantic search with scope priority: project+branch > project-only.
+
+    Returns skills ordered by scope (branch-specific first) then cosine distance.
+    """
+    emb_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            """
+            WITH ranked AS (
+                SELECT skill_id, project_id, branch_id, title, intent, frontmatter,
+                       (embedding <=> %s::vector) AS distance,
+                       CASE
+                         WHEN branch_id IS NOT NULL AND branch_id = %s THEN 0
+                         ELSE 1
+                       END AS scope_rank
+                FROM ifc_skill
+                WHERE embedding IS NOT NULL AND project_id = %s
+            )
+            SELECT skill_id, project_id, branch_id, title, intent, frontmatter, distance, scope_rank
+            FROM ranked
+            ORDER BY scope_rank ASC, distance ASC
+            LIMIT %s
+            """,
+            (emb_str, branch_id or "", project_id, top_k),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            if isinstance(r.get("frontmatter"), str):
+                r["frontmatter"] = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
+            if "distance" in r and hasattr(r["distance"], "__float__"):
+                r["distance"] = float(r["distance"])
+        return rows
+
+
+def fetch_ifc_skill_content(skill_id: str) -> dict | None:
+    """Fetch full skill content (including content_md) by id."""
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            f"SELECT {_IFC_SKILL_COLS} FROM ifc_skill WHERE skill_id = %s",
+            (skill_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        r = dict(row)
+        if isinstance(r.get("frontmatter"), str):
+            r["frontmatter"] = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
+        return r
+
+
+def list_ifc_skill_frontmatter(
+    project_id: str,
+    branch_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """List skill metadata (frontmatter only, no content_md) for scope."""
+    with get_cursor(dict_cursor=True) as cur:
+        if branch_id:
+            cur.execute(
+                "SELECT skill_id, project_id, branch_id, title, intent, frontmatter, created_at "
+                "FROM ifc_skill WHERE project_id = %s AND (branch_id IS NULL OR branch_id = %s) "
+                "ORDER BY updated_at DESC LIMIT %s",
+                (project_id, branch_id, limit),
+            )
+        else:
+            cur.execute(
+                "SELECT skill_id, project_id, branch_id, title, intent, frontmatter, created_at "
+                "FROM ifc_skill WHERE project_id = %s ORDER BY updated_at DESC LIMIT %s",
+                (project_id, limit),
+            )
+        rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            if isinstance(r.get("frontmatter"), str):
+                r["frontmatter"] = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
         return rows

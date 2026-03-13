@@ -48,9 +48,22 @@ from .db import (
 )
 from .schema.queries import Mutation, Query as GraphQLQuery, row_to_stream_product
 from .services.ifc.ingestion import ingest_ifc
+from .services.agent.api_spec import build_agent_api_spec
 from .services.agent.live_streams import live_chat_streams
+from .services.agent.sandbox import sandbox_manager
 
 logger = logging.getLogger("bimatlas")
+_agent_api_spec_cache: dict | None = None
+_session_by_chat: dict[str, str] = {}
+
+
+async def _sandbox_cleanup_loop() -> None:
+    while True:
+        try:
+            sandbox_manager.cleanup_expired_sessions()
+        except Exception:
+            logger.exception("sandbox cleanup loop failed")
+        await asyncio.sleep(300)
 
 
 def _ingestion_result_payload(result) -> dict:
@@ -81,7 +94,13 @@ async def lifespan(app: FastAPI):
                 "Then wait a few seconds for PostgreSQL to be ready."
             ) from e
         raise
+    cleanup_task = asyncio.create_task(_sandbox_cleanup_loop())
     yield
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Shutting down BimAtlas API -- closing connection pool")
     close_pool()
 
@@ -105,6 +124,34 @@ app.add_middleware(
 )
 
 app.include_router(graphql_app, prefix="/graphql")
+
+
+def get_agent_api_spec() -> dict:
+    global _agent_api_spec_cache
+    if _agent_api_spec_cache is None:
+        _agent_api_spec_cache = build_agent_api_spec(app, schema)
+    return _agent_api_spec_cache
+
+
+def _resolve_session_id(chat_id: str | None, provided: str | None) -> str:
+    if provided:
+        try:
+            UUID(provided)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid sessionId")
+        if chat_id:
+            _session_by_chat[chat_id] = provided
+        return provided
+    if chat_id:
+        existing = _session_by_chat.get(chat_id)
+        if existing:
+            return existing
+    import uuid
+
+    sid = str(uuid.uuid4())
+    if chat_id:
+        _session_by_chat[chat_id] = sid
+    return sid
 
 
 @app.get("/health")
@@ -449,6 +496,127 @@ async def delete_ifc_schema(schema_name: str):
 # ---------------------------------------------------------------------------
 
 
+@app.get("/agent/api-spec")
+async def agent_api_spec():
+    """Return curated API discovery payload for autonomous agent workflows."""
+    return get_agent_api_spec()
+
+
+@app.post("/agent/upload")
+async def agent_upload(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """Upload a file into the sandbox workspace for this chat session."""
+    try:
+        content = await file.read()
+        saved = sandbox_manager.save_upload(session_id, file.filename or "upload.bin", content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
+
+    return {
+        "filename": saved["filename"],
+        "size_bytes": saved["size_bytes"],
+        "content_type": file.content_type or "application/octet-stream",
+        "session_id": session_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Agent IFC skills (semantic search, create, frontmatter list)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/agent/skills/frontmatter")
+async def agent_skills_frontmatter(
+    project_id: str = Query(..., description="Project ID"),
+    branch_id: str | None = Query(None, description="Optional branch ID to scope"),
+    limit: int = Query(50, ge=1, le=200, description="Max skills to return"),
+):
+    """List IFC skill metadata (frontmatter only) for project/branch scope."""
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+    if branch_id:
+        try:
+            UUID(branch_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid branch_id")
+    from .services.agent.skills import list_skills_frontmatter
+
+    rows = list_skills_frontmatter(project_id, branch_id, limit)
+    return {"skills": rows}
+
+
+@app.post("/agent/skills/search")
+async def agent_skills_search(body: dict = Body(...)):
+    """Semantic search over IFC skills by intent. Returns matching skills with content."""
+    intent = body.get("intent")
+    project_id = body.get("projectId")
+    branch_id = body.get("branchId")
+    top_k = body.get("topK", 5)
+    api_key = body.get("apiKey")
+    if not intent or not project_id:
+        raise HTTPException(status_code=400, detail="intent and projectId are required")
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid projectId")
+    if branch_id:
+        try:
+            UUID(branch_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid branchId")
+    from .services.agent.skills import search_skills
+
+    try:
+        results = search_skills(intent, project_id, branch_id, top_k=int(top_k), api_key=api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"skills": results}
+
+
+@app.post("/agent/skills", status_code=201)
+async def agent_skills_create(body: dict = Body(...)):
+    """Create and persist an IFC skill with embedding. Returns created skill metadata."""
+    project_id = body.get("projectId")
+    title = body.get("title")
+    intent = body.get("intent")
+    frontmatter = body.get("frontmatter", {})
+    content_md = body.get("contentMd", body.get("content_md", ""))
+    branch_id = body.get("branchId")
+    api_key = body.get("apiKey")
+    if not project_id or not title or not intent:
+        raise HTTPException(status_code=400, detail="projectId, title, and intent are required")
+    try:
+        UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid projectId")
+    if branch_id:
+        try:
+            UUID(branch_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid branchId")
+    from .services.agent.skills import create_ifc_skill
+
+    try:
+        row = create_ifc_skill(
+            project_id=project_id,
+            title=title,
+            intent=intent,
+            frontmatter=frontmatter if isinstance(frontmatter, dict) else {},
+            content_md=content_md,
+            branch_id=branch_id,
+            api_key=api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return row
+
+
 @app.post("/agent/chat")
 async def agent_chat(body: dict = Body(...)):
     """Stream an agentic filtering conversation turn.
@@ -466,6 +634,9 @@ async def agent_chat(body: dict = Body(...)):
     base_url = body.get("baseUrl")
     pre_prompt = body.get("prePrompt")
     chat_id = body.get("chatId")
+    session_id = body.get("sessionId")
+    project_id = body.get("projectId")
+    files = body.get("files") or []
 
     if not message or not provider or not model or not branch_id:
         raise HTTPException(
@@ -492,6 +663,10 @@ async def agent_chat(body: dict = Body(...)):
             for m in msgs
             if m["role"] in ("user", "assistant")
         ]
+    if files is not None and not isinstance(files, list):
+        raise HTTPException(status_code=400, detail="files must be an array of filenames")
+    uploaded_files = [str(f) for f in files if isinstance(f, str) and f.strip()]
+    resolved_session_id = _resolve_session_id(chat_id, session_id)
 
     from .services.agent.workflow import run_agent_streaming
 
@@ -507,6 +682,7 @@ async def agent_chat(body: dict = Body(...)):
             collected_content = ""
             collected_error = ""
             collected_tools: list[dict] = []
+            collected_usage: dict | None = None
             try:
                 async for event in run_agent_streaming(
                     message=message,
@@ -518,6 +694,10 @@ async def agent_chat(body: dict = Body(...)):
                     base_url=base_url,
                     pre_prompt=pre_prompt,
                     chat_history=chat_history,
+                    session_id=resolved_session_id,
+                    uploaded_files=uploaded_files,
+                    api_spec_provider=get_agent_api_spec,
+                    project_id=project_id,
                 ):
                     etype = event.get("type")
                     if etype == "message":
@@ -530,6 +710,13 @@ async def agent_chat(body: dict = Body(...)):
                             "arguments": event.get("arguments"),
                             "result": event.get("result"),
                         })
+                    elif etype == "usage":
+                        collected_usage = {
+                            "prompt_tokens": event.get("prompt_tokens", 0),
+                            "completion_tokens": event.get("completion_tokens", 0),
+                            "total_tokens": event.get("total_tokens", 0),
+                            "cost_usd": event.get("cost_usd"),
+                        }
                     await live_chat_streams.publish(chat_id, event)
             except Exception as exc:
                 logger.exception("Background chat stream failed")
@@ -540,8 +727,11 @@ async def agent_chat(body: dict = Body(...)):
                 try:
                     if collected_content:
                         add_chat_message(
-                            chat_id, "assistant", collected_content,
+                            chat_id,
+                            "assistant",
+                            collected_content,
                             tool_calls=collected_tools if collected_tools else None,
+                            usage=collected_usage,
                         )
                     elif collected_error:
                         add_chat_message(chat_id, "assistant", collected_error)
@@ -550,7 +740,7 @@ async def agent_chat(body: dict = Body(...)):
 
         asyncio.create_task(run_in_background())
 
-        async def event_generator():
+        async def live_event_generator():
             queue = await live_chat_streams.subscribe(chat_id)
             if queue is None:
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -567,7 +757,7 @@ async def agent_chat(body: dict = Body(...)):
                 await live_chat_streams.unsubscribe(chat_id, queue)
 
         return StreamingResponse(
-            event_generator(),
+            live_event_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -577,7 +767,7 @@ async def agent_chat(body: dict = Body(...)):
         )
 
     # Non-persistent ad-hoc chat request (no chat_id): stream directly.
-    async def event_generator():
+    async def direct_event_generator():
         async for event in run_agent_streaming(
             message=message,
             branch_id=branch_id,
@@ -588,11 +778,15 @@ async def agent_chat(body: dict = Body(...)):
             base_url=base_url,
             pre_prompt=pre_prompt,
             chat_history=chat_history,
+            session_id=resolved_session_id,
+            uploaded_files=uploaded_files,
+            api_spec_provider=get_agent_api_spec,
+            project_id=project_id,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        direct_event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

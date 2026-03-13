@@ -25,9 +25,9 @@ features:
     status: implemented
     priority: high
   - feature_id: feature_004_agentic_filtering_framework
-    name: Agentic Filtering Framework (MCP + LlamaIndex)
+    name: Agentic Filtering Framework (Direct API + IFC Skill Guardrails)
     description: |
-      Natural language filtering interface powered by LlamaIndex agent orchestration and MCP-style tools. Users describe filter intent in plain language; the agent discovers the project schema (get_project_schema), validates IFC classes and operators, constructs filter sets (create_filter_set, add_filter_condition), and applies them (apply_filter_set_to_context). Svelte chat UI at /agent with streaming SSE, tool-call transparency, saved agent configs (IfcAgent), persistent chat history, and provider-agnostic LLM configuration (OpenAI, Anthropic, Ollama). State sync via /stream/agent-events.
+      Natural language filtering interface powered by LlamaIndex agent orchestration and direct API tools. Users describe filter intent in plain language; the agent follows a domain-safe flow: **search_skills** (pgvector-backed semantic search over learned IFC mappings), **discover_api** (curated OpenAPI + GraphQL with IFC cheat-sheet), **execute_request** (HTTP to BimAtlas API), **search_web** (duckduckgo-search for up-to-date IFC docs, building codes, specs; prefers buildingSMART sites), **list_uploaded_files**/ **read_uploaded_file** (attachments), and **ask_user_for_guidance** when knowledge gaps exist. New mappings are persisted via **save_ifc_skill**. Svelte chat UI at /agent with streaming SSE, tool-call transparency, guidance_request rendering for escalation, token usage and cost display per response (via TokenCountingHandler + pricing module), saved agent configs (IfcAgent), persistent chat history, and provider-agnostic LLM configuration. State sync via /stream/agent-events.
     status: implemented
     priority: high
   - feature_id: feature_005_validation_schema_management
@@ -58,16 +58,16 @@ Merge Request Engine: A staging framework compares branches, calculates diffs (a
 Design Principles & Integration
 Deployable & Extensible: The platform is container-native, designed to be easily deployed on-premise or in the cloud to suit unique organizational data-sovereignty requirements. Its modular architecture allows developers to easily extend validation rulesets and GraphQL schemas for bespoke use cases.
 
-AI & Orchestration Ready: BimAtlas natively supports AI integration through two mechanisms: (1) The Agentic Filtering Framework exposes MCP-style tools (get_project_schema, create_filter_set, add_filter_condition, apply_filter_set_to_context) via LlamaIndex FunctionTool, orchestrated by an LLM agent for natural-language filter construction. (2) Standalone MCP tools (run_validation, list_validation_schemas) enable agents to trigger validation runs and browse schemas. Agents can query the active branch state, analyze piping networks, or flag validation errors against IfcValidation rules.
+AI & Orchestration Ready: BimAtlas natively supports AI integration through two mechanisms: (1) The Agentic Filtering Framework uses direct API tools (discover_api, execute_request, search_skills, search_web, list_uploaded_files, read_uploaded_file, ask_user_for_guidance, save_ifc_skill) orchestrated by an LLM agent. A domain-safe policy enforces search-before-create: the agent searches pgvector-backed IFC skills first, reads the discover_api cheat-sheet, uses search_web for external IFC/buildingSMART references when needed, escalates via ask_user_for_guidance on ambiguity, and saves new mappings via save_ifc_skill. Token usage and cost (USD) are tracked per response and displayed in the chat UI. (2) Standalone tools (run_validation, list_validation_schemas) enable agents to trigger validation runs and browse schemas. Agents can query the active branch state, analyze piping networks, or flag validation errors against IfcValidation rules.
 
 Tech Stack
 Backend: Python, FastAPI, GraphQL (Strawberry). REST endpoints for agent chat, configs, chats; SSE for /stream/ifc-products and /stream/agent-events.
 
 Frontend: SvelteKit (Svelte 5), Three.js, 3d-force-graph. Routes: / (main), /search, /graph, /table, /attributes, /agent, /schema, /validation. Filter logic tree: FilterTreeEditor (nested Match ALL/ANY, max depth 2), AppliedFilterSet, FilterGuide, AppliedDisplayOrderPanel. Popup routes (attributes, graph, table, schema, validation) sync with main viewer via BroadcastChannel when selection or context changes.
 
-Agent Layer: LlamaIndex for agent orchestration; provider-agnostic LLM support (OpenAI, Anthropic, Google, Ollama, Custom). Agent configs and chat history persisted in PostgreSQL.
+Agent Layer: LlamaIndex for agent orchestration; provider-agnostic LLM support (OpenAI, Anthropic, Google, Ollama, Custom). Agent configs and chat history persisted in PostgreSQL. IFC skills (learned mappings) stored in pgvector for semantic search. TokenCountingHandler tracks usage; pricing module computes cost (USD) per model; usage and cost displayed at bottom of each assistant message.
 
-Database: PostgreSQL.
+Database: PostgreSQL with Apache AGE (Cypher graph queries) and pgvector (semantic skill search). Single container via custom Docker image (AGE + pgvector).
 
 Graph Engine: Apache AGE (PostgreSQL extension for Cypher graph queries).
 
