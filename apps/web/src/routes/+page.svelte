@@ -5,6 +5,7 @@
    */
   import Viewport from "$lib/ui/Viewport.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
+  import SaveAsViewModal from "$lib/ui/SaveAsViewModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
   import {
@@ -70,6 +71,8 @@
     DELETE_BRANCH_MUTATION,
     REVISIONS_QUERY,
     IFC_PRODUCT_TREE_QUERY,
+    CREATE_SAVED_VIEW_MUTATION,
+    ATTACH_FILTER_SETS_TO_SAVED_VIEW_MUTATION,
   } from "$lib/api/client";
   import {
     createBufferGeometry,
@@ -196,6 +199,8 @@
   });
 
   let showImportModal = $state(false);
+  let showSaveAsViewModal = $state(false);
+  let saveAsViewError = $state<string | null>(null);
   let importing = $state(false);
   let importError = $state<string | null>(null);
   let importProgressPercent = $state(0);
@@ -657,6 +662,19 @@
       "request-context": () => {
         sendViewsContext(true);
       },
+      "request-camera": () => {
+        const mgr = sceneManager;
+        if (!mgr || !viewsChannel) return;
+        const bcfCameraState = mgr.getBcfCameraState();
+        viewsChannel.postMessage(
+          JSON.parse(
+            JSON.stringify({
+              type: "camera",
+              bcfCameraState,
+            } satisfies ViewsMessage),
+          ),
+        );
+      },
       "LOAD_VIEW": (message) => {
         if (message.type !== "LOAD_VIEW" || !message.view) return;
         void handleLoadView(message.view);
@@ -901,7 +919,8 @@
     if (!viewsChannel) return;
     const branchId = projectState.activeBranchId;
     const projectId = projectState.activeProjectId;
-    const key = JSON.stringify({ branchId, projectId });
+    const revision = revisionState.activeRevision;
+    const key = JSON.stringify({ branchId, projectId, revision });
     if (!force && key === lastSentViewsContextKey) return;
     lastSentViewsContextKey = key;
     const { projectName, branchName } = resolveContextNames(projectId, branchId);
@@ -913,6 +932,7 @@
           projectId,
           branchName,
           projectName,
+          revision,
         } satisfies ViewsMessage),
       ),
     );
@@ -949,9 +969,51 @@
 
     await reloadGeometryFromAppliedFilterSets();
 
+    selection.activeGlobalId = null;
+
     const bcf = view.bcfCameraState;
     if (bcf && (bcf.perspective_camera || bcf.orthogonal_camera)) {
+      mgr.setProjectionMode(!!bcf.orthogonal_camera);
       mgr.applyBcfCamera(bcf);
+    }
+  }
+
+  async function handleSaveAsViewSubmit(name: string) {
+    const branchId = projectState.activeBranchId;
+    const mgr = sceneManager;
+    if (!branchId || !mgr) return;
+    saveAsViewError = null;
+    try {
+      const bcf = mgr.getBcfCameraState();
+      const uiFilters = { projectionMode: mgr.projectionIsometric ? "orthographic" : "perspective" };
+      const result = await client
+        .mutation(
+          CREATE_SAVED_VIEW_MUTATION,
+          {
+            branchId,
+            name: name.trim(),
+            bcfCameraState: bcf,
+            uiFilters,
+          },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      const created = (result.data as { createSavedView?: { id: string } })?.createSavedView;
+      if (created) {
+        const filterSetIds = searchState.appliedFilterSets.map((fs) => fs.id).filter(Boolean);
+        if (filterSetIds.length > 0) {
+          await client
+            .mutation(
+              ATTACH_FILTER_SETS_TO_SAVED_VIEW_MUTATION,
+              { viewId: created.id, filterSetIds },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+        }
+      }
+      showSaveAsViewModal = false;
+    } catch (e) {
+      saveAsViewError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -1096,6 +1158,7 @@
       params: {
         branchId: projectState.activeBranchId,
         projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
       },
       sendContext: () => sendViewsContext(true),
     });
@@ -2219,6 +2282,39 @@
           >
             Fit View
           </button>
+          <!-- Save as view -->
+          {#if projectState.activeBranchId}
+            <button
+              class="toolbar-btn"
+              onclick={() => (showSaveAsViewModal = true)}
+              title="Save current view (filter sets and camera)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <polyline
+                  points="17 21 17 13 7 13 7 21"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <polyline
+                  points="7 3 7 8 15 8"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              Save as view
+            </button>
+          {/if}
           <!-- Revision filters (when branch is active) -->
           {#if projectState.activeBranchId}
             <section
@@ -2708,6 +2804,18 @@
       open={showImportModal}
       onclose={() => (showImportModal = false)}
       onsubmit={handleImportSubmit}
+    />
+
+    <SaveAsViewModal
+      open={showSaveAsViewModal}
+      appliedFilterSetCount={searchState.appliedFilterSets.length}
+      projectionMode={sceneManager?.projectionIsometric ? "orthographic" : "perspective"}
+      error={saveAsViewError}
+      onclose={() => {
+        showSaveAsViewModal = false;
+        saveAsViewError = null;
+      }}
+      onsubmit={handleSaveAsViewSubmit}
     />
 
     <!-- Delete project confirmation modal -->

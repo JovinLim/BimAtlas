@@ -1093,7 +1093,7 @@ def fetch_app_view(view_id: str) -> dict | None:
 
 
 def fetch_app_views_for_branch(branch_id: str) -> list[dict]:
-    """Return all app views for a branch, newest first."""
+    """Return all app views for a branch, newest first, with linked filter sets."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
             f"SELECT {_APP_VIEW_COLS} FROM app_views "
@@ -1104,6 +1104,37 @@ def fetch_app_views_for_branch(branch_id: str) -> list[dict]:
     for r in rows:
         _parse_jsonb_col(r, "bcf_camera_state")
         _parse_jsonb_col(r, "ui_filters")
+
+    if not rows:
+        return rows
+
+    view_ids = [str(r["id"]) for r in rows]
+    placeholders = ",".join(["%s"] * len(view_ids))
+    with get_cursor(dict_cursor=True) as cur:
+        cur.execute(
+            "SELECT vfs.view_id, vfs.display_order, fs.filter_set_id, fs.branch_id, fs.name, "
+            "fs.logic, fs.filters, fs.color, fs.created_at, fs.updated_at "
+            "FROM view_filter_sets vfs "
+            "JOIN filter_sets fs ON vfs.filter_set_id = fs.filter_set_id "
+            f"WHERE vfs.view_id IN ({placeholders}) "
+            "ORDER BY vfs.display_order ASC",
+            view_ids,
+        )
+        fs_rows = cur.fetchall()
+
+    fs_by_view = {}
+    for r in fs_rows:
+        vid = str(r["view_id"])
+        if vid not in fs_by_view:
+            fs_by_view[vid] = []
+        d = dict(r)
+        if isinstance(d.get("filters"), str):
+            d["filters"] = json.loads(d["filters"]) if d["filters"] else {}
+        fs_by_view[vid].append(d)
+
+    for r in rows:
+        r["filter_sets"] = fs_by_view.get(str(r["id"]), [])
+
     return rows
 
 

@@ -90,6 +90,8 @@ DROP MATERIALIZED VIEW IF EXISTS mv_entity_validations CASCADE;
 DROP TABLE IF EXISTS merge_conflict_log CASCADE;
 DROP TABLE IF EXISTS merge_request CASCADE;
 DROP TABLE IF EXISTS validation_rule CASCADE;
+DROP TABLE IF EXISTS view_filter_sets CASCADE;
+DROP TABLE IF EXISTS app_views CASCADE;
 DROP TABLE IF EXISTS branch_applied_filter_sets CASCADE;
 DROP TABLE IF EXISTS sheet_template CASCADE;
 DROP TABLE IF EXISTS filter_sets CASCADE;
@@ -214,6 +216,26 @@ CREATE TABLE IF NOT EXISTS branch_applied_filter_sets (
     applied_at        TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (branch_id, filter_set_id)
 );
+
+CREATE TABLE IF NOT EXISTS app_views (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    branch_id         UUID NOT NULL REFERENCES branch(branch_id) ON DELETE CASCADE,
+    name              VARCHAR NOT NULL,
+    bcf_camera_state  JSONB NOT NULL DEFAULT '{}',
+    ui_filters        JSONB NOT NULL DEFAULT '{}',
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_views_branch ON app_views(branch_id);
+
+CREATE TABLE IF NOT EXISTS view_filter_sets (
+    view_id       UUID NOT NULL REFERENCES app_views(id) ON DELETE CASCADE,
+    filter_set_id UUID NOT NULL REFERENCES filter_sets(filter_set_id) ON DELETE CASCADE,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (view_id, filter_set_id)
+);
+CREATE INDEX IF NOT EXISTS idx_view_filter_sets_view ON view_filter_sets(view_id);
+CREATE INDEX IF NOT EXISTS idx_view_filter_sets_filter_set ON view_filter_sets(filter_set_id);
 
 CREATE TABLE IF NOT EXISTS merge_request (
     merge_request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -424,7 +446,7 @@ def test_db_connection(request) -> Generator[psycopg2.extensions.connection, Non
                         cur.execute(
                             "TRUNCATE TABLE agent_chat_message, agent_chat, "
                             "merge_conflict_log, validation_rule, merge_request, "
-                            "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
+                            "ifc_entity, view_filter_sets, app_views, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
                             "branch, project_schema, project, ifc_schema CASCADE;"
                         )
                         print("  ✅ Truncated test tables")
@@ -454,7 +476,7 @@ def clean_db(test_db_connection) -> Generator[psycopg2.extensions.connection, No
         # Truncate tables (order matters due to FK constraints)
         cur.execute(
             "TRUNCATE TABLE agent_chat_message, agent_chat, merge_conflict_log, validation_rule, merge_request, "
-            "ifc_entity, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
+            "ifc_entity, view_filter_sets, app_views, branch_applied_filter_sets, filter_sets, sheet_template, revision, "
             "branch, project_schema, project, ifc_schema CASCADE;"
         )
         

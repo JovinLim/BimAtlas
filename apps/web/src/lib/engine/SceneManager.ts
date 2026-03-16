@@ -355,24 +355,90 @@ export class SceneManager {
 
 	/**
 	 * Apply BCF-compliant camera state (position, direction, up_vector).
-	 * Supports perspective_camera. Clipping planes are not yet implemented.
+	 * Supports perspective_camera and orthogonal_camera. For orthogonal, view_to_world_scale
+	 * is applied to set the ortho zoom so the visible area matches the saved view.
+	 * Uses scene bounding box center as orbit target so zoom/orbit behave naturally.
+	 * Clipping planes are not yet implemented.
 	 */
 	applyBcfCamera(bcf: {
-		perspective_camera?: { position: number[]; direction: number[]; up_vector: number[] };
-		orthogonal_camera?: { position: number[]; direction: number[]; up_vector: number[] };
+		perspective_camera?: { position: number[]; direction: number[]; up_vector: number[]; field_of_view?: number };
+		orthogonal_camera?: { position: number[]; direction: number[]; up_vector: number[]; view_to_world_scale?: number };
 	}): void {
 		const cam = bcf.perspective_camera ?? bcf.orthogonal_camera;
 		if (!cam?.position || !cam.direction || cam.position.length < 3 || cam.direction.length < 3) return;
 		this.camera.position.set(cam.position[0], cam.position[1], cam.position[2]);
 		this.orthoCamera.position.copy(this.camera.position);
-		const dir = new THREE.Vector3(cam.direction[0], cam.direction[1], cam.direction[2]);
-		this.controls.target.copy(this.camera.position).add(dir);
+		const dir = new THREE.Vector3(cam.direction[0], cam.direction[1], cam.direction[2]).normalize();
 		if (cam.up_vector && cam.up_vector.length >= 3) {
 			this.camera.up.set(cam.up_vector[0], cam.up_vector[1], cam.up_vector[2]);
 			this.orthoCamera.up.copy(this.camera.up);
 		}
+		if (bcf.perspective_camera?.field_of_view != null) {
+			this.camera.fov = bcf.perspective_camera.field_of_view;
+			this.camera.updateProjectionMatrix();
+		}
+
+		const target = this.getSceneCenter();
+		const targetDist = this.camera.position.distanceTo(target) || 1;
+		this.controls.target.copy(target);
+
+		const oc = bcf.orthogonal_camera;
+		if (oc?.view_to_world_scale != null && oc.view_to_world_scale > 0) {
+			const fovRad = (this.camera.fov * Math.PI) / 180;
+			const halfHeight = targetDist * Math.tan(fovRad / 2);
+			this.orthoCamera.zoom = (2 * halfHeight) / oc.view_to_world_scale;
+		}
 		this.updateOrthographicFrustum();
 		this.controls.update();
+	}
+
+	private getSceneCenter(): THREE.Vector3 {
+		if (this.meshMap.size === 0) return new THREE.Vector3(0, 0, 0);
+		const box = new THREE.Box3();
+		for (const mesh of this.meshMap.values()) box.expandByObject(mesh);
+		return box.getCenter(new THREE.Vector3());
+	}
+
+	/**
+	 * Get current camera state in BCF-compliant format for saving views.
+	 * Returns perspective_camera or orthogonal_camera depending on projection mode.
+	 */
+	getBcfCameraState(): {
+		perspective_camera?: { position: [number, number, number]; direction: [number, number, number]; up_vector: [number, number, number]; field_of_view?: number };
+		orthogonal_camera?: { position: [number, number, number]; direction: [number, number, number]; up_vector: [number, number, number]; view_to_world_scale: number };
+	} {
+		const cam = this.isOrthographic ? this.orthoCamera : this.camera;
+		const pos = cam.position;
+		const target = this.controls.target;
+		const dir = target.clone().sub(pos).normalize();
+		const up = cam.up;
+
+		const position: [number, number, number] = [pos.x, pos.y, pos.z];
+		const direction: [number, number, number] = [dir.x, dir.y, dir.z];
+		const up_vector: [number, number, number] = [up.x, up.y, up.z];
+
+		if (this.isOrthographic) {
+			const dist = pos.distanceTo(target);
+			const fovRad = (this.camera.fov * Math.PI) / 180;
+			const halfHeight = dist * Math.tan(fovRad / 2);
+			const viewToWorldScale = (2 * halfHeight) / this.orthoCamera.zoom;
+			return {
+				orthogonal_camera: {
+					position,
+					direction,
+					up_vector,
+					view_to_world_scale: viewToWorldScale,
+				},
+			};
+		}
+		return {
+			perspective_camera: {
+				position,
+				direction,
+				up_vector,
+				field_of_view: this.camera.fov,
+			},
+		};
 	}
 
 	/** Auto-fit the camera to encompass all loaded elements. */

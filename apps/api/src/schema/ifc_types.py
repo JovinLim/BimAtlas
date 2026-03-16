@@ -288,6 +288,23 @@ class SheetTemplate:
     updated_at: str
 
 
+# -- Saved views (BCF-compliant) --------------------------------------------
+
+
+@strawberry.type
+class SavedView:
+    """A BCF-compliant saved view with camera, clipping, and linked filter sets."""
+
+    id: str
+    branch_id: str
+    name: str
+    bcf_camera_state: strawberry.scalars.JSON
+    ui_filters: strawberry.scalars.JSON
+    filter_sets: list["FilterSet"] = strawberry.field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
 # -- Validation types (FEAT-004) -------------------------------------------
 
 
