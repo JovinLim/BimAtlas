@@ -10,7 +10,7 @@ priority: "high"
 
 Users need the ability to perform complex data audits and visualization queries on IFC models using natural language. Today, constructing multi-condition filter sets requires manual selection of IFC classes, operators, and values through a structured UI. Domain experts (architects, MEP engineers, structural engineers) should be able to describe their intent in plain language — e.g., "Show me all entities whose IFC class inherits from IfcWindow" or "Filter for fire-rated walls with rating above 2 hours" — and have an AI agent translate that into the correct sequence of filter operations.
 
-The architecture uses **direct API tools** (execute_request, discover_api) instead of MCP subprocess execution, orchestrated by a **LlamaIndex** agent. A **domain-safe execution policy** enforces search-before-create: the agent searches pgvector-backed IFC skills first, reads the discover_api cheat-sheet, escalates via ask_user_for_guidance on ambiguity, and saves new mappings via save_ifc_skill.
+The architecture uses **programmatic API tools** (execute_request, discover_api, search_skills, etc.) orchestrated by a **LlamaIndex** agent—no MCP; tools are native LlamaIndex FunctionTools. A **domain-safe execution policy** enforces search-before-create: the agent searches pgvector-backed IFC skills first, reads the discover_api cheat-sheet, escalates via ask_user_for_guidance on ambiguity, and saves new mappings via save_ifc_skill.
 
 ## 2. Core Requirements
 
@@ -39,7 +39,7 @@ The backend exposes these tools:
 - A Svelte chat panel in a **popup browser tab** (following the Graph/Search/Table/Attributes popup convention with BroadcastChannel context sync).
 - A model configuration sub-panel: Provider (OpenAI, Anthropic, Google, Ollama, Custom), Model name, API Key. Configuration is persisted to localStorage for convenience.
 - **IfcAgent saved models**: Users can save LLM configurations as named "IfcAgent" entities (project-scoped, stored as `ifc_entity` rows with `ifc_class='IfcAgent'` and attributes `{name, provider, model, api_key, base_url}`). Saved agents can be selected, updated, or deleted. IfcAgent entities do not have geometry and are not rendered in the 3D viewer.
-- Chat messages must show tool-call activity (which MCP tools were invoked, with what arguments) for transparency.
+- Chat messages must show tool-call activity (which API tools were invoked, with what arguments) for transparency.
 - Errors from the agent (LLM failures, tool errors, network issues) must be visually distinguished in the chat with error styling.
 
 ### Req 6 (Persistent Chat History)
@@ -69,7 +69,7 @@ The full operator vocabulary from FEAT-001 must be available to the agent:
 - LLM API keys may be stored in the `ifc_entity` attributes (as part of IfcAgent saved models). They can also be provided per-session without persistence.
 - Do not modify the existing filter set CRUD or JSONB schema — the agent uses execute_request to call existing GraphQL mutations.
 - Do not implement graph traversal via Cypher for filtering; use the existing relational JSONB filter engine. The agent constructs GraphQL queries that hit the backend filter engine.
-- Do not expose geometry (BYTEA) data to the LLM or through MCP tools.
+- Do not expose geometry (BYTEA) data to the LLM or through API tools.
 - Do not require a specific LLM provider; the system must be provider-agnostic (OpenAI, Anthropic, Google, Ollama, etc.).
 - Inter-set `combination_logic` for applying multiple filter sets to the same context is always `"OR"`. `"AND"` combination is disabled for now.
 - All frontend UI must follow `.cursor/rules/style.md` for HTML structure, layout conventions, CSS tokens, and the BimAtlas color scheme.

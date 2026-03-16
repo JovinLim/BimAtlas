@@ -12,7 +12,7 @@
       "current_objective": "All core plan steps and post-implementation enhancements complete. IFC skill guardrails (search_skills, ask_user_for_guidance, save_ifc_skill) and direct API calling (execute_request) implemented."
     },
     "execution_log": [
-      { "step": "Original MCP tools (get_project_schema, create_filter_set, add_filter_condition, apply_filter_set_to_context)", "status": "complete" },
+      { "step": "Original filter tools superseded by direct API tools (execute_request, discover_api, search_skills, etc.)", "status": "complete" },
       { "step": "Replace sandbox with execute_request + discover_api direct API tooling", "status": "complete" },
       { "step": "Add pgvector migration and ifc_skill table (infra/migrations/015)", "status": "complete" },
       { "step": "Implement skill service (frontmatter, embedding, semantic search)", "status": "complete" },
