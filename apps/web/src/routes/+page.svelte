@@ -5,6 +5,7 @@
    */
   import Viewport from "$lib/ui/Viewport.svelte";
   import ImportModal from "$lib/ui/ImportModal.svelte";
+  import SaveAsViewModal from "$lib/ui/SaveAsViewModal.svelte";
   import Spinner from "$lib/ui/Spinner.svelte";
   import Sidebar from "$lib/ui/Sidebar.svelte";
   import {
@@ -52,10 +53,16 @@
     type ValidationContextPayload,
     type ValidationMessage,
   } from "$lib/validation/protocol";
+  import {
+    VIEWS_CHANNEL,
+    type ViewsMessage,
+    type SavedViewPayload,
+  } from "$lib/views/protocol";
   import type { SceneManager } from "$lib/engine/SceneManager";
   import {
     client,
     APPLIED_FILTER_SETS_QUERY,
+    APPLY_FILTER_SETS_MUTATION,
     FILTER_SET_MATCHES_QUERY,
     PROJECTS_QUERY,
     CREATE_PROJECT_MUTATION,
@@ -64,6 +71,8 @@
     DELETE_BRANCH_MUTATION,
     REVISIONS_QUERY,
     IFC_PRODUCT_TREE_QUERY,
+    CREATE_SAVED_VIEW_MUTATION,
+    ATTACH_FILTER_SETS_TO_SAVED_VIEW_MUTATION,
   } from "$lib/api/client";
   import {
     createBufferGeometry,
@@ -109,6 +118,8 @@
   let schemaChannel: BroadcastChannel | null = null;
   let validationPopup: Window | null = null;
   let validationChannel: BroadcastChannel | null = null;
+  let viewsPopup: Window | null = null;
+  let viewsChannel: BroadcastChannel | null = null;
   const APPLIED_FILTER_SETS_COMBINATION_LOGIC: "OR" = "OR";
   let lastSentAttributesContextKey: string | null = null;
   let lastSentGraphContextKey: string | null = null;
@@ -188,6 +199,8 @@
   });
 
   let showImportModal = $state(false);
+  let showSaveAsViewModal = $state(false);
+  let saveAsViewError = $state<string | null>(null);
   let importing = $state(false);
   let importError = $state<string | null>(null);
   let importProgressPercent = $state(0);
@@ -505,6 +518,11 @@
     sendValidationContext();
   });
 
+  // Keep Views popup in sync when project/branch changes
+  $effect(() => {
+    sendViewsContext();
+  });
+
   let visibilityCleanup: (() => void) | null = null;
 
   // BroadcastChannels for cross-window communication
@@ -639,6 +657,33 @@
         sendValidationContext(true);
       },
     });
+
+    viewsChannel = setupChannel<ViewsMessage>(VIEWS_CHANNEL, {
+      "request-context": () => {
+        sendViewsContext(true);
+      },
+      "request-camera": () => {
+        const mgr = sceneManager;
+        if (!mgr || !viewsChannel) return;
+        const bcfCameraState = mgr.getBcfCameraState();
+        viewsChannel.postMessage(
+          JSON.parse(
+            JSON.stringify({
+              type: "camera",
+              bcfCameraState,
+            } satisfies ViewsMessage),
+          ),
+        );
+      },
+      "LOAD_VIEW": (message) => {
+        if (message.type !== "LOAD_VIEW" || !message.view) return;
+        void handleLoadView(message.view);
+      },
+      "TOGGLE_GHOST_MODE": (message) => {
+        if (message.type !== "TOGGLE_GHOST_MODE") return;
+        void handleToggleGhostMode(message.filterSetId, message.enabled);
+      },
+    });
   });
 
   onDestroy(() => {
@@ -650,6 +695,7 @@
     agentChannel?.close();
     schemaChannel?.close();
     validationChannel?.close();
+    viewsChannel?.close();
   });
 
   // Sync viewer selection to table popup when table has sync enabled.
@@ -869,6 +915,141 @@
     } satisfies ValidationMessage);
   }
 
+  function sendViewsContext(force = false) {
+    if (!viewsChannel) return;
+    const branchId = projectState.activeBranchId;
+    const projectId = projectState.activeProjectId;
+    const revision = revisionState.activeRevision;
+    const key = JSON.stringify({ branchId, projectId, revision });
+    if (!force && key === lastSentViewsContextKey) return;
+    lastSentViewsContextKey = key;
+    const { projectName, branchName } = resolveContextNames(projectId, branchId);
+    viewsChannel.postMessage(
+      JSON.parse(
+        JSON.stringify({
+          type: "context",
+          branchId,
+          projectId,
+          branchName,
+          projectName,
+          revision,
+        } satisfies ViewsMessage),
+      ),
+    );
+  }
+
+  let lastSentViewsContextKey: string | null = null;
+
+  let ghostedFilterSetIds = $state<Set<string>>(new Set());
+
+  async function handleLoadView(view: SavedViewPayload) {
+    const branchId = projectState.activeBranchId;
+    if (!branchId || view.branchId !== branchId) return;
+    const mgr = sceneManager;
+    if (!mgr) return;
+
+    ghostedFilterSetIds = new Set();
+    mgr.setGhostedGlobalIds(new Set());
+
+    const filterSets = view.filterSets ?? [];
+    const filterSetIds = filterSets.map((fs) => fs.id ?? fs.filterSetId ?? "").filter(Boolean);
+    try {
+      await client.mutation(
+        APPLY_FILTER_SETS_MUTATION,
+        {
+          branchId,
+          filterSetIds,
+          combinationLogic: "AND",
+        },
+        { requestPolicy: "network-only" },
+      ).toPromise();
+    } catch (err) {
+      console.error("Failed to apply filter sets for view:", err);
+    }
+
+    await reloadGeometryFromAppliedFilterSets();
+
+    selection.activeGlobalId = null;
+
+    const bcf = view.bcfCameraState;
+    if (bcf && (bcf.perspective_camera || bcf.orthogonal_camera)) {
+      mgr.setProjectionMode(!!bcf.orthogonal_camera);
+      mgr.applyBcfCamera(bcf);
+    }
+  }
+
+  async function handleSaveAsViewSubmit(name: string) {
+    const branchId = projectState.activeBranchId;
+    const mgr = sceneManager;
+    if (!branchId || !mgr) return;
+    saveAsViewError = null;
+    try {
+      const bcf = mgr.getBcfCameraState();
+      const uiFilters = { projectionMode: mgr.projectionIsometric ? "orthographic" : "perspective" };
+      const result = await client
+        .mutation(
+          CREATE_SAVED_VIEW_MUTATION,
+          {
+            branchId,
+            name: name.trim(),
+            bcfCameraState: bcf,
+            uiFilters,
+          },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      const created = (result.data as { createSavedView?: { id: string } })?.createSavedView;
+      if (created) {
+        const filterSetIds = searchState.appliedFilterSets.map((fs) => fs.id).filter(Boolean);
+        if (filterSetIds.length > 0) {
+          await client
+            .mutation(
+              ATTACH_FILTER_SETS_TO_SAVED_VIEW_MUTATION,
+              { viewId: created.id, filterSetIds },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+        }
+      }
+      showSaveAsViewModal = false;
+    } catch (e) {
+      saveAsViewError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function handleToggleGhostMode(filterSetId: string, enabled: boolean) {
+    const mgr = sceneManager;
+    const branchId = projectState.activeBranchId;
+    const rev = revisionState.activeRevision;
+    if (!mgr || !branchId || rev === null) return;
+
+    const next = new Set(ghostedFilterSetIds);
+    if (enabled) next.add(filterSetId);
+    else next.delete(filterSetId);
+    ghostedFilterSetIds = next;
+
+    try {
+      const result = await client
+        .query(FILTER_SET_MATCHES_QUERY, { branchId, revision: rev }, { requestPolicy: "network-only" })
+        .toPromise();
+      const matches = (result.data?.filterSetMatches ?? []) as Array<{ filterSetId: string; globalIds: string[] }>;
+      const ghostedIds = new Set<string>();
+      for (const m of matches) {
+        if (ghostedFilterSetIds.has(m.filterSetId)) {
+          for (const gid of m.globalIds) ghostedIds.add(gid);
+        }
+      }
+      mgr.setGhostedGlobalIds(ghostedIds);
+      if (filterSetColorsEnabled) {
+        await applyFilterSetColorsToScene(mgr, branchId, rev);
+      } else {
+        mgr.applyFilterSetColors(null);
+      }
+    } catch (err) {
+      console.error("Failed to apply ghost mode:", err);
+    }
+  }
+
   function openAgentPopup() {
     agentPopup = openPopupWithContext(agentPopup, {
       route: "/agent",
@@ -966,6 +1147,20 @@
         revision: revisionState.activeRevision,
       },
       sendContext: () => sendValidationContext(true),
+    });
+  }
+
+  function openViewsPopup() {
+    viewsPopup = openPopupWithContext(viewsPopup, {
+      route: "/views",
+      name: "bimatlas-views",
+      features: "width=480,height=600",
+      params: {
+        branchId: projectState.activeBranchId,
+        projectId: projectState.activeProjectId,
+        revision: revisionState.activeRevision,
+      },
+      sendContext: () => sendViewsContext(true),
     });
   }
 
@@ -2087,6 +2282,39 @@
           >
             Fit View
           </button>
+          <!-- Save as view -->
+          {#if projectState.activeBranchId}
+            <button
+              class="toolbar-btn"
+              onclick={() => (showSaveAsViewModal = true)}
+              title="Save current view (filter sets and camera)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <polyline
+                  points="17 21 17 13 7 13 7 21"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <polyline
+                  points="7 3 7 8 15 8"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              Save as view
+            </button>
+          {/if}
           <!-- Revision filters (when branch is active) -->
           {#if projectState.activeBranchId}
             <section
@@ -2476,6 +2704,22 @@
             </svg>
             Validation
           </button>
+          <!-- Views popup button -->
+          <button
+            class="table-btn"
+            onclick={openViewsPopup}
+            aria-label="Open saved views"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+              />
+            </svg>
+            Views
+          </button>
           <!-- Schema Browser popup button -->
           <button
             class="schema-btn"
@@ -2560,6 +2804,18 @@
       open={showImportModal}
       onclose={() => (showImportModal = false)}
       onsubmit={handleImportSubmit}
+    />
+
+    <SaveAsViewModal
+      open={showSaveAsViewModal}
+      appliedFilterSetCount={searchState.appliedFilterSets.length}
+      projectionMode={sceneManager?.projectionIsometric ? "orthographic" : "perspective"}
+      error={saveAsViewError}
+      onclose={() => {
+        showSaveAsViewModal = false;
+        saveAsViewError = null;
+      }}
+      onsubmit={handleSaveAsViewSubmit}
     />
 
     <!-- Delete project confirmation modal -->
@@ -3490,10 +3746,11 @@
 
   .element-count {
     position: absolute;
-    bottom: 1rem;
-    right: 1rem;
+    top: 1rem;
+    left: 1rem;
     font-size: 0.72rem;
     color: var(--color-text-muted);
+    z-index: 1;
   }
 
   .search-actions {

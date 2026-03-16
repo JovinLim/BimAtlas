@@ -485,6 +485,93 @@ export const FILTER_SET_MATCHES_QUERY = gql`
 	}
 `;
 
+// ---- Saved views (BCF-compliant) ----
+
+const SAVED_VIEW_FIELDS = `
+	id
+	branchId
+	name
+	bcfCameraState
+	uiFilters
+	filterSets {
+		${FILTER_SET_FIELDS}
+	}
+	createdAt
+	updatedAt
+`;
+
+/** List all saved views for a branch. */
+export const SAVED_VIEWS_QUERY = gql`
+	query SavedViews($branchId: String!) {
+		savedViews(branchId: $branchId) {
+			${SAVED_VIEW_FIELDS}
+		}
+	}
+`;
+
+/** Fetch a single saved view with linked filter sets (aggregated). */
+export const SAVED_VIEW_QUERY = gql`
+	query SavedView($id: String!) {
+		savedView(id: $id) {
+			${SAVED_VIEW_FIELDS}
+		}
+	}
+`;
+
+/** Create a new saved view. */
+export const CREATE_SAVED_VIEW_MUTATION = gql`
+	mutation CreateSavedView(
+		$branchId: String!
+		$name: String!
+		$bcfCameraState: JSON!
+		$uiFilters: JSON
+	) {
+		createSavedView(
+			branchId: $branchId
+			name: $name
+			bcfCameraState: $bcfCameraState
+			uiFilters: $uiFilters
+		) {
+			${SAVED_VIEW_FIELDS}
+		}
+	}
+`;
+
+/** Update a saved view. */
+export const UPDATE_SAVED_VIEW_MUTATION = gql`
+	mutation UpdateSavedView(
+		$id: String!
+		$name: String
+		$bcfCameraState: JSON
+		$uiFilters: JSON
+	) {
+		updateSavedView(
+			id: $id
+			name: $name
+			bcfCameraState: $bcfCameraState
+			uiFilters: $uiFilters
+		) {
+			${SAVED_VIEW_FIELDS}
+		}
+	}
+`;
+
+/** Delete a saved view. */
+export const DELETE_SAVED_VIEW_MUTATION = gql`
+	mutation DeleteSavedView($id: String!) {
+		deleteSavedView(id: $id)
+	}
+`;
+
+/** Attach filter sets to a saved view (replaces existing). */
+export const ATTACH_FILTER_SETS_TO_SAVED_VIEW_MUTATION = gql`
+	mutation AttachFilterSetsToSavedView($viewId: String!, $filterSetIds: [String!]!) {
+		attachFilterSetsToSavedView(viewId: $viewId, filterSetIds: $filterSetIds) {
+			${SAVED_VIEW_FIELDS}
+		}
+	}
+`;
+
 // ---- Sheet template queries / mutations (FEAT-003 table page) ----
 
 const SHEET_TEMPLATE_FIELDS = `

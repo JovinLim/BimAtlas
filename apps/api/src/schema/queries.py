@@ -24,28 +24,33 @@ import strawberry
 from ..db import (
     apply_filter_sets,
     apply_schema_to_project as db_apply_schema_to_project,
-    fetch_all_ifc_schemas,
-    insert_blank_ifc_schema,
-    unapply_schema_from_project as db_unapply_schema_from_project,
+    attach_filter_sets_to_view,
+    create_app_view as db_create_app_view,
     create_branch,
     create_filter_set as db_create_filter_set,
     create_project,
     create_sheet_template as db_create_sheet_template,
+    delete_app_view as db_delete_app_view,
     delete_branch as db_delete_branch,
-    delete_sheet_template as db_delete_sheet_template,
     delete_filter_set as db_delete_filter_set,
     delete_project as db_delete_project,
     delete_revision as db_delete_revision,
+    delete_sheet_template as db_delete_sheet_template,
+    fetch_all_ifc_schemas,
     fetch_applied_filter_sets,
+    fetch_app_view as db_fetch_app_view,
+    fetch_app_view_with_filter_sets as db_fetch_app_view_with_filter_sets,
+    fetch_app_views_for_branch as db_fetch_app_views_for_branch,
     fetch_branch,
     fetch_branches,
-    fetch_filter_set,
-    fetch_filter_set_matches,
-    fetch_filter_sets_for_branch,
     fetch_distinct_ifc_classes_at_revision,
     fetch_entity_at_revision,
     fetch_entities_at_revision,
     fetch_entities_with_filter_sets,
+    fetch_filter_set,
+    fetch_filter_set_matches,
+    fetch_filter_sets_for_branch,
+    fetch_ifc_schema_by_id,
     fetch_project,
     fetch_projects,
     fetch_revision_diff,
@@ -57,20 +62,22 @@ from ..db import (
     fetch_sheet_templates_for_project,
     fetch_sheet_templates_opened,
     fetch_spatial_container,
-    fetch_ifc_schema_by_id,
     fetch_validations_for_entities,
     fetch_validation_entities as db_fetch_validation_entities,
     fetch_validation_rules_by_schema_id,
+    get_latest_revision_seq,
+    insert_blank_ifc_schema,
     insert_uploaded_schema_rule,
     delete_uploaded_schema_rule as db_delete_uploaded_schema_rule,
     soft_delete_uploaded_schema as db_soft_delete_uploaded_schema,
-    update_uploaded_schema_rule as db_update_uploaded_schema_rule,
+    unapply_schema_from_project as db_unapply_schema_from_project,
+    update_app_view as db_update_app_view,
     update_sheet_template as db_update_sheet_template,
+    update_uploaded_schema_rule as db_update_uploaded_schema_rule,
     update_validation_rule_rule_schema as db_update_validation_rule_rule_schema,
-    get_latest_revision_seq,
+    update_filter_set as db_update_filter_set,
     search_filter_sets,
     search_sheet_templates,
-    update_filter_set as db_update_filter_set,
 )
 from ..services.graph.age_client import (
     build_spatial_tree,
@@ -84,15 +91,16 @@ from .ifc_enums import IfcRelationshipType
 from . import ifc_schema_loader
 from .ifc_types import (
     AppliedFilterSets,
-    UploadedSchema,
-    UploadedSchemaRule,
     Branch,
     ChangeType,
     FilterInput,
     FilterSet,
     FilterSetFilter,
     FilterSetMatch,
+    SavedView,
     SheetTemplate,
+    UploadedSchema,
+    UploadedSchemaRule,
     IfcMeshRepresentation,
     IfcProduct,
     IfcProductClassNode,
@@ -444,6 +452,27 @@ def _row_to_sheet_template(row: dict) -> SheetTemplate:
     )
 
 
+def _row_to_saved_view(row: dict) -> SavedView:
+    """Convert a db row dict (with optional filter_sets) into a SavedView."""
+    bcf = row.get("bcf_camera_state") or {}
+    ui = row.get("ui_filters") or {}
+    if isinstance(bcf, str):
+        bcf = json.loads(bcf) if bcf else {}
+    if isinstance(ui, str):
+        ui = json.loads(ui) if ui else {}
+    filter_sets = row.get("filter_sets") or []
+    return SavedView(
+        id=str(row["id"]),
+        branch_id=str(row["branch_id"]),
+        name=row["name"],
+        bcf_camera_state=bcf,
+        ui_filters=ui,
+        filter_sets=[_row_to_filter_set(fs) for fs in filter_sets],
+        created_at=_to_iso(row["created_at"]),
+        updated_at=_to_iso(row["updated_at"]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Root Query
 # ---------------------------------------------------------------------------
@@ -549,6 +578,7 @@ class Query:
         ifc_class: Optional[str] = None,
         ifc_classes: Optional[list[str]] = None,
         contained_in: Optional[str] = None,
+        relation_types: Optional[list[IfcRelationshipType]] = None,
         name: Optional[str] = None,
         object_type: Optional[str] = None,
         tag: Optional[str] = None,
@@ -584,6 +614,7 @@ class Query:
                 ifc_class=ifc_class,
                 ifc_classes=ifc_classes,
                 contained_in=contained_in,
+                relation_types=[rt.value for rt in relation_types] if relation_types else None,
                 name=name,
                 object_type=object_type,
                 tag=tag,
@@ -850,6 +881,20 @@ class Query:
         """Fetch a single sheet template by id."""
         row = fetch_sheet_template(id)
         return _row_to_sheet_template(row) if row else None
+
+    # ---- Saved views (BCF-compliant) ---------------------------------------
+
+    @strawberry.field
+    async def saved_views(self, branch_id: str) -> list[SavedView]:
+        """List all saved views for a branch."""
+        rows = db_fetch_app_views_for_branch(branch_id)
+        return [_row_to_saved_view(r) for r in rows]
+
+    @strawberry.field
+    async def saved_view(self, id: str) -> Optional[SavedView]:
+        """Fetch a saved view with its linked filter sets (aggregated payload)."""
+        row = db_fetch_app_view_with_filter_sets(id)
+        return _row_to_saved_view(row) if row else None
 
     # ---- Validation queries ------------------------------------------------
 
@@ -1159,6 +1204,51 @@ class Mutation:
     async def delete_sheet_template(self, id: str) -> bool:
         """Delete a sheet template by id."""
         return db_delete_sheet_template(id)
+
+    # ---- Saved view mutations ----------------------------------------------
+
+    @strawberry.mutation
+    async def create_saved_view(
+        self,
+        branch_id: str,
+        name: str,
+        bcf_camera_state: strawberry.scalars.JSON,
+        ui_filters: Optional[strawberry.scalars.JSON] = None,
+    ) -> SavedView:
+        """Create a new saved view. BCF camera state must include perspective_camera or orthogonal_camera."""
+        bcf = bcf_camera_state if isinstance(bcf_camera_state, dict) else {}
+        ui = ui_filters if isinstance(ui_filters, dict) else {}
+        row = db_create_app_view(branch_id, name, bcf, ui_filters=ui)
+        return _row_to_saved_view(row)
+
+    @strawberry.mutation
+    async def update_saved_view(
+        self,
+        id: str,
+        name: Optional[str] = None,
+        bcf_camera_state: Optional[strawberry.scalars.JSON] = None,
+        ui_filters: Optional[strawberry.scalars.JSON] = None,
+    ) -> Optional[SavedView]:
+        """Update a saved view."""
+        bcf = bcf_camera_state if isinstance(bcf_camera_state, dict) else None
+        ui = ui_filters if isinstance(ui_filters, dict) else None
+        row = db_update_app_view(id, name=name, bcf_camera_state=bcf, ui_filters=ui)
+        return _row_to_saved_view(row) if row else None
+
+    @strawberry.mutation
+    async def delete_saved_view(self, id: str) -> bool:
+        """Delete a saved view."""
+        return db_delete_app_view(id)
+
+    @strawberry.mutation
+    async def attach_filter_sets_to_saved_view(
+        self,
+        view_id: str,
+        filter_set_ids: list[str],
+    ) -> Optional[SavedView]:
+        """Replace the filter sets linked to a saved view. Filter sets must belong to the same branch."""
+        attach_filter_sets_to_view(view_id, filter_set_ids)
+        return _row_to_saved_view(db_fetch_app_view_with_filter_sets(view_id))
 
     # ---- Validation mutations (uploaded schema / validation_rule based) ------
 

@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "feature_id": "feature_006_saved_views_bcf_compliant",
+    "feature_description": "BCF-compliant saved views for BIM model navigation, with camera and clipping persisted separately from IFC entities and linked to reusable filter sets. A dedicated popup UI manages views, while cross-tab messaging applies view state and temporary ghost overrides in the main viewer without mutating saved records.",
+    "plan_reference": "saved-views-bcf-plan_3e715fe6.plan.md",
+    "assigned_agent": "execution_agent",
+    "last_updated": "2026-03-13T00:00:00Z"
+  },
+  "state": {
+    "status": "complete",
+    "current_objective": "Saved Views (BCF-compliant) feature implemented: DB migration, backend CRUD/aggregation, /views popup UI, cross-tab protocol, main-viewer execution, ghost mode. Filter-set save bug fixed (list endpoint now includes filter_sets; mutation error handling added)."
+  },
+  "execution_log": [
+    { "step": "Validate BCF viewpoint payload contract and define canonical JSON schema mapping for bcf_camera_state.", "status": "complete" },
+    { "step": "Create and apply DB migration for app_views and view_filter_sets with referential integrity indexes.", "status": "complete" },
+    { "step": "Implement backend data-access layer for app_views CRUD and view_filter_sets attach/detach.", "status": "complete" },
+    { "step": "Implement GraphQL API for create/list/get/update/delete saved views with BCF validation.", "status": "complete" },
+    { "step": "Implement read aggregation: fetch_app_views_for_branch and fetch_app_view_with_filter_sets include linked filter sets.", "status": "complete" },
+    { "step": "Add backend tests for CRUD, filter-set joins, invalid BCF rejection, ghost non-persistence.", "status": "complete" },
+    { "step": "Create /views popup route with list, editor form, and filter-set attachment UI.", "status": "complete" },
+    { "step": "Implement cross-tab protocol (LOAD_VIEW, TOGGLE_GHOST_MODE) with cloneable payloads.", "status": "complete" },
+    { "step": "Wire main viewer to enforce one active view; LOAD_VIEW replaces camera/clipping/visibility and applies linked filter sets.", "status": "complete" },
+    { "step": "Implement ghost mode rendering override (opacity/desaturation) as transient in-memory state.", "status": "complete" },
+    { "step": "Fix filter-set save: extend fetch_app_views_for_branch to include filter_sets; add checkMutationError for urql.", "status": "complete" },
+    { "step": "Run verification: API tests, manual acceptance of camera, clipping, filter-set visibility, ghost mode.", "status": "complete" }
+  ],
+  "handoff_notes": "Lessons learned: list endpoints must explicitly load filter_sets; urql mutations require result.error checks."
+}

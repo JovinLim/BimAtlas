@@ -102,6 +102,7 @@
     height: 100%;
     transition: width 0.2s ease;
     pointer-events: auto;
+    z-index: 10;
   }
 
   .sidebar-container.collapsed {

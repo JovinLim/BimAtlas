@@ -24,7 +24,7 @@ Before generating plans or executing feature work, read:
 - **`.cursor/product/overview.md`** – Product overview including:
   - High-level domain (IFC, version-controlled graph, Git-like projects/branches/revisions)
   - Architecture (Hybrid Relational-Graph, Temporal DB, JSONB, Apache AGE)
-  - Design principles (Deployable, AI/MCP ready)
+  - Design principles (Deployable, AI agent ready)
   - Tech stack (Python, GraphQL, PostgreSQL, AGE)
 
 Use this context to ensure plans and implementations align with the product's architecture and constraints.
