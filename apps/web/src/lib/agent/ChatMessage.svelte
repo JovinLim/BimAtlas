@@ -7,14 +7,39 @@
 	const isError = $derived(message.role === 'tool');
 	let metadataExpanded = $state(false);
 
-	$effect(() => {
-		if (message.isStreaming) metadataExpanded = true;
-	});
-
 	const hasMetadata = $derived(
 		(message.thinkingSteps && message.thinkingSteps.length > 0) ||
 		(message.toolCalls && message.toolCalls.length > 0)
 	);
+
+	/** Join thinking chunks with spaces where missing to fix tokenized streaming. */
+	function joinThinkingWithSpaces(steps: string[]): string {
+		if (!steps?.length) return '';
+		let out = '';
+		for (const chunk of steps) {
+			if (!chunk) continue;
+			const needsSpace =
+				out.length > 0 &&
+				!/[\s]$/.test(out) &&
+				!/^[\s]/.test(chunk);
+			out += needsSpace ? ' ' + chunk : chunk;
+		}
+		return out;
+	}
+
+	const metadataSnippet = $derived.by(() => {
+		if (!hasMetadata) return '';
+		const parts: string[] = [];
+		if (message.thinkingSteps?.length) {
+			const text = joinThinkingWithSpaces(message.thinkingSteps).trim();
+			parts.push(text ? text.slice(0, 140) + (text.length > 140 ? '…' : '') : 'Thinking');
+		}
+		if (message.toolCalls?.length) {
+			const names = message.toolCalls.map((t) => t.name ?? 'tool').join(', ');
+			parts.push(names.length > 80 ? names.slice(0, 80) + '…' : names);
+		}
+		return parts.join(' · ');
+	});
 	const hasAttachments = $derived((message.attachments?.length ?? 0) > 0);
 	const hasGuidanceRequest = $derived(
 		(message.guidanceRequest?.question?.length ?? 0) > 0
@@ -40,7 +65,12 @@
 					onclick={() => (metadataExpanded = !metadataExpanded)}
 					aria-expanded={metadataExpanded}
 				>
-					<span>Agent metadata</span>
+					<div class="meta-snippet-wrap" class:collapsed={!metadataExpanded}>
+						<span class="meta-header">Agent metadata</span>
+						{#if !metadataExpanded && metadataSnippet}
+							<span class="meta-snippet">{metadataSnippet}</span>
+						{/if}
+					</div>
 					<span class="meta-chevron" class:open={metadataExpanded}>▸</span>
 				</button>
 				{#if metadataExpanded}
@@ -48,7 +78,7 @@
 						{#if message.thinkingSteps && message.thinkingSteps.length > 0}
 							<div class="thinking-steps">
 								<span class="meta-label">Thinking</span>
-								<div class="thinking-text">{message.thinkingSteps.join('')}</div>
+								<div class="thinking-text">{joinThinkingWithSpaces(message.thinkingSteps)}</div>
 							</div>
 						{/if}
 						{#if message.toolCalls && message.toolCalls.length > 0}
@@ -231,13 +261,46 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 0.5rem;
 		background: none;
 		border: 0;
-		padding: 0.35rem 0.5rem;
+		padding: 0.5rem 0.5rem;
 		color: var(--color-text-secondary, #ccc);
 		font-size: 0.72rem;
 		font-family: inherit;
 		cursor: pointer;
+		text-align: left;
+	}
+
+	.meta-header {
+		font-size: 0.62rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-text-muted, #9a9a9a);
+	}
+
+	.meta-snippet-wrap {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+
+	.meta-snippet-wrap.collapsed {
+		overflow: hidden;
+		max-height: 4.2em;
+		-webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+		mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+	}
+
+	.meta-snippet {
+		display: block;
+		white-space: pre-wrap;
+		overflow: hidden;
+		word-break: break-word;
+		color: var(--color-text-muted, #9a9a9a);
+		font-size: 0.68rem;
 	}
 
 	.meta-content {

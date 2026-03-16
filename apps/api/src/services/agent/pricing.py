@@ -39,13 +39,18 @@ _PROVIDER_MAP = {
 
 def _match_model(provider: str, model: str) -> tuple[float, float]:
     """Return (input_per_1m, output_per_1m) for the given provider and model."""
-    models = _PROVIDER_MAP.get(provider.lower() if provider else "")
-    if not models:
-        return 0.0, 0.0
+    models = _PROVIDER_MAP.get((provider or "").lower())
+    if models:
+        model_lower = (model or "").lower()
+        for prefix, inp, out in models:
+            if prefix in model_lower or model_lower.startswith(prefix.replace("-", "")):
+                return inp, out
+    # When provider is custom/ollama/unknown, infer from model name across all providers
     model_lower = (model or "").lower()
-    for prefix, inp, out in models:
-        if prefix in model_lower or model_lower.startswith(prefix.replace("-", "")):
-            return inp, out
+    for _provider, provider_models in _PROVIDER_MAP.items():
+        for prefix, inp, out in provider_models:
+            if prefix in model_lower or model_lower.startswith(prefix.replace("-", "")):
+                return inp, out
     return 0.0, 0.0
 
 

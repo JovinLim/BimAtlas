@@ -81,6 +81,108 @@ def _graphql_examples() -> dict[str, Any]:
                 "note": "Shows IFC classes present in the model and their hierarchy.",
             },
         },
+        "filter_set_mutations": {
+            "create_filter_set_with_flat_filters": {
+                "query": (
+                    "mutation CreateFilterSet("
+                    "$branchId: String!, $name: String!, $logic: String!, "
+                    "$filters: [FilterInput!], $color: String"
+                    ") { "
+                    "createFilterSet("
+                    "branchId: $branchId, name: $name, logic: $logic, "
+                    "filters: $filters, color: $color"
+                    ") { id name logic } }"
+                ),
+                "variables": {
+                    "branchId": "CURRENT_BRANCH_ID",
+                    "name": "Ground Floor - Walls (spatial containment)",
+                    "logic": "AND",
+                    "color": "#4A90D9",
+                    "filters": [
+                        {
+                            "mode": "class",
+                            "ifcClass": "IfcWall",
+                            "operator": "is",
+                        },
+                        {
+                            "mode": "relation",
+                            "relation": "IfcRelContainedInSpatialStructure",
+                            "relationTargetClass": "IfcBuildingStorey",
+                            "relationTargetAttribute": "Name",
+                            "relationTargetOperator": "is",
+                            "relationTargetValue": "Ground Floor",
+                            "relationTargetValueType": "string",
+                        },
+                    ],
+                },
+                "note": (
+                    "FilterInput fields use camelCase keys. For relation mode, use "
+                    "relation + relationTarget* fields."
+                ),
+            },
+            "create_filter_set_with_filters_tree": {
+                "query": (
+                    "mutation CreateFilterSetWithTree("
+                    "$branchId: String!, $name: String!, $logic: String!, "
+                    "$filtersTree: JSON!, $color: String"
+                    ") { "
+                    "createFilterSet("
+                    "branchId: $branchId, name: $name, logic: $logic, "
+                    "filtersTree: $filtersTree, color: $color"
+                    ") { id name filtersTree } }"
+                ),
+                "variables": {
+                    "branchId": "CURRENT_BRANCH_ID",
+                    "name": "Ground Floor - Walls (tree)",
+                    "logic": "AND",
+                    "color": "#4A90D9",
+                    "filtersTree": {
+                        "kind": "group",
+                        "op": "ALL",
+                        "children": [
+                            {
+                                "kind": "leaf",
+                                "mode": "class",
+                                "ifcClass": "IfcWall",
+                                "operator": "is",
+                            },
+                            {
+                                "kind": "leaf",
+                                "mode": "relation",
+                                "relation": "IfcRelContainedInSpatialStructure",
+                                "relationTargetClass": "IfcBuildingStorey",
+                                "relationTargetAttribute": "Name",
+                                "relationTargetOperator": "is",
+                                "relationTargetValue": "Ground Floor",
+                                "relationTargetValueType": "string",
+                            },
+                        ],
+                    },
+                },
+                "note": (
+                    "Canonical tree shape: root group with op=ALL|ANY and children "
+                    "of leaf/group nodes."
+                ),
+            },
+            "apply_filter_sets": {
+                "query": (
+                    "mutation ApplyFilterSets("
+                    "$branchId: String!, $filterSetIds: [String!]!, "
+                    "$combinationLogic: String!"
+                    ") { "
+                    "applyFilterSets("
+                    "branchId: $branchId, filterSetIds: $filterSetIds, "
+                    "combinationLogic: $combinationLogic"
+                    ") { combinationLogic filterSets { id name } } }"
+                ),
+                "variables": {
+                    "branchId": "CURRENT_BRANCH_ID",
+                    "filterSetIds": ["filter-set-uuid-1"],
+                    "combinationLogic": "AND",
+                },
+                "note": "Apply one or more persisted filter sets to the active branch.",
+            },
+        },
         "validation_schema_crud": {
             "list_uploaded_schemas": {
                 "query": "query { uploadedSchemas { id versionName ruleCount projectIds } }",
@@ -205,11 +307,9 @@ def _ifc_cheat_sheet() -> dict[str, Any]:
             },
         },
         "filter_modes": {
-            "EXACT": "Exact string match. Use for attributes like Name, Tag.",
-            "CONTAINS": "Substring match (ILIKE). Use for partial text search.",
             "class": "Filter by IFC class (ifcClass). Use exact class name.",
             "attribute": "Filter by JSONB attribute path. Paths are dot-separated (e.g. Name, FireRating).",
-            "relation": "Filter by related entity. Requires relationTargetClass, relationTargetAttribute, relationTargetValue.",
+            "relation": "Filter by related entity. Requires relation, relationTargetClass, relationTargetAttribute, relationTargetOperator, relationTargetValue.",
         },
         "anti_patterns": [
             "Do NOT invent relationship names. Use only IfcRel* classes from this cheat sheet.",
@@ -231,12 +331,50 @@ def _ifc_cheat_sheet() -> dict[str, Any]:
                 "IfcRelAssociatesMaterial for material relationships.",
             ],
         },
+        "filter_input_reference": {
+            "required_for_each_filter": ["mode"],
+            "mode_class": {
+                "keys": ["mode", "ifcClass", "operator"],
+                "operators": ["is", "is_not", "inherits_from"],
+            },
+            "mode_attribute": {
+                "keys": ["mode", "attribute", "operator", "value", "valueType"],
+                "string_operators": [
+                    "is", "is_not", "contains", "not_contains",
+                    "starts_with", "ends_with", "is_empty", "is_not_empty",
+                ],
+                "numeric_operators": ["equals", "not_equals", "gt", "lt", "gte", "lte"],
+            },
+            "mode_relation": {
+                "keys": [
+                    "mode", "relation",
+                    "relationTargetClass", "relationTargetAttribute",
+                    "relationTargetOperator", "relationTargetValue",
+                    "relationTargetValueType",
+                ],
+                "note": "Use relation='IfcRelContainedInSpatialStructure' for storey/building containment filters.",
+            },
+        },
         "filter_set_mutations": {
             "create_filter_set": "createFilterSet(branchId, name, logic, filters, filtersTree, color)",
             "apply_filter_sets": "applyFilterSets(branchId, filterSetIds, combinationLogic)",
             "note": "filters_tree uses canonical tree: { kind: 'group', op: 'ALL'|'ANY', children: [...] }.",
         },
     }
+
+
+def _format_graphql_input_object(type_name: str, graph_schema: Any) -> list[dict[str, str]]:
+    """Return a compact field/type map for a GraphQL input object."""
+    type_map = getattr(graph_schema, "type_map", {}) if graph_schema is not None else {}
+    gql_type = type_map.get(type_name)
+    fields = getattr(gql_type, "fields", None)
+    if not isinstance(fields, dict):
+        return []
+
+    formatted: list[dict[str, str]] = []
+    for field_name, field in sorted(fields.items(), key=lambda item: item[0]):
+        formatted.append({"name": field_name, "type": str(field.type)})
+    return formatted
 
 
 def build_agent_api_spec(app: FastAPI, strawberry_schema: Any) -> dict[str, Any]:
@@ -340,6 +478,9 @@ def build_agent_api_spec(app: FastAPI, strawberry_schema: Any) -> dict[str, Any]
             "endpoint": "/graphql",
             "queries": query_fields,
             "mutations": mutation_fields,
+            "input_objects": {
+                "FilterInput": _format_graphql_input_object("FilterInput", graph_schema),
+            },
             "examples": _graphql_examples(),
         },
         "ifc_cheat_sheet": _ifc_cheat_sheet(),

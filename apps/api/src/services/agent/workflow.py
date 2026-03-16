@@ -8,6 +8,7 @@ No MCP/filter tools — all operations go through the API.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, AsyncGenerator
 from uuid import uuid4
 
@@ -36,6 +37,13 @@ You have these tools:
 - `search_web` — Search the web for up-to-date info, building codes, specs. Use `fetch_webpage` for full content.
 - `list_uploaded_files`, `read_uploaded_file` — For attached files.
 
+## Skills + tools execution policy (MANDATORY)
+- Skills and tools are complementary, not alternatives.
+- First use `search_skills` to retrieve IFC/domain mapping and prior successful patterns.
+- Then use `discover_api` to confirm the exact API contract (arguments, input shapes, examples).
+- Then execute with `execute_request` using validated payloads.
+- If skills and API examples disagree, prefer the API contract and ask user guidance when needed.
+
 ## Web search for IFC content
 When using `search_web` for IFC-related queries (schema, entities, relationships, documentation),
 prefer official buildingSMART sources. Include site-specific terms in your query, e.g.:
@@ -61,6 +69,11 @@ This yields authoritative IFC definitions over third-party or outdated content.
    targets; it is not a general relation mechanism.
 """
 
+_REACT_TRACE_LINE = re.compile(
+    r"^\s*(Thought|Action|Action Input|Observation)\s*:\s*",
+    re.IGNORECASE,
+)
+
 
 def _build_system_prompt(pre_prompt: str | None) -> str:
     if not pre_prompt or not pre_prompt.strip():
@@ -82,8 +95,48 @@ def _normalize_assistant_response(content: str) -> str:
     Strip that prefix for cleaner UI messages.
     """
     text = (content or "").strip()
+    if not text:
+        return ""
     if text.lower().startswith("assistant:"):
-        return text[len("assistant:"):].lstrip()
+        text = text[len("assistant:"):].lstrip()
+
+    # ReAct outputs occasionally include internal traces + final "Answer:".
+    # Keep only the user-facing answer when present.
+    answer_match = re.search(r"(?im)^\s*Answer\s*:\s*", text)
+    if answer_match:
+        text = text[answer_match.end():].strip()
+
+    # Remove any remaining internal trace lines.
+    cleaned_lines = [
+        line for line in text.splitlines() if not _REACT_TRACE_LINE.match(line)
+    ]
+    return "\n".join(cleaned_lines).strip()
+
+
+def _sanitize_thinking_chunk(content: str | None) -> str:
+    """Remove internal reasoning/system-prompt leakage from thinking stream."""
+    text = (content or "").strip()
+    if not text:
+        return ""
+
+    lower = text.lower()
+
+    # Drop explicit ReAct and meta-cognition traces.
+    if _REACT_TRACE_LINE.match(text):
+        return ""
+    if lower.startswith("answer:"):
+        return ""
+    if "the current language of the user is" in lower:
+        return ""
+    if "you are the bimatlas technical agent" in lower:
+        return ""
+    if "runtime instruction override" in lower:
+        return ""
+
+    # Hide tool argument dumps that can include noisy internals.
+    if lower.startswith("action input:") or lower.startswith("observation:"):
+        return ""
+
     return text
 
 
@@ -230,9 +283,13 @@ async def run_agent_streaming(
 
             if isinstance(event, AgentStream):
                 if event.delta:
-                    yield {"type": "thinking", "content": event.delta}
+                    chunk = _sanitize_thinking_chunk(event.delta)
+                    if chunk:
+                        yield {"type": "thinking", "content": chunk}
                 if event.thinking_delta:
-                    yield {"type": "thinking", "content": event.thinking_delta}
+                    chunk = _sanitize_thinking_chunk(event.thinking_delta)
+                    if chunk:
+                        yield {"type": "thinking", "content": chunk}
                 if event.response:
                     latest_streamed_response = event.response
                 continue
