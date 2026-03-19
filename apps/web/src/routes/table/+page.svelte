@@ -11,6 +11,7 @@
   import { loadSettings } from "$lib/state/persistence";
   import {
     client,
+    IFC_PRODUCTS_QUERY,
     PROJECTS_QUERY,
     OPENED_SHEET_TEMPLATES_QUERY,
     SEARCH_SHEET_TEMPLATES_QUERY,
@@ -803,6 +804,92 @@
   let channel: BroadcastChannel | null = null;
   let contextRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let contextRetryInterval: ReturnType<typeof setInterval> | null = null;
+  let reloadOverlayVisible = $state(false);
+  let reloadOverlayCurrent = $state(0);
+  let reloadOverlayTotal = $state(0);
+  let reloadOverlayStartedAt = $state<number | null>(null);
+  const RELOAD_OVERLAY_MIN_MS = 1000;
+  const RELOAD_OVERLAY_FADE_MS = 220;
+  let reloadProgressTimer: ReturnType<typeof setInterval> | null = null;
+  let overlayMounted = $state(false);
+  let overlayVisible = $state(false);
+  let overlayHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const reloadPercent = $derived.by(() => {
+    if (reloadOverlayTotal <= 0) return 0;
+    return Math.max(
+      0,
+      Math.min(100, Math.round((reloadOverlayCurrent / reloadOverlayTotal) * 100)),
+    );
+  });
+
+  function clearReloadProgressTimer() {
+    if (reloadProgressTimer != null) {
+      clearInterval(reloadProgressTimer);
+      reloadProgressTimer = null;
+    }
+  }
+
+  function clearOverlayTimers() {
+    if (overlayHideTimer != null) {
+      clearTimeout(overlayHideTimer);
+      overlayHideTimer = null;
+    }
+  }
+
+  $effect(() => {
+    const isLoading = reloadOverlayVisible;
+    if (isLoading) {
+      clearOverlayTimers();
+      if (!overlayMounted) {
+        overlayMounted = true;
+        requestAnimationFrame(() => {
+          overlayVisible = true;
+        });
+      } else {
+        overlayVisible = true;
+      }
+      return;
+    }
+
+    if (!overlayMounted) return;
+    overlayVisible = false;
+    overlayHideTimer = setTimeout(() => {
+      overlayMounted = false;
+      overlayHideTimer = null;
+    }, RELOAD_OVERLAY_FADE_MS);
+  });
+
+  function startReloadOverlay(totalGuess: number) {
+    const total = totalGuess > 0 ? totalGuess : products.length;
+    reloadOverlayVisible = true;
+    reloadOverlayTotal = total;
+    reloadOverlayCurrent = 0;
+    reloadOverlayStartedAt = Date.now();
+    clearReloadProgressTimer();
+    if (total <= 0) return;
+    reloadProgressTimer = setInterval(() => {
+      const cap = Math.max(1, Math.floor(total * 0.9));
+      if (reloadOverlayCurrent < cap) {
+        reloadOverlayCurrent += Math.max(1, Math.floor(total * 0.08));
+      }
+      if (reloadOverlayCurrent > cap) reloadOverlayCurrent = cap;
+    }, 90);
+  }
+
+  async function finishReloadOverlay(finalCount: number) {
+    const total = Math.max(reloadOverlayTotal, finalCount, 0);
+    reloadOverlayTotal = total;
+    reloadOverlayCurrent =
+      total > 0 ? Math.max(0, Math.min(total, finalCount || total)) : 0;
+    clearReloadProgressTimer();
+    const elapsed = reloadOverlayStartedAt == null ? RELOAD_OVERLAY_MIN_MS : Date.now() - reloadOverlayStartedAt;
+    const wait = Math.max(0, RELOAD_OVERLAY_MIN_MS - elapsed);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    reloadOverlayVisible = false;
+    reloadOverlayStartedAt = null;
+  }
+
   let hasChannelContext = $state(false);
   let lastReceivedContextDataKey: string | null = null;
   let lastSentSelectionToViewer: string | null = null;
@@ -995,6 +1082,7 @@
     const nextContextDataKey = contextDataKey(msg);
     const contextChanged = nextContextDataKey !== lastReceivedContextDataKey;
     if (contextChanged) {
+      startReloadOverlay((msg.products ?? []).length);
       branchId = msg.branchId;
       projectId = msg.projectId;
       branchName = msg.branchName ?? null;
@@ -1005,6 +1093,7 @@
       fetchEntityAttributesIfNeeded(topColumns);
       syncUrlWithContext();
       lastReceivedContextDataKey = nextContextDataKey;
+      void finishReloadOverlay(products.length);
     }
 
     if (contextRetryInterval != null) {
@@ -1020,6 +1109,10 @@
 
   const tableMessageHandlers: TableMessageHandlers = {
     context: handleContextMessage,
+    reload: () => {
+      startReloadOverlay(products.length);
+      requestContext();
+    },
     "selection-sync": (message) => {
       if (!syncWithViewer) return;
       viewerSelectedGlobalId = message.globalId;
@@ -1070,6 +1163,25 @@
       }
     } catch {
       // Non-blocking fallback; keep IDs if name lookup fails.
+    }
+  }
+
+  async function fetchProductsFromBackendIfNeeded() {
+    if (useFixture || !branchId) return;
+    if (products.length > 0) return;
+    try {
+      startReloadOverlay(0);
+      const variables: { branchId: string; revision?: number } = { branchId };
+      if (revision != null) variables.revision = revision;
+      const result = await client.query(IFC_PRODUCTS_QUERY, variables).toPromise();
+      const rows = (result.data?.ifcProducts ?? []) as ProductMeta[];
+      products = rows;
+      lockedIds = new Set(rows.map((p) => p.globalId));
+      fetchEntityAttributesIfNeeded(topColumns);
+      void finishReloadOverlay(rows.length);
+    } catch (err) {
+      console.warn("Table fallback product fetch failed:", err);
+      void finishReloadOverlay(0);
     }
   }
 
@@ -1959,6 +2071,7 @@
     applyContextFromUrl();
     applyContextFallbackFromSettings();
     void resolveNamesFromProjects();
+    void fetchProductsFromBackendIfNeeded();
 
     channel = new BroadcastChannel(TABLE_CHANNEL);
     channel.onmessage = handleIncomingMessage;
@@ -2001,7 +2114,16 @@
     }
   });
 
+  $effect(() => {
+    if (useFixture) return;
+    if (!branchId) return;
+    if (products.length > 0) return;
+    void fetchProductsFromBackendIfNeeded();
+  });
+
   onDestroy(() => {
+    clearReloadProgressTimer();
+    clearOverlayTimers();
     if (syncWithViewer) {
       channel?.postMessage({ type: "sync-mode", enabled: false } satisfies TableMessage);
     }
@@ -2030,9 +2152,9 @@
     {#if useFixture}
       <span class="context-pill fixture">Fixture data</span>
     {:else if branchName || projectName || branchId || projectId}
-      <span class="context-pill mono">
+      <span class="context-pill">
         {projectName ?? projectId ?? "—"} / {branchName ?? branchId ?? "—"}
-        {#if revision != null}(rev {revision}){/if}
+        {#if revision != null}<span class="mono">(rev {revision})</span>{/if}
       </span>
     {:else}
       <span class="context-pill empty">Waiting for context…</span>
@@ -2162,6 +2284,25 @@
     style={topSegmentHeightPx != null ? `--top-height: ${topSegmentHeightPx}px` : undefined}
     bind:this={tableSplitRef}
   >
+    {#if overlayMounted}
+      <div class="loading-overlay" class:visible={overlayVisible} role="status" aria-live="polite">
+        <div class="loading-card">
+          <p class="loading-title">Loading table data</p>
+          <p class="loading-percent">{reloadPercent}%</p>
+          <p class="loading-count">
+            {#if reloadOverlayTotal > 0}
+              Entities ({reloadOverlayCurrent}/{reloadOverlayTotal})
+            {:else}
+              Entities (loading…)
+            {/if}
+          </p>
+          <div class="loading-progress" aria-hidden="true">
+            <div class="loading-progress-bar" style={`width: ${reloadPercent}%`}></div>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <section
       class="table-segment table-segment-top"
       aria-label="IFC entities"
@@ -2532,21 +2673,17 @@
 
 <style>
   .table-page {
-    --table-grid-border-width: 1px;
-    --table-grid-border-color: var(--color-border-subtle);
-    --table-header-height: 28px;
-    --table-subheader-height: 34px;
-    --table-row-height: 34px;
-    --lock-rail-width: 3rem;
-
     height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--color-bg-canvas);
     color: var(--color-text-primary);
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     overflow: hidden;
   }
+
+  /* Context and pill styles now from global for consistency with all other pages */
+
 
   .context-pill {
     padding: 0.15rem 0.6rem;
@@ -2579,6 +2716,82 @@
     min-height: 0;
     display: grid;
     grid-template-rows: var(--top-height, minmax(0, 1fr)) 6px minmax(190px, 1fr);
+    position: relative;
+  }
+
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
+    opacity: 0;
+    transition: opacity 220ms ease;
+    pointer-events: none;
+  }
+
+  .loading-overlay.visible {
+    opacity: 1;
+  }
+
+  .loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 1rem 1.25rem;
+    min-width: 14rem;
+    border-radius: 0.9rem;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--color-brand-500) 16%, transparent);
+    transform: translateY(6px) scale(0.985);
+    transition: transform 220ms ease;
+  }
+
+  .loading-overlay.visible .loading-card {
+    transform: translateY(0) scale(1);
+  }
+
+  .loading-title {
+    margin: 0;
+    font-size: 0.74rem;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .loading-percent {
+    margin: 0;
+    font-size: 1.85rem;
+    line-height: 1;
+    font-weight: 700;
+    color: var(--color-text-primary);
+  }
+
+  .loading-count {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  .loading-progress {
+    width: 100%;
+    height: 0.375rem;
+    margin-top: 0.35rem;
+    border-radius: 9999px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    overflow: hidden;
+  }
+
+  .loading-progress-bar {
+    height: 100%;
+    background: var(--color-action-primary);
+    transition: width 140ms ease;
   }
 
   .table-split.resizing {

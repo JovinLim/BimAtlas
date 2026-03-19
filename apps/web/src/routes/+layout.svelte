@@ -543,7 +543,7 @@
     transform: rotate(90deg);
   }
 
-  /* ---- Standardised page headers ---- */
+  /* ---- Standardised page headers (per style guide: flexbox + tokens + consistent fonts) ---- */
   :global(.page-header),
   :global(.table-header) {
     flex-shrink: 0;
@@ -551,19 +551,19 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 1.25rem;
     background: var(--color-bg-surface);
     border-bottom: 1px solid var(--color-border-subtle);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
   :global(.page-header h2),
   :global(.table-header h2) {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: 1.05rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-action-primary);
+    color: var(--color-text-primary);
+    letter-spacing: -0.01em;
   }
 
   :global(.page-header-title-row) {
@@ -574,5 +574,62 @@
 
   :global(.page-header.page-header--stacked) {
     align-items: flex-start;
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  :global(.page-header--stacked .page-header-title-row),
+  :global(.header-main) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  :global(.header-subtitle),
+  :global(.page-header p) {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+  }
+
+  /* ---- Standardized context display (project / branch / revision) ---- */
+  :global(.context-pill) {
+    padding: 0.2rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-default);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  :global(.context-pill.mono),
+  :global(.context-pill .mono) {
+    font-family: "SF Mono", "Fira Code", ui-monospace, monospace;
+    font-size: 0.73rem;
+    letter-spacing: -0.02em;
+  }
+
+  :global(.context-pill.empty) {
+    opacity: 0.65;
+    font-style: italic;
+    color: var(--color-text-muted);
+  }
+
+  :global(.context-pill.fixture) {
+    color: var(--color-success);
+    font-weight: 500;
+  }
+
+  :global(.context-pills) {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
   }
 </style>
