@@ -33,6 +33,7 @@ export type TableMessage =
   | { type: "request-attributes" }
   | ({ type: "context" } & TableContextPayload)
   | TableContextAttributesPayload
+  | { type: "reload" }
   | { type: "sync-mode"; enabled: boolean }
   | { type: "selection-changed"; globalId: string | null }
   | { type: "selection-sync"; globalId: string | null };
