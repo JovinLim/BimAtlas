@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-20T09:53:18.861Z",
+  "services": {
+    "telegram-bridge": {
+      "serviceId": "telegram-bridge",
+      "serviceName": "OpenCode Telegram Bridge",
+      "contractVersion": "v1",
+      "executableEntry": "/home/jovin/.config/opencode/tools/opencode-telegram-bridge-service.ts",
+      "configuredPortKey": "BimAtlas.telegramBridge",
+      "resolvedPort": 4313,
+      "baseUrl": "http://127.0.0.1:4313",
+      "healthUrl": "http://127.0.0.1:4313/health",
+      "readyUrl": "http://127.0.0.1:4313/ready",
+      "metadataUrl": "http://127.0.0.1:4313/metadata",
+      "logPath": "/home/jovin/projects/BimAtlas/.opencode/services/logs/telegram-bridge.log",
+      "capabilities": [
+        "can_answer_question",
+        "can_send_media",
+        "can_emit_operator_commands",
+        "can_emit_audit_events",
+        "can_emit_status_events",
+        "can_emit_error_events"
+      ],
+      "restartPolicy": {
+        "maxRestarts": 6,
+        "baseBackoffMs": 500,
+        "maxBackoffMs": 5000
+      },
+      "owner": {
+        "projectName": "BimAtlas",
+        "projectDirectory": "/home/jovin/projects/BimAtlas",
+        "managedBy": "opencode-core",
+        "featureIDs": [
+          "multi_agent_workflow_orchestration",
+          "spawner_plugin_security"
+        ]
+      },
+      "runtime": {
+        "generation": 7,
+        "restartCount": 6,
+        "state": "healthy",
+        "ready": true,
+        "startedAt": "2026-03-20T09:10:24.052Z",
+        "lastSeenAt": "2026-03-20T09:53:18.861Z",
+        "lastExitCode": 1,
+        "lastError": "Service exited unexpectedly (code=1)"
+      },
+      "updatedAt": "2026-03-20T09:53:18.861Z"
+    }
+  }
+}

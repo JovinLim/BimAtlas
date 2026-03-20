@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-20T09:51:12.369Z",
+  "scheduler": {
+    "enabled": true,
+    "intervalMs": 180000,
+    "evaluatorAgent": "task-evaluator",
+    "lastTickAt": "2026-03-20T09:51:12.369Z",
+    "lastRunAt": null,
+    "lastError": null
+  },
+  "tasks": {}
+}

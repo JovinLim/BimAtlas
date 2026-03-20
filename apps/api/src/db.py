@@ -133,8 +133,7 @@ def fetch_projects() -> list[dict]:
     """Return all projects ordered by created_at descending."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT project_id, name, description, created_at "
-            "FROM project ORDER BY created_at DESC"
+            "SELECT project_id, name, description, created_at FROM project ORDER BY created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -143,8 +142,7 @@ def fetch_project(project_id: str) -> dict | None:
     """Return a single project by id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT project_id, name, description, created_at "
-            "FROM project WHERE project_id = %s",
+            "SELECT project_id, name, description, created_at FROM project WHERE project_id = %s",
             (project_id,),
         )
         row = cur.fetchone()
@@ -302,9 +300,7 @@ def fetch_revisions_filtered(
 # compare revision_seq values.  _ENTITY_FROM provides the base FROM clause
 # with the necessary JOINs; _REV_FILTER provides the WHERE fragment.
 
-_ENTITY_COLS = (
-    "e.ifc_global_id, e.ifc_class, e.attributes, e.geometry"
-)
+_ENTITY_COLS = "e.ifc_global_id, e.ifc_class, e.attributes, e.geometry"
 
 _ENTITY_FROM = (
     "ifc_entity e "
@@ -313,13 +309,14 @@ _ENTITY_FROM = (
 )
 
 _REV_FILTER = (
-    "r_cr.revision_seq <= %s "
-    "AND (e.obsoleted_in_revision_id IS NULL OR r_ob.revision_seq > %s)"
+    "r_cr.revision_seq <= %s AND (e.obsoleted_in_revision_id IS NULL OR r_ob.revision_seq > %s)"
 )
 
 
 def fetch_entity_at_revision(
-    ifc_global_id: str, rev: int, branch_id: str,
+    ifc_global_id: str,
+    rev: int,
+    branch_id: str,
 ) -> dict | None:
     """Fetch a single entity visible at *rev* on *branch_id*."""
     with get_cursor(dict_cursor=True) as cur:
@@ -334,7 +331,10 @@ def fetch_entity_at_revision(
 
 
 def fetch_entity_attributes_for_global_ids(
-    rev: int, branch_id: str, global_ids: list[str], include_validations: bool = False,
+    rev: int,
+    branch_id: str,
+    global_ids: list[str],
+    include_validations: bool = False,
 ) -> list[dict]:
     """Fetch ifc_global_id and attributes for entities visible at *rev* on *branch_id*.
     Returns list of dicts with keys ifc_global_id, attributes (JSONB as dict).
@@ -423,7 +423,9 @@ def fetch_shape_reps_for_products(
 
 
 def _resolve_relation_gids(
-    relation_types: list[str], rev: int, branch_id: str,
+    relation_types: list[str],
+    rev: int,
+    branch_id: str,
 ) -> list[str]:
     """Query the AGE graph for entity global_ids connected via *relation_types*."""
     from .services.graph.age_client import get_product_ids_by_relation
@@ -446,30 +448,40 @@ def _resolve_relation_gids_with_target_filter(
     target_filters: list[dict] = []
     ifc_class = f.get("relationTargetClass") or f.get("relation_target_class")
     if ifc_class:
-        target_filters.append({
-            "mode": "class",
-            "ifcClass": ifc_class,
-            "operator": "is",
-        })
+        target_filters.append(
+            {
+                "mode": "class",
+                "ifcClass": ifc_class,
+                "operator": "is",
+            }
+        )
     attr = f.get("relationTargetAttribute") or f.get("relation_target_attribute")
     if attr:
         op = f.get("relationTargetOperator") or f.get("relation_target_operator") or "contains"
         val = f.get("relationTargetValue") or f.get("relation_target_value")
         from .schema.filter_operators import value_required_for_operator
-        if value_required_for_operator(op) and (not val or (isinstance(val, str) and not val.strip())):
+
+        if value_required_for_operator(op) and (
+            not val or (isinstance(val, str) and not val.strip())
+        ):
             pass  # Skip attribute filter when value required but missing
         else:
-            target_filters.append({
-                "mode": "attribute",
-                "attribute": attr,
-                "operator": op,
-                "value": val,
-                "valueType": f.get("relationTargetValueType") or f.get("relation_target_value_type") or "string",
-            })
+            target_filters.append(
+                {
+                    "mode": "attribute",
+                    "attribute": attr,
+                    "operator": op,
+                    "value": val,
+                    "valueType": f.get("relationTargetValueType")
+                    or f.get("relation_target_value_type")
+                    or "string",
+                }
+            )
     if not target_filters:
         return []
     rows = fetch_entities_with_filter_sets(
-        rev, branch_id,
+        rev,
+        branch_id,
         [{"logic": "AND", "filters": target_filters}],
         combination_logic="AND",
     )
@@ -521,6 +533,7 @@ def fetch_entities_at_revision(
         else:
             # Resolve by spatial container name via graph (IfcRelContainedInSpatialStructure)
             from .services.graph.age_client import get_entities_in_spatial_scope
+
             gids = get_entities_in_spatial_scope(
                 scope_global_id=None,
                 scope_name=contained_in,
@@ -593,15 +606,16 @@ def fetch_entity_count_at_revision(rev: int, branch_id: str) -> int:
     """Return the total number of entities visible at *rev* on *branch_id*."""
     with get_cursor() as cur:
         cur.execute(
-            f"SELECT COUNT(*) FROM {_ENTITY_FROM} "
-            f"WHERE e.branch_id = %s AND {_REV_FILTER}",
+            f"SELECT COUNT(*) FROM {_ENTITY_FROM} WHERE e.branch_id = %s AND {_REV_FILTER}",
             (branch_id, rev, rev),
         )
         return cur.fetchone()[0]
 
 
 def fetch_spatial_container(
-    contained_in_gid: str | None, rev: int, branch_id: str,
+    contained_in_gid: str | None,
+    rev: int,
+    branch_id: str,
 ) -> dict | None:
     """Fetch the spatial container for an element (by contained_in GlobalId)."""
     if not contained_in_gid:
@@ -695,14 +709,18 @@ def fetch_revision_diff(from_rev: int, to_rev: int, branch_id: str) -> dict:
 # Filter set CRUD
 # ---------------------------------------------------------------------------
 
-_FILTER_SET_COLS = (
-    "filter_set_id, branch_id, name, logic, filters, color, created_at, updated_at"
-)
+_FILTER_SET_COLS = "filter_set_id, branch_id, name, logic, filters, color, created_at, updated_at"
 
 
 _DEFAULT_FILTER_SET_COLORS = [
-    "#4A90D9", "#E67E22", "#2ECC71", "#E74C3C",
-    "#9B59B6", "#1ABC9C", "#F1C40F", "#E91E63",
+    "#4A90D9",
+    "#E67E22",
+    "#2ECC71",
+    "#E74C3C",
+    "#9B59B6",
+    "#1ABC9C",
+    "#F1C40F",
+    "#E91E63",
 ]
 
 
@@ -718,7 +736,10 @@ def _next_default_color(branch_id: str) -> str:
 
 
 def create_filter_set(
-    branch_id: str, name: str, logic: str, filters_json: list[dict] | dict,
+    branch_id: str,
+    name: str,
+    logic: str,
+    filters_json: list[dict] | dict,
     color: str | None = None,
 ) -> dict:
     """Create a new filter set on a branch. Returns the new row.
@@ -801,7 +822,8 @@ def delete_filter_set(filter_set_id: str) -> bool:
     """Delete a filter set by id. Returns True if a row was deleted."""
     with get_cursor() as cur:
         cur.execute(
-            "DELETE FROM filter_sets WHERE filter_set_id = %s", (filter_set_id,),
+            "DELETE FROM filter_sets WHERE filter_set_id = %s",
+            (filter_set_id,),
         )
         return cur.rowcount > 0
 
@@ -822,7 +844,8 @@ def delete_project(project_id: str) -> bool:
 
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            "SELECT branch_id FROM branch WHERE project_id = %s", (project_id,),
+            "SELECT branch_id FROM branch WHERE project_id = %s",
+            (project_id,),
         )
         branch_ids = [r["branch_id"] for r in cur.fetchall()]
     for bid in branch_ids:
@@ -865,7 +888,8 @@ def delete_revision(revision_id: str) -> bool:
             (revision_id,),
         )
         cur.execute(
-            "DELETE FROM revision WHERE revision_id = %s", (revision_id,),
+            "DELETE FROM revision WHERE revision_id = %s",
+            (revision_id,),
         )
         return cur.rowcount > 0
 
@@ -896,13 +920,15 @@ def fetch_filter_sets_for_branch(branch_id: str) -> list[dict]:
 # Sheet template CRUD (project-scoped bottom-sheet state)
 # ---------------------------------------------------------------------------
 
-_SHEET_TEMPLATE_COLS = (
-    "sheet_template_id, project_id, name, sheet, open, created_at, updated_at"
-)
+_SHEET_TEMPLATE_COLS = "sheet_template_id, project_id, name, sheet, open, created_at, updated_at"
 
 
 def create_sheet_template(
-    project_id: str, name: str, sheet_json: dict, *, open: bool = False,
+    project_id: str,
+    name: str,
+    sheet_json: dict,
+    *,
+    open: bool = False,
 ) -> dict:
     """Create a new sheet template for a project. Returns the new row."""
     with get_cursor(dict_cursor=True) as cur:
@@ -922,8 +948,7 @@ def fetch_sheet_template(sheet_template_id: str) -> dict | None:
     """Fetch a single sheet template by id."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template "
-            "WHERE sheet_template_id = %s",
+            f"SELECT {_SHEET_TEMPLATE_COLS} FROM sheet_template WHERE sheet_template_id = %s",
             (sheet_template_id,),
         )
         row = cur.fetchone()
@@ -960,8 +985,7 @@ def update_sheet_template(
     params.append(sheet_template_id)
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"UPDATE sheet_template SET {', '.join(updates)} "
-            "WHERE sheet_template_id = %s",
+            f"UPDATE sheet_template SET {', '.join(updates)} WHERE sheet_template_id = %s",
             params,
         )
     return fetch_sheet_template(sheet_template_id)
@@ -1001,9 +1025,7 @@ def fetch_sheet_templates_for_project(project_id: str) -> list[dict]:
 # App views CRUD (BCF-compliant saved views, branch-scoped)
 # ---------------------------------------------------------------------------
 
-_APP_VIEW_COLS = (
-    "id, branch_id, name, bcf_camera_state, ui_filters, created_at, updated_at"
-)
+_APP_VIEW_COLS = "id, branch_id, name, bcf_camera_state, ui_filters, created_at, updated_at"
 
 
 def _parse_jsonb_col(row: dict, key: str) -> None:
@@ -1096,8 +1118,7 @@ def fetch_app_views_for_branch(branch_id: str) -> list[dict]:
     """Return all app views for a branch, newest first, with linked filter sets."""
     with get_cursor(dict_cursor=True) as cur:
         cur.execute(
-            f"SELECT {_APP_VIEW_COLS} FROM app_views "
-            "WHERE branch_id = %s ORDER BY updated_at DESC",
+            f"SELECT {_APP_VIEW_COLS} FROM app_views WHERE branch_id = %s ORDER BY updated_at DESC",
             (branch_id,),
         )
         rows = [dict(r) for r in cur.fetchall()]
@@ -1312,7 +1333,9 @@ def search_filter_sets(
 
 
 def apply_filter_sets(
-    branch_id: str, filter_set_ids: list[str], combination_logic: str,
+    branch_id: str,
+    filter_set_ids: list[str],
+    combination_logic: str,
 ) -> None:
     """Replace the applied filter sets for a branch.
 
@@ -1374,6 +1397,7 @@ def fetch_applied_filter_sets(branch_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Entity filtering with structured filter sets
 # ---------------------------------------------------------------------------
+
 
 def _escape_ilike(value: str) -> str:
     """Escape % and _ for safe use in ILIKE patterns."""
@@ -1514,7 +1538,11 @@ def _build_class_clause(f: dict, params: list) -> str | None:
             )
             classes = [ifc_class]
         if not classes:
-            return "FALSE"
+            logger.warning(
+                "No descendants resolved for inherits_from(%s); falling back to exact match",
+                ifc_class,
+            )
+            classes = [ifc_class]
         params.append(classes)
         return "e.ifc_class = ANY(%s)"
     if op == "is_not":
@@ -1698,8 +1726,10 @@ def _build_relation_clause(f: dict, params: list, rev: int, branch_id: str) -> s
     if not relation or not rev or not branch_id:
         return None
     has_target = (
-        f.get("relationTargetClass") or f.get("relation_target_class")
-        or f.get("relationTargetAttribute") or f.get("relation_target_attribute")
+        f.get("relationTargetClass")
+        or f.get("relation_target_class")
+        or f.get("relationTargetAttribute")
+        or f.get("relation_target_attribute")
     )
     if has_target:
         gids = _resolve_relation_gids_with_target_filter(relation, f, rev, branch_id)
@@ -1712,7 +1742,10 @@ def _build_relation_clause(f: dict, params: list, rev: int, branch_id: str) -> s
 
 
 def _build_filter_clause(
-    f: dict, params: list, rev: int = 0, branch_id: str = "",
+    f: dict,
+    params: list,
+    rev: int = 0,
+    branch_id: str = "",
 ) -> str | None:
     """Convert a single filter dict into a SQL clause, appending bind params.
 
@@ -1972,18 +2005,17 @@ def fetch_all_ifc_schemas() -> list[dict]:
         elif isinstance(raw, list):
             project_ids = [str(pid) for pid in raw]
         elif isinstance(raw, str):
-            project_ids = [
-                x.strip().strip('"') for x in raw.strip("{}").split(",")
-                if x.strip()
-            ]
+            project_ids = [x.strip().strip('"') for x in raw.strip("{}").split(",") if x.strip()]
         else:
             project_ids = []
-        result.append({
-            "schema_id": str(r["schema_id"]),
-            "version_name": r["version_name"],
-            "rule_count": r["rule_count"] or 0,
-            "project_ids": project_ids,
-        })
+        result.append(
+            {
+                "schema_id": str(r["schema_id"]),
+                "version_name": r["version_name"],
+                "rule_count": r["rule_count"] or 0,
+                "project_ids": project_ids,
+            }
+        )
     return result
 
 
@@ -2398,9 +2430,7 @@ def delete_ifc_schema_with_rules(schema_name: str) -> dict | None:
 
 _VALIDATION_CLASSES = frozenset({"IfcValidationResult", "IfcValidationResults"})
 
-_VALIDATION_ENTITY_COLS = (
-    "e.entity_id, e.ifc_global_id, e.ifc_class, e.attributes"
-)
+_VALIDATION_ENTITY_COLS = "e.entity_id, e.ifc_global_id, e.ifc_class, e.attributes"
 
 
 def _content_hash(attributes: dict) -> str:
@@ -2410,7 +2440,8 @@ def _content_hash(attributes: dict) -> str:
 
 
 def create_validation_revision(
-    branch_id: str, commit_message: str = "validation change",
+    branch_id: str,
+    commit_message: str = "validation change",
 ) -> dict:
     """Create a lightweight revision for validation entity changes."""
     with get_cursor(dict_cursor=True) as cur:
@@ -2421,8 +2452,7 @@ def create_validation_revision(
             (branch_id, "system", commit_message),
         )
         row = cur.fetchone()
-        return {"revision_id": str(row["revision_id"]),
-                "revision_seq": row["revision_seq"]}
+        return {"revision_id": str(row["revision_id"]), "revision_seq": row["revision_seq"]}
 
 
 def create_validation_entity(
@@ -2445,8 +2475,7 @@ def create_validation_entity(
             " created_in_revision_id) "
             "VALUES (%s, %s, %s, %s, %s, %s) "
             "RETURNING entity_id, ifc_global_id, ifc_class, attributes",
-            (branch_id, global_id, ifc_class,
-             json.dumps(attributes), ch, revision_id),
+            (branch_id, global_id, ifc_class, json.dumps(attributes), ch, revision_id),
         )
         row = cur.fetchone()
         return dict(row)
@@ -2521,8 +2550,13 @@ def _get_revision_id_for_agent(branch_id: str) -> str:
 
 
 def create_agent_config(
-    project_id: str, name: str, provider: str, model: str,
-    api_key: str = "", base_url: str | None = None, pre_prompt: str | None = None,
+    project_id: str,
+    name: str,
+    provider: str,
+    model: str,
+    api_key: str = "",
+    base_url: str | None = None,
+    pre_prompt: str | None = None,
 ) -> dict:
     """Create an IfcAgent entity on the project's main branch. Uses the latest
     revision on the branch; does not create a new revision."""
@@ -2595,8 +2629,13 @@ def fetch_agent_config(entity_id: str) -> dict | None:
 
 
 def update_agent_config(
-    entity_id: str, *, name: str | None = None, provider: str | None = None,
-    model: str | None = None, api_key: str | None = None, base_url: str | None = None,
+    entity_id: str,
+    *,
+    name: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
     pre_prompt: str | None = None,
 ) -> dict | None:
     """Update an IfcAgent in place. Does not create a revision or obsolete the row."""
@@ -2695,7 +2734,9 @@ def fetch_validation_entity(
 
 
 def fetch_validations_for_entities(
-    branch_id: str, revision_seq: int, global_ids: list[str],
+    branch_id: str,
+    revision_seq: int,
+    global_ids: list[str],
 ) -> dict[str, dict]:
     """Fetch Validations from mv_entity_validations for given entities.
     Returns {entity_global_id: validations_json}.
@@ -2725,15 +2766,21 @@ def fetch_validations_for_entities(
         return result
     except Exception as e:
         import logging
+
         logging.getLogger(__name__).warning(
             "fetch_validations_for_entities failed: %s (branch=%s rev=%s n=%d)",
-            e, branch_id, revision_seq, len(global_ids),
+            e,
+            branch_id,
+            revision_seq,
+            len(global_ids),
         )
         return {}
 
 
 def has_validation_results_for_schema_revision(
-    branch_id: str, schema_id: str, revision_seq: int,
+    branch_id: str,
+    schema_id: str,
+    revision_seq: int,
 ) -> bool:
     """Return True if any IfcValidationResults exist for this schema+revision."""
     with get_cursor() as cur:
