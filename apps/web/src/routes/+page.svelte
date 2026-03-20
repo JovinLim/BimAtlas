@@ -1275,12 +1275,17 @@ async function handleApplyFilters(filters: SearchFilter[]) {
 		total: searchState.totalProductCount,
 	} satisfies SearchMessage);
 
+	notifySearchDependentPagesReload("filters-updated");
+}
+
+function notifySearchDependentPagesReload(reason: string) {
 	// Ensure all popups that depend on filtered entities actively refresh.
-	tableChannel?.postMessage({ type: "reload" } as any);
 	sendTableContext(true);
+	tableChannel?.postMessage({ type: "reload" } as any);
+	sendGraphContext(true);
 	graphChannel?.postMessage({ type: "reload" } as any);
-	viewerChannel?.postMessage({ type: "reload", reason: "filters-updated" });
 	sendViewerContext(true);
+	viewerChannel?.postMessage({ type: "reload", reason });
 }
 
 function filterSetsToQueryVars(
@@ -1357,6 +1362,8 @@ async function handleApplyFilterSets(filterSets: FilterSet[]) {
 		count: mgr.elementCount,
 		total: searchState.totalProductCount,
 	} satisfies SearchMessage);
+
+	notifySearchDependentPagesReload("filter-sets-updated");
 }
 
 async function autoLoadAppliedFilterSets(branchId: string): Promise<boolean> {
